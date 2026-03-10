@@ -1,0 +1,2230 @@
+import { useState, useEffect } from "react";
+
+// ─── KONFIGURACE ─────────────────────────────────────────────
+const APP_START = {year:2026, month:3}; // duben 2026 (month 0-indexed) – začátek systému
+const C = {
+  work:"#ffffff", dayOff:"#E8F5E9", vacation:"#E3F2FD", sick:"#F5F5F5",
+  obstacle:"#FFF3E0", holidayOpen:"#F1F8E9", holidayClose:"#FFEBEE",
+  modified:"#FFFDE7", mirror:"#F0F4FF", otherStore:"#EDEDF5",
+  border:"#E8E8F0", bg:"#F7F8FC", topbar:"#1a1a2e",
+};
+const TYPE_META = {
+  work:        { label:"Práce",           color:C.work,        text:"#1a1a2e" },
+  dayOff:      { label:"Volno",           color:C.dayOff,      text:"#2e7d32" },
+  vacation:    { label:"Dovolená",        color:C.vacation,    text:"#1565c0" },
+  sick:        { label:"Nemoc",           color:C.sick,        text:"#616161" },
+  obstacle:    { label:"Překážka",        color:C.obstacle,    text:"#e65100" },
+  holidayOpen: { label:"Svátek otevřeno", color:C.holidayOpen, text:"#33691e" },
+  holidayClose:{ label:"Svátek zavřeno",  color:C.holidayClose,text:"#b71c1c" },
+};
+const TYPE_SHORT = { vacation:"DOV", sick:"NEM", dayOff:"V", obstacle:"PŘE", holidayOpen:"SV.O", holidayClose:"SV.Z" };
+const STORE_SHORT = {1:"ST", 2:"BL", 3:"PE"};
+const DOW_LBL = ["Po","Út","St","Čt","Pá","So","Ne"];
+const MONTHS = ["Leden","Únor","Březen","Duben","Květen","Červen","Červenec","Srpen","Září","Říjen","Listopad","Prosinec"];
+
+const HALF_HOURS = [];
+for(let h=0;h<24;h++) for(let m=0;m<60;m+=30)
+  HALF_HOURS.push(`${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")}`);
+
+// ─── PŘESTÁVKY ───────────────────────────────────────────────
+// Pravidla přestávek per prodejna: [{minMinutes, breakMinutes}] seřazeno od největšího
+// Výchozí: <360min=0, 360-480=30, >=480=60
+const DEFAULT_BREAK_RULES = [
+  { minMinutes: 480, breakMinutes: 60 }, // ≥8h → 60min
+  { minMinutes: 360, breakMinutes: 30 }, // ≥6h → 30min
+  { minMinutes: 0,   breakMinutes: 0  }, // <6h → 0
+];
+
+function calcBreak(from, to, breakRules) {
+  if (!from||!to) return 0;
+  const [fh,fm]=from.split(":").map(Number), [th,tm]=to.split(":").map(Number);
+  const phys=(th*60+tm)-(fh*60+fm);
+  const rules=[...breakRules].sort((a,b)=>b.minMinutes-a.minMinutes);
+  for(const r of rules) if(phys>=r.minMinutes) return r.breakMinutes;
+  return 0;
+}
+function calcWorked(from, to, breakRules) {
+  if(!from||!to) return 0;
+  const [fh,fm]=from.split(":").map(Number), [th,tm]=to.split(":").map(Number);
+  const phys=(th*60+tm)-(fh*60+fm);
+  return Math.max(0,(phys-calcBreak(from,to,breakRules))/60);
+}
+
+// Pro split směnu (více segmentů): přestávka se počítá z celkového rozsahu dne
+// podle pravidel hlavní prodejny zaměstnance, ne per-segment
+function calcSplitWorked(segs, mainStoreId, stores) {
+  if(!segs||segs.length===0) return 0;
+  if(segs.length===1) return calcWorked(segs[0].from, segs[0].to, getBreakRules(segs[0].locationStoreId||segs[0].loc||mainStoreId, stores));
+  // Seřaď segmenty chronologicky
+  const sorted = [...segs].sort((a,b)=>{
+    const ta=a.from?a.from.split(":").map(Number).reduce((h,m,i)=>i===0?h*60+m:h+m,0):0;
+    const tb=b.from?b.from.split(":").map(Number).reduce((h,m,i)=>i===0?h*60+m:h+m,0):0;
+    return ta-tb;
+  });
+  const dayFrom = sorted[0].from;
+  const dayTo   = sorted[sorted.length-1].to;
+  // Fyzický čas celého dne
+  const [fh,fm]=dayFrom.split(":").map(Number), [th,tm]=dayTo.split(":").map(Number);
+  const physTotal = (th*60+tm)-(fh*60+fm);
+  // Přestávka podle pravidel hlavní prodejny pro celkový rozsah
+  const brRules = getBreakRules(mainStoreId, stores);
+  const breakMin = calcBreak(dayFrom, dayTo, brRules);
+  return Math.max(0, (physTotal - breakMin) / 60);
+}
+function shiftLabel(from, to) {
+  if(!from||!to) return "";
+  const fmt=t=>{const[h,m]=t.split(":");return m==="00"?h.replace(/^0/,""):`${h.replace(/^0/,"")}:${m}`;};
+  return `${fmt(from)}–${fmt(to)}`;
+}
+
+// ─── PRODEJNY ────────────────────────────────────────────────
+const INIT_STORES = [
+  { id:1, name:"Strakonice", hours:"Po–So 9:00–19:00, Ne 9:00–18:00",
+    breakRules: JSON.parse(JSON.stringify(DEFAULT_BREAK_RULES)),
+    defaultTimes: {
+      h8: { weekday:["09:00","19:00"], saturday:["09:00","19:00"], sunday:["09:00","18:00"] },
+      h6: {
+        fullDay:   { weekday:["09:00","19:00"], saturday:["09:00","19:00"], sunday:["09:00","18:00"] },
+        morning:   { weekday:["09:00","14:00"], saturday:["09:00","14:00"], sunday:["09:00","14:00"] },
+        afternoon: { weekday:["14:00","19:00"], saturday:["14:00","19:00"], sunday:["14:00","18:00"] },
+        custom1:   { label:"9:00–15:30", weekday:["09:00","15:30"], saturday:["09:00","15:30"], sunday:["09:00","15:30"] },
+        custom2:   { label:"9:00–16:30", weekday:["09:00","16:30"], saturday:["09:00","16:30"], sunday:["09:00","16:30"] },
+      },
+    },
+  },
+  { id:2, name:"Blatná", hours:"Po–Pá 8:00–17:00, So 8:00–12:00",
+    breakRules: JSON.parse(JSON.stringify(DEFAULT_BREAK_RULES)),
+    defaultTimes: {
+      h8: { weekday:["08:00","17:00"], saturday:["08:00","12:00"], sunday:null },
+      h6: {
+        fullDay:   { weekday:["08:00","17:00"], saturday:["08:00","12:00"], sunday:null },
+        morning:   { weekday:["08:00","13:00"], saturday:["08:00","12:00"], sunday:null },
+        afternoon: { weekday:["13:00","17:00"], saturday:null, sunday:null },
+        custom1:   { label:"8:00–14:30", weekday:["08:00","14:30"], saturday:["08:00","14:30"], sunday:null },
+        custom2:   { label:"8:00–15:30", weekday:["08:00","15:30"], saturday:["08:00","15:30"], sunday:null },
+      },
+    },
+  },
+  { id:3, name:"Pelhřimov", hours:"Po–So 9:00–19:00, Ne 9:00–18:00",
+    breakRules: JSON.parse(JSON.stringify(DEFAULT_BREAK_RULES)),
+    defaultTimes: {
+      h8: { weekday:["09:00","19:00"], saturday:["09:00","19:00"], sunday:["09:00","18:00"] },
+      h6: {
+        fullDay:   { weekday:["09:00","19:00"], saturday:["09:00","19:00"], sunday:["09:00","18:00"] },
+        morning:   { weekday:["09:00","14:00"], saturday:["09:00","14:00"], sunday:["09:00","14:00"] },
+        afternoon: { weekday:["14:00","19:00"], saturday:["14:00","19:00"], sunday:["14:00","18:00"] },
+        custom1:   { label:"9:00–15:30", weekday:["09:00","15:30"], saturday:["09:00","15:30"], sunday:["09:00","15:30"] },
+        custom2:   { label:"9:00–16:30", weekday:["09:00","16:30"], saturday:["09:00","16:30"], sunday:["09:00","16:30"] },
+      },
+    },
+  },
+];
+
+// ─── ZAMĚSTNANCI ─────────────────────────────────────────────
+// customTimes: { [storeId]: { weekday:[from,to], saturday:[from,to], sunday:[from,to] } }
+// Pokud customTimes[storeId] existuje → použít místo defaultTimes prodejny
+// extraStores: [2,3] → zobrazí se jako read-only v těchto prodejnách, edituje vedoucí mainStore
+// contractHoursDay  = hodiny za odpracovaný den (pro výpočet dovolené, přestávek)
+// contractHoursWeek = fond hodin za týden (pro výpočet přesčasu)
+const INIT_EMPS = [
+  {id:1, firstName:"Voneš",     lastName:"",     mainStore:1, extraStores:[],    role:"Vedoucí prodavač",   contractHoursDay:8, contractHoursWeek:40, vacHours:160, kdpStart:0, active:true, customTimes:{}},
+  {id:2, firstName:"Šusta",     lastName:"Petr", mainStore:1, extraStores:[2],   role:"Zástupce vedoucího", contractHoursDay:8, contractHoursWeek:40, vacHours:160, kdpStart:0, active:true, customTimes:{}},
+  {id:3, firstName:"Moláček",   lastName:"",     mainStore:1, extraStores:[],    role:"Prodavač",           contractHoursDay:8, contractHoursWeek:40, vacHours:160, kdpStart:0, active:true, customTimes:{}},
+  {id:4, firstName:"Staněk",    lastName:"",     mainStore:1, extraStores:[],    role:"Prodavač",           contractHoursDay:8, contractHoursWeek:40, vacHours:160, kdpStart:0, active:true, customTimes:{}},
+  {id:5, firstName:"Komínková", lastName:"",     mainStore:1, extraStores:[],    role:"Prodavač",           contractHoursDay:8, contractHoursWeek:40, vacHours:160, kdpStart:0, active:true, customTimes:{}},
+  {id:6, firstName:"Přibová",   lastName:"",     mainStore:1, extraStores:[],    role:"Prodavač",           contractHoursDay:6, contractHoursWeek:30, vacHours:160, kdpStart:0, active:true, customTimes:{}},
+  {id:7, firstName:"Havelka",   lastName:"",     mainStore:1, extraStores:[],    role:"Prodavač",           contractHoursDay:6, contractHoursWeek:30, vacHours:160, kdpStart:0, active:true, customTimes:{}},
+  {id:8, firstName:"Kříž",      lastName:"",     mainStore:1, extraStores:[2],   role:"Rozvoz",             contractHoursDay:8, contractHoursWeek:40, vacHours:160, kdpStart:0, active:true,
+    customTimes:{
+      1:{ weekday:["09:00","18:00"], saturday:null, sunday:null },
+      2:{ weekday:["08:00","17:00"], saturday:null, sunday:null },
+    }
+  },
+  {id:9, firstName:"Míka",      lastName:"",     mainStore:2, extraStores:[],    role:"Vedoucí prodavač",   contractHoursDay:8, contractHoursWeek:40, vacHours:160, kdpStart:0, active:true, customTimes:{}},
+  {id:10,firstName:"Štefanová", lastName:"",     mainStore:2, extraStores:[],    role:"Prodavač",           contractHoursDay:8, contractHoursWeek:40, vacHours:160, kdpStart:0, active:true, customTimes:{}},
+  {id:11,firstName:"Michálek",  lastName:"",     mainStore:2, extraStores:[],    role:"Prodavač",           contractHoursDay:8, contractHoursWeek:40, vacHours:160, kdpStart:0, active:true, customTimes:{}},
+  {id:12,firstName:"Martinec",  lastName:"",     mainStore:3, extraStores:[],    role:"Vedoucí prodavač",   contractHoursDay:8, contractHoursWeek:40, vacHours:160, kdpStart:0, active:true, customTimes:{}},
+  {id:13,firstName:"Bímon",     lastName:"",     mainStore:3, extraStores:[],    role:"Zástupce vedoucího", contractHoursDay:8, contractHoursWeek:40, vacHours:160, kdpStart:0, active:true, customTimes:{}},
+  {id:14,firstName:"Jankovský", lastName:"",     mainStore:1, extraStores:[2,3], role:"Majitel",            contractHoursDay:8, contractHoursWeek:40, vacHours:0,   kdpStart:0, active:true, customTimes:{}},
+  {id:15,firstName:"Šustrová",  lastName:"",     mainStore:1, extraStores:[],    role:"Účetní",             contractHoursDay:4, contractHoursWeek:20, vacHours:80,  kdpStart:0, active:true, customTimes:{}},
+];
+
+// ─── ČASY SMĚN ───────────────────────────────────────────────
+// Vrátí [from,to] pro zaměstnance na daný den.
+// Priorita: 1) customTimes zaměstnance pro prodejnu, 2) defaultTimes prodejny
+// Pomocník – vrátí contractHoursDay bezpečně (zpětná kompatibilita s "contract")
+function empContractDay(emp) { return emp.contractHoursDay ?? emp.contract ?? 8; }
+function empContractWeek(emp){ return emp.contractHoursWeek ?? ((emp.contract??8)*5); }
+
+// Priorita: 0) svátek se zkrácenou dobou per prodejna (otevřeno i zavřeno), 1) customTimes zaměstnance, 2) defaultTimes prodejny
+function getEmpShiftTimes(emp, storeId, shiftType, dow, stores, patCellObj, holiday) {
+  // Svátek se nastaveným časem – nejvyšší priorita (bez ohledu na open/closed)
+  const holStore = holiday?.storeHours?.[storeId];
+  if(holStore?.from && holStore?.to) return [holStore.from, holStore.to];
+
+  // Pokud je v patCellObj vlastní čas (shift:"custom"), použij ho
+  if(patCellObj&&typeof patCellObj==="object"&&patCellObj.shift==="custom"){
+    return [patCellObj.from||"", patCellObj.to||""];
+  }
+  const dk = dow===6?"sunday":dow===5?"saturday":"weekday";
+  const ct = emp.customTimes?.[storeId];
+  if (ct) {
+    const t = ct[dk];
+    return t || ["",""];
+  }
+  const store = stores.find(s=>s.id===storeId);
+  if (!store) return ["",""];
+  const dt = store.defaultTimes;
+  const hd = empContractDay(emp);
+  if (hd >= 7) return dt?.h8?.[dk] || ["",""];
+  return dt?.h6?.[shiftType]?.[dk] || ["",""];
+}
+
+function getBreakRules(storeId, stores) {
+  return stores.find(s=>s.id===storeId)?.breakRules || DEFAULT_BREAK_RULES;
+}
+
+// ─── VZORY ───────────────────────────────────────────────────
+// Buňka: null=volno | "work"|"morning"|"afternoon"|"fullDay"|"custom1"|"custom2"
+//   nebo objekt {shift, loc} pro sdílené zaměstnance (loc=storeId kde pracuje)
+const makeDefaultPatterns = () => ({
+  1: {
+    odd: [
+      [null,"work","work","work","work",null,null],   // Voneš
+      ["work","work","work",null,null,"work","work"], // Šusta
+      ["work",null,null,"work","work","work","work"], // Moláček
+      [null,"work","work","work","work",null,null],   // Staněk
+      ["work","work",null,null,"work","work","work"], // Komínková
+      ["afternoon","afternoon","afternoon",null,null,"fullDay","fullDay"], // Přibová
+      ["morning",null,"morning","fullDay","fullDay",null,null],            // Havelka
+      // Kříž: Po/St/Pá=ST(1), Út/Čt=BL(2), So/Ne=volno
+      [{shift:"work",loc:1},{shift:"work",loc:2},{shift:"work",loc:1},{shift:"work",loc:2},{shift:"work",loc:1},null,null],
+      [null,null,null,null,null,null,null], // Jankovský
+    ],
+    even: [
+      ["work","work",null,null,"work","work","work"],
+      [null,"work","work","work","work",null,null],
+      [null,"work","work","work","work",null,null],
+      ["work","work","work",null,null,"work","work"],
+      ["work",null,"work","work","work",null,null],
+      ["morning","morning",null,"fullDay","fullDay",null,null],
+      ["afternoon","afternoon","afternoon",null,null,"fullDay","fullDay"],
+      [{shift:"work",loc:1},{shift:"work",loc:2},{shift:"work",loc:1},{shift:"work",loc:2},{shift:"work",loc:1},null,null],
+      [null,null,null,null,null,null,null],
+    ],
+  },
+  2: {
+    flat: [
+      ["work","work","work","work","work",null,null], // Míka
+      ["work","work","work","work","work",null,null], // Štefanová
+      ["work","work","work","work","work",null,null], // Michálek
+    ],
+  },
+  3: { odd:[], even:[] },
+});
+
+// ─── HELPERS ────────────────────────────────────────────────
+function getIsoWeek(date) {
+  const d=new Date(date); d.setHours(0,0,0,0);
+  d.setDate(d.getDate()+4-(d.getDay()||7));
+  const ys=new Date(d.getFullYear(),0,1);
+  return Math.ceil(((d-ys)/86400000+1)/7);
+}
+function getWeekType(date) { return getIsoWeek(date)%2===1?"odd":"even"; }
+const getDim=(y,m)=>new Date(y,m+1,0).getDate();
+const getDow=(y,m,d)=>{const w=new Date(y,m,d).getDay();return w===0?6:w-1;};
+const fmtDate=(y,m,d)=>`${y}-${String(m+1).padStart(2,"0")}-${String(d).padStart(2,"0")}`;
+const parseDate=s=>{const p=s.split("-");return new Date(+p[0],+p[1]-1,+p[2]);};
+// Fond hodin dle ZP: čistý počet Po–Pá v měsíci, svátky se NEodečítají z fondu
+// (svátky jsou evidovány zvlášť jako "svátkové hodiny")
+function getWorkingDays(y,m,holidays){
+  let c=0;
+  for(let d=1;d<=getDim(y,m);d++)
+    if(getDow(y,m,d)<5) c++;
+  return c;
+}
+// Počet svátků zavřeno v daném měsíci (pro informaci)
+function getHolidayDays(y,m,holidays){
+  let c=0;
+  for(let d=1;d<=getDim(y,m);d++)
+    if(getDow(y,m,d)<5&&holidays.find(h=>h.date===fmtDate(y,m,d)&&!h.open)) c++;
+  return c;
+}
+function getPatCell(patterns, storeId, empIdx, date) {
+  const pat=patterns[storeId]; if(!pat) return null;
+  const wt=storeId===2?"flat":getWeekType(date);
+  const rows=pat[wt]; if(!rows||empIdx>=rows.length) return null;
+  const dow=date.getDay()===0?6:date.getDay()-1;
+  return rows[empIdx]?.[dow]??null;
+}
+function schedKey(empId,ds,employees){
+  const emp=employees.find(e=>e.id===empId);
+  return `${emp?.mainStore||1}-${empId}-${ds}`;
+}
+function getSchedCell(sched,empId,ds,employees){
+  return sched[schedKey(empId,ds,employees)]||null;
+}
+
+// ─── SVÁTKY ──────────────────────────────────────────────────
+const DEFAULT_HOLIDAYS = [
+  {date:"2026-01-01",name:"Nový rok",open:false},
+  {date:"2026-04-03",name:"Velký pátek",open:true},
+  {date:"2026-04-06",name:"Velikonoční pondělí",open:false},
+  {date:"2026-05-01",name:"Svátek práce",open:true},
+  {date:"2026-05-08",name:"Den vítězství",open:false},
+  {date:"2026-07-05",name:"Cyril a Metoděj",open:true},
+  {date:"2026-07-06",name:"Jan Hus",open:true},
+  {date:"2026-09-28",name:"Den české státnosti",open:false},
+  {date:"2026-10-28",name:"Vznik Československa",open:false},
+  {date:"2026-11-17",name:"Den svobody",open:true},
+  {date:"2026-12-24",name:"Štědrý den",open:true,storeHours:{1:{from:"08:00",to:"12:00"},2:{from:"08:00",to:"12:00"},3:{from:"08:00",to:"12:00"}}},
+  {date:"2026-12-25",name:"1. svátek vánoční",open:false},
+  {date:"2026-12-26",name:"2. svátek vánoční",open:false},
+];
+
+// ─── UI ──────────────────────────────────────────────────────
+function Badge({color,textColor,children,style={}}){
+  return <span style={{background:color,color:textColor,padding:"2px 8px",borderRadius:4,fontSize:11,fontWeight:700,border:"1px solid rgba(0,0,0,0.07)",whiteSpace:"nowrap",...style}}>{children}</span>;
+}
+function Btn({children,onClick,variant="primary",small,style={},disabled,active}){
+  const v={
+    primary:{background:C.topbar,color:"#fff",border:"none"},
+    secondary:{background:"#f5f5f5",color:"#333",border:`1.5px solid ${C.border}`},
+    ghost:{background:"transparent",color:"#555",border:`1.5px solid ${C.border}`},
+    danger:{background:"#ffebee",color:"#c62828",border:"1.5px solid #ffcdd2"},
+    store:{background:active?"#1a1a2e":"#fff",color:active?"#fff":"#555",border:`1.5px solid ${active?"#1a1a2e":C.border}`},
+  };
+  return <button onClick={onClick} disabled={disabled} style={{padding:small?"4px 12px":"8px 18px",borderRadius:8,fontSize:small?12:14,fontWeight:600,cursor:disabled?"not-allowed":"pointer",opacity:disabled?0.5:1,transition:"all 0.12s",...v[variant],...style}}>{children}</button>;
+}
+function Modal({open,onClose,title,children,width=520}){
+  if(!open) return null;
+  return <div onClick={onClose} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.35)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:2000,padding:12}}>
+    <div onClick={e=>e.stopPropagation()} style={{background:"#fff",borderRadius:14,padding:28,width,maxWidth:"96vw",maxHeight:"92vh",overflowY:"auto",boxShadow:"0 24px 64px rgba(0,0,0,0.18)"}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
+        <h3 style={{margin:0,fontSize:18,fontWeight:800,color:C.topbar}}>{title}</h3>
+        <button onClick={onClose} style={{border:"none",background:"none",fontSize:24,cursor:"pointer",color:"#bbb",lineHeight:1}}>×</button>
+      </div>
+      {children}
+    </div>
+  </div>;
+}
+function FLabel({children,style={}}){
+  return <label style={{fontSize:11,fontWeight:700,color:"#888",display:"block",marginBottom:4,textTransform:"uppercase",letterSpacing:"0.06em",...style}}>{children}</label>;
+}
+function FInput({label,value,onChange,type="text",placeholder,style={},inputStyle={}}){
+  return <div style={style}><FLabel>{label}</FLabel>
+    <input type={type} value={value} onChange={e=>onChange(e.target.value)} placeholder={placeholder}
+      style={{padding:"7px 10px",borderRadius:7,border:`1.5px solid ${C.border}`,fontSize:14,width:"100%",boxSizing:"border-box",...inputStyle}}/>
+  </div>;
+}
+function FSel({label,value,onChange,options,style={}}){
+  return <div style={style}><FLabel>{label}</FLabel>
+    <select value={value} onChange={e=>onChange(e.target.value)}
+      style={{padding:"7px 10px",borderRadius:7,border:`1.5px solid ${C.border}`,fontSize:14,background:"#fff",width:"100%",boxSizing:"border-box"}}>
+      {options.map(o=><option key={o.value} value={o.value}>{o.label}</option>)}
+    </select>
+  </div>;
+}
+function TimeSelect({value,onChange,style={}}){
+  const opts=[{value:"",label:"—"},...HALF_HOURS.filter(t=>{const h=parseInt(t);return h>=6&&h<=22;}).map(t=>({value:t,label:t}))];
+  return <select value={value||""} onChange={e=>onChange(e.target.value||"")}
+    style={{padding:"5px 6px",borderRadius:6,border:`1.5px solid ${C.border}`,fontSize:13,background:"#fff",...style}}>
+    {opts.map(o=><option key={o.value} value={o.value}>{o.label}</option>)}
+  </select>;
+}
+
+// ─── EMPLOYEE FORM ───────────────────────────────────────────
+function EmployeeForm({initial, stores, onSave, onClose}){
+  const [form, setForm] = useState({...initial, customTimes:{...initial.customTimes}});
+  const [tab, setTab] = useState("basic");
+
+  const upd=(f,v)=>setForm(p=>({...p,[f]:v}));
+  const updCT=(storeId,dk,idx,val)=>{
+    setForm(p=>{
+      const ct={...p.customTimes};
+      if(!ct[storeId]) ct[storeId]={weekday:["",""],saturday:["",""],sunday:["",""]};
+      else ct[storeId]={...ct[storeId]};
+      const arr=[...(ct[storeId][dk]||["",""])];
+      arr[idx]=val;
+      ct[storeId]={...ct[storeId],[dk]:arr};
+      return {...p,customTimes:ct};
+    });
+  };
+  const toggleCT=(storeId)=>{
+    setForm(p=>{
+      const ct={...p.customTimes};
+      if(ct[storeId]) { const n={...ct}; delete n[storeId]; return {...p,customTimes:n}; }
+      const store=stores.find(s=>s.id===storeId);
+      const def=store?.defaultTimes?.h8||{};
+      ct[storeId]={
+        weekday:[...(def.weekday||["",""])],
+        saturday:[...(def.saturday||["",""])],
+        sunday:[...(def.sunday||["",""])],
+      };
+      return {...p,customTimes:ct};
+    });
+  };
+
+  const allStores = stores;
+  const extraPossible = allStores.filter(s=>s.id!==form.mainStore);
+
+  const tabs=[{key:"basic",label:"Základní"},{key:"times",label:"⏰ Časy směn"}];
+
+  return <div>
+    <div style={{display:"flex",gap:4,marginBottom:20,borderBottom:`1.5px solid ${C.border}`,paddingBottom:0}}>
+      {tabs.map(t=><button key={t.key} onClick={()=>setTab(t.key)}
+        style={{padding:"8px 16px",background:"none",border:"none",cursor:"pointer",fontWeight:tab===t.key?700:500,fontSize:13,color:tab===t.key?C.topbar:"#888",borderBottom:tab===t.key?"2px solid #4f8ef7":"2px solid transparent",marginBottom:-1.5}}>
+        {t.label}
+      </button>)}
+    </div>
+
+    {tab==="basic"&&<div style={{display:"flex",flexDirection:"column",gap:14}}>
+      <div style={{display:"flex",gap:10}}>
+        <FInput label="Jméno"    value={form.firstName} onChange={v=>upd("firstName",v)} style={{flex:1}}/>
+        <FInput label="Příjmení" value={form.lastName}  onChange={v=>upd("lastName",v)}  style={{flex:1}}/>
+      </div>
+      <FInput label="Role" value={form.role} onChange={v=>upd("role",v)} placeholder="Vedoucí / Prodavač..."/>
+      <FSel label="Hlavní prodejna" value={form.mainStore} onChange={v=>upd("mainStore",Number(v))} options={stores.map(s=>({value:s.id,label:s.name}))}/>
+      <div>
+        <FLabel>Může pracovat také v <span style={{color:"#bbb",fontWeight:400,fontSize:10}}>(zobrazí se jako sdílený read-only)</span></FLabel>
+        <div style={{display:"flex",gap:14,flexWrap:"wrap",marginTop:4}}>
+          {extraPossible.map(s=><label key={s.id} style={{display:"flex",alignItems:"center",gap:6,cursor:"pointer",fontSize:13,padding:"6px 10px",background:"#f8f9ff",borderRadius:6,border:`1px solid ${(form.extraStores||[]).includes(s.id)?"#4f8ef7":C.border}`}}>
+            <input type="checkbox" checked={(form.extraStores||[]).includes(s.id)}
+              onChange={e=>upd("extraStores",e.target.checked?[...(form.extraStores||[]),s.id]:(form.extraStores||[]).filter(i=>i!==s.id))}/>
+            <span style={{fontWeight:600}}>{s.name}</span>
+            <span style={{fontSize:10,color:"#aaa"}}>{STORE_SHORT[s.id]}</span>
+          </label>)}
+        </div>
+        {(form.extraStores||[]).length>0&&<div style={{fontSize:11,color:"#1565c0",marginTop:6,padding:"4px 8px",background:"#e8f0fe",borderRadius:5}}>
+          ✅ Rozvrh edituje vedoucí <strong>{stores.find(s=>s.id===form.mainStore)?.name}</strong> – změny se propíší do dalších prodejen.
+        </div>}
+      </div>
+      <div style={{padding:"12px 14px",background:"#f8f9ff",borderRadius:8,display:"flex",flexDirection:"column",gap:10}}>
+        <FLabel>Pracovní úvazek</FLabel>
+        <div style={{display:"flex",gap:10,alignItems:"flex-end",flexWrap:"wrap"}}>
+          <FInput label="Hodin / den" type="number" value={form.contractHoursDay??form.contract??8}
+            onChange={v=>upd("contractHoursDay",Number(v))} inputStyle={{width:80}} style={{flex:"0 0 auto"}}/>
+          <FInput label="Hodin / týden" type="number" value={form.contractHoursWeek??((form.contract??8)*5)}
+            onChange={v=>upd("contractHoursWeek",Number(v))} inputStyle={{width:90}} style={{flex:"0 0 auto"}}/>
+          <div style={{fontSize:12,color:"#aaa",paddingBottom:8,flex:1}}>
+            Fond = pracovní dny × h/den. Přesčas = plánováno − fond.
+          </div>
+        </div>
+        <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
+          {[[8,40],[6,30],[4,20],[3,15]].map(([d,w])=><button key={d} onClick={()=>{upd("contractHoursDay",d);upd("contractHoursWeek",w);}}
+            style={{padding:"3px 10px",borderRadius:6,border:`1px solid ${C.border}`,background:"#fff",fontSize:12,cursor:"pointer",color:"#555",fontWeight:600}}>
+            {d}h/den · {w}h/týden
+          </button>)}
+        </div>
+      </div>
+      <FInput label="Dovolená (h/rok)" type="number" value={form.vacHours} onChange={v=>upd("vacHours",Number(v))}/>
+      <FInput label="Počáteční KDP (hodiny)" type="number" value={form.kdpStart} onChange={v=>upd("kdpStart",Number(v))}/>
+      {initial.id&&<label style={{display:"flex",alignItems:"center",gap:8,fontSize:13,fontWeight:600,cursor:"pointer",padding:"8px 0"}}>
+        <input type="checkbox" checked={form.active} onChange={e=>upd("active",e.target.checked)}/>
+        Aktivní zaměstnanec
+      </label>}
+    </div>}
+
+    {tab==="times"&&<div>
+      <div style={{fontSize:13,color:"#888",marginBottom:16,padding:"10px 14px",background:"#f8f9ff",borderRadius:8,lineHeight:1.7}}>
+        Pokud má zaměstnanec <strong>jiné časy než prodejna</strong> (např. Kříž 9:00–18:00 místo 9:00–19:00),
+        zaškrtněte prodejnu a zadejte jeho osobní časy.
+        Nezaškrtnuté prodejny používají výchozí časy prodejny.
+      </div>
+      {stores.map(store=>{
+        const hasCT=!!(form.customTimes?.[store.id]);
+        const ct=form.customTimes?.[store.id]||{};
+        return <div key={store.id} style={{marginBottom:16,border:`1.5px solid ${hasCT?"#4f8ef7":C.border}`,borderRadius:10,overflow:"hidden"}}>
+          <div style={{display:"flex",alignItems:"center",gap:10,padding:"10px 14px",background:hasCT?"#eef2ff":"#f8f9ff",cursor:"pointer"}} onClick={()=>toggleCT(store.id)}>
+            <input type="checkbox" checked={hasCT} onChange={()=>toggleCT(store.id)} onClick={e=>e.stopPropagation()}/>
+            <span style={{fontWeight:700,fontSize:14,color:hasCT?C.topbar:"#888"}}>{store.name}</span>
+            {!hasCT&&<span style={{fontSize:11,color:"#bbb"}}>– používá výchozí časy prodejny</span>}
+            {hasCT&&<span style={{fontSize:11,color:"#4f8ef7",fontWeight:600}}>– vlastní časy aktivní</span>}
+          </div>
+          {hasCT&&<div style={{padding:"14px 16px",display:"flex",flexDirection:"column",gap:10}}>
+            {[
+              {key:"weekday",label:"Pracovní den"},
+              {key:"saturday",label:"Sobota"},
+              {key:"sunday",label:"Neděle"},
+            ].map(({key,label})=>{
+              const pair=ct[key]||["",""];
+              const w=calcWorked(pair[0],pair[1],getBreakRules(store.id,[...INIT_STORES]));
+              return <div key={key} style={{display:"flex",alignItems:"center",gap:10}}>
+                <span style={{minWidth:110,fontSize:13,color:"#555",fontWeight:600}}>{label}</span>
+                <TimeSelect value={pair[0]} onChange={v=>updCT(store.id,key,0,v)}/>
+                <span style={{color:"#aaa"}}>–</span>
+                <TimeSelect value={pair[1]} onChange={v=>updCT(store.id,key,1,v)}/>
+                {pair[0]&&pair[1]&&<span style={{fontSize:11,color:"#aaa",minWidth:60}}>= {w%1===0?w:w.toFixed(1)}h prac.</span>}
+                <Btn small variant="ghost" onClick={()=>updCT(store.id,key,0,"") || updCT(store.id,key,1,"")}>Volno</Btn>
+              </div>;
+            })}
+          </div>}
+        </div>;
+      })}
+    </div>}
+
+    <div style={{display:"flex",gap:8,marginTop:20}}>
+      <Btn onClick={()=>onSave(form)} style={{flex:1}}>Uložit</Btn>
+      <Btn variant="secondary" onClick={onClose} style={{flex:1}}>Zrušit</Btn>
+    </div>
+  </div>;
+}
+
+// ─── BREAK RULES EDITOR ──────────────────────────────────────
+// minMinutes je interně stále v minutách, ale UI zobrazuje hodiny (6, 6.5, 7...)
+const HOUR_OPTIONS = [];
+for(let h=0;h<=12;h++){
+  HOUR_OPTIONS.push({value:h*60, label:`${h}h`});
+  if(h<12) HOUR_OPTIONS.push({value:h*60+30, label:`${h}h 30min`});
+}
+
+function BreakRulesEditor({rules, onChange}){
+  const sorted=[...rules].sort((a,b)=>b.minMinutes-a.minMinutes);
+  const fmtH=min=>{ const h=Math.floor(min/60),m=min%60; return m>0?`${h}h ${m}min`:`${h}h`; };
+  return <div>
+    <div style={{fontSize:12,color:"#888",marginBottom:10,lineHeight:1.6}}>
+      Nastavte délku směny (v hodinách) a odpovídající přestávku (v minutách). Pravidla se vyhodnocují od nejvyššího prahu.
+    </div>
+    <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
+      <thead><tr style={{background:"#f8f9ff"}}>
+        <th style={{padding:"6px 10px",textAlign:"left",fontWeight:700,color:"#888",fontSize:11,borderBottom:`1.5px solid ${C.border}`}}>Délka směny ≥</th>
+        <th style={{padding:"6px 10px",textAlign:"center",fontWeight:700,color:"#888",fontSize:11,borderBottom:`1.5px solid ${C.border}`}}>Přestávka (min)</th>
+        <th style={{padding:"6px 10px",textAlign:"center",fontWeight:700,color:"#888",fontSize:11,borderBottom:`1.5px solid ${C.border}`}}>Odpracováno příklad</th>
+        <th style={{borderBottom:`1.5px solid ${C.border}`,width:30}}></th>
+      </tr></thead>
+      <tbody>{sorted.map((r,i)=>{
+        const exNet=r.minMinutes-r.breakMinutes;
+        const exH=exNet/60;
+        return <tr key={i} style={{background:i%2===0?"#fff":"#fafafe"}}>
+          <td style={{padding:"8px 10px",borderBottom:`1px solid ${C.border}`}}>
+            <select value={r.minMinutes} onChange={e=>{
+              const nr=sorted.map((x,j)=>j===i?{...x,minMinutes:Number(e.target.value)}:x);
+              onChange(nr);
+            }} style={{padding:"5px 8px",borderRadius:6,border:`1px solid ${C.border}`,fontSize:13,background:"#fff",minWidth:110}}>
+              {HOUR_OPTIONS.map(o=><option key={o.value} value={o.value}>{o.label}</option>)}
+            </select>
+          </td>
+          <td style={{padding:"8px 10px",textAlign:"center",borderBottom:`1px solid ${C.border}`}}>
+            <input type="number" value={r.breakMinutes} min={0} max={120} step={5}
+              onChange={e=>{
+                const nr=sorted.map((x,j)=>j===i?{...x,breakMinutes:Number(e.target.value)}:x);
+                onChange(nr);
+              }} style={{width:64,padding:"5px 6px",borderRadius:6,border:`1px solid ${C.border}`,fontSize:13,textAlign:"center"}}/>
+            <span style={{fontSize:11,color:"#aaa",marginLeft:4}}>min</span>
+          </td>
+          <td style={{padding:"8px 10px",textAlign:"center",borderBottom:`1px solid ${C.border}`,color:"#555",fontSize:12}}>
+            {fmtH(r.minMinutes)} − {r.breakMinutes}min přest. = <strong>{exH%1===0?exH:exH.toFixed(1)}h</strong> prac.
+          </td>
+          <td style={{padding:"8px 10px",borderBottom:`1px solid ${C.border}`,textAlign:"center"}}>
+            {sorted.length>1&&<button onClick={()=>onChange(sorted.filter((_,j)=>j!==i))}
+              style={{border:"none",background:"none",color:"#e57373",cursor:"pointer",fontSize:18,fontWeight:700,lineHeight:1}}>×</button>}
+          </td>
+        </tr>;
+      })}</tbody>
+    </table>
+    <button onClick={()=>onChange([...sorted,{minMinutes:360,breakMinutes:0}])}
+      style={{marginTop:10,border:"none",background:"none",color:"#4f8ef7",fontWeight:700,fontSize:13,cursor:"pointer",padding:"4px 0"}}>
+      + Přidat pravidlo
+    </button>
+    <div style={{marginTop:12,padding:"8px 12px",background:"#f8f9ff",borderRadius:7,fontSize:12,color:"#888"}}>
+      💡 Výchozí: ≥8h → 60min · ≥6h → 30min · &lt;6h → 0min
+    </div>
+  </div>;
+}
+
+// ─── PATTERN CELL ────────────────────────────────────────────
+function PatternCellComp({value, emp, storeId, dow, stores, onChange}){
+  const isShared=(emp.extraStores||[]).length>0;
+  const isObj=value&&typeof value==="object";
+  // Vlastní čas v vzoru: {shift:"custom",loc,from,to}
+  const isCustomTime=isObj&&value.shift==="custom";
+  const shiftType=isObj?(value.shift||"work"):(value||"__volno__");
+  const locId=isObj?(value.loc||storeId):storeId;
+  const isVolno=!value;
+  const store=stores.find(s=>s.id===storeId);
+  const dk=dow===6?"sunday":dow===5?"saturday":"weekday";
+  const dt=store?.defaultTimes;
+  const hd=empContractDay(emp);
+
+  // Pro 4h úvazek nebo jiné nestandardní: přidat "Vlastní čas"
+  const shiftOpts=hd>=7
+    ?[
+        {value:"__volno__",label:"Volno"},
+        {value:"work",     label:"Práce"},
+        {value:"custom",   label:"Vlastní čas…"},
+      ]
+    :[
+        {value:"__volno__",label:"Volno"},
+        {value:"fullDay",  label:"Celý den"},
+        {value:"morning",  label:"Dopoledne"},
+        {value:"afternoon",label:"Odpoledne"},
+        {value:"custom1",  label:dt?.h6?.custom1?.label||"Vlastní 1"},
+        {value:"custom2",  label:dt?.h6?.custom2?.label||"Vlastní 2"},
+        {value:"custom",   label:"Vlastní čas…"},
+      ];
+
+  const handleShift=v=>{
+    if(v==="__volno__"){onChange(null);return;}
+    if(v==="custom"){
+      // Prefill z defaultTimes pro tento den
+      const def=hd>=7?(dt?.h8?.[dk]||["",""]):(dt?.h6?.fullDay?.[dk]||["",""]);
+      onChange({shift:"custom",loc:locId,from:def[0]||"",to:def[1]||""});
+      return;
+    }
+    onChange(isShared?{shift:v,loc:locId}:v);
+  };
+  const handleLoc=v=>onChange({...(isObj?value:{shift:shiftType}),loc:Number(v)});
+  const handleCustomTime=(f,v)=>onChange({...value,[f]:v});
+
+  // Zobrazit výsledný čas pod buňkou
+  const showTime=()=>{
+    if(!value) return null;
+    let fr,to;
+    if(isCustomTime){fr=value.from;to=value.to;}
+    else {
+      const st=isObj?value.shift||"work":value;
+      const lId=isObj?(value.loc||storeId):storeId;
+      [fr,to]=getEmpShiftTimes({...emp},lId,st,dow,stores);
+    }
+    if(!fr||!to) return null;
+    const lId=isObj?(value.loc||storeId):storeId;
+    const h=calcWorked(fr,to,getBreakRules(lId,stores));
+    return <div style={{fontSize:9,color:"#aaa",textAlign:"center",marginTop:1}}>
+      {shiftLabel(fr,to)} = {h%1===0?h:h.toFixed(1)}h
+    </div>;
+  };
+
+  const tOpts=HALF_HOURS.filter(t=>{const h=parseInt(t);return h>=5&&h<=22;});
+
+  return <div style={{display:"flex",flexDirection:"column",gap:2}}>
+    <select value={isVolno?"__volno__":shiftType} onChange={e=>handleShift(e.target.value)}
+      style={{fontSize:11,padding:"3px 4px",borderRadius:5,border:`1px solid ${C.border}`,background:isVolno?"#e8f5e9":isCustomTime?"#fff8e1":"#fff",color:isVolno?"#2e7d32":isCustomTime?"#e65100":"#1a1a2e",fontWeight:700,width:"100%"}}>
+      {shiftOpts.map(o=><option key={o.value} value={o.value}>{o.label}</option>)}
+    </select>
+    {isCustomTime&&<div style={{display:"flex",gap:2,marginTop:1}}>
+      <select value={value.from||""} onChange={e=>handleCustomTime("from",e.target.value)}
+        style={{fontSize:10,padding:"2px 3px",borderRadius:4,border:`1px solid ${C.border}`,flex:1,background:"#fff8e1"}}>
+        <option value="">Od</option>
+        {tOpts.map(t=><option key={t} value={t}>{t}</option>)}
+      </select>
+      <select value={value.to||""} onChange={e=>handleCustomTime("to",e.target.value)}
+        style={{fontSize:10,padding:"2px 3px",borderRadius:4,border:`1px solid ${C.border}`,flex:1,background:"#fff8e1"}}>
+        <option value="">Do</option>
+        {tOpts.map(t=><option key={t} value={t}>{t}</option>)}
+      </select>
+    </div>}
+    {isShared&&!isVolno&&<select value={locId} onChange={e=>handleLoc(e.target.value)}
+      style={{fontSize:10,padding:"2px 4px",borderRadius:4,border:`1px solid ${C.border}`,background:"#f0f4ff",color:"#1565c0",fontWeight:700,width:"100%"}}>
+      {[emp.mainStore,...(emp.extraStores||[])].map(sid=><option key={sid} value={sid}>{STORE_SHORT[sid]} – {stores.find(s=>s.id===sid)?.name}</option>)}
+    </select>}
+    {showTime()}
+  </div>;
+}
+
+// ─── PATTERN EDITOR ──────────────────────────────────────────
+function PatternEditor({storeId, employees, patterns, stores, onSave, onClose}){
+  const emps=employees.filter(e=>e.active&&e.mainStore===storeId);
+  const isBlatna=storeId===2;
+  const init=patterns[storeId]||{odd:[],even:[],flat:[]};
+  const fill=rows=>{
+    const r=rows.map(row=>[...(row||[])]);
+    while(r.length<emps.length) r.push(Array(7).fill(null));
+    return r.map(row=>{while(row.length<7) row.push(null);return row;});
+  };
+  const [odd,setOdd]=useState(()=>fill(init.odd||[]));
+  const [even,setEven]=useState(()=>fill(init.even||[]));
+  const [flat,setFlat]=useState(()=>fill(init.flat||[]));
+  const [wk,setWk]=useState("odd");
+
+  const rows=isBlatna?flat:(wk==="odd"?odd:even);
+  const setRows=isBlatna?setFlat:(wk==="odd"?setOdd:setEven);
+  const updCell=(ei,di,val)=>setRows(r=>{const nr=r.map(row=>[...row]);nr[ei][di]=val;return nr;});
+
+  const weekH=(rows,emp)=>{
+    const ei=emps.indexOf(emp); if(!rows[ei]) return 0;
+    return rows[ei].reduce((s,v,di)=>{
+      if(!v) return s;
+      const st=typeof v==="object"?v.shift||"work":v;
+      const lId=typeof v==="object"?(v.loc||storeId):storeId;
+      const[fr,to]=getEmpShiftTimes(emp,lId,st,di,stores,typeof v==="object"?v:null);
+      return s+calcWorked(fr,to,getBreakRules(lId,stores));
+    },0);
+  };
+
+  return <div>
+    {!isBlatna&&<div style={{display:"flex",gap:8,marginBottom:16,alignItems:"center"}}>
+      <Btn variant={wk==="odd"?"primary":"ghost"} onClick={()=>setWk("odd")}>Lichý (T1)</Btn>
+      <Btn variant={wk==="even"?"primary":"ghost"} onClick={()=>setWk("even")}>Sudý (T2)</Btn>
+      <Btn variant="ghost" small style={{marginLeft:"auto"}} onClick={()=>{if(window.confirm("Kopírovat T1 → T2?")) setEven(odd.map(r=>[...r]));}}>Kopírovat T1→T2</Btn>
+    </div>}
+    {isBlatna&&<div style={{marginBottom:12,padding:"8px 14px",background:"#e8f5e9",borderRadius:8,fontSize:12,color:"#2e7d32",fontWeight:600}}>✅ Blatná – jeden pevný vzor</div>}
+    <div style={{marginBottom:12,padding:"8px 14px",background:"#fff8e1",borderRadius:8,fontSize:12,color:"#795548"}}>
+      ⏱️ Přestávky se počítají dle pravidel prodejny. Pod buňkou vidíte výsledné hodiny.
+    </div>
+    <div style={{overflowX:"auto"}}>
+      <table style={{borderCollapse:"collapse",width:"100%",fontSize:12}}>
+        <thead><tr style={{background:"#f8f9ff"}}>
+          <th style={{padding:"8px 10px",textAlign:"left",minWidth:130,borderBottom:`2px solid ${C.border}`,fontSize:11,fontWeight:700,color:"#888"}}>Zaměstnanec</th>
+          {DOW_LBL.map((d,i)=><th key={i} style={{padding:"8px 6px",textAlign:"center",minWidth:108,borderBottom:`2px solid ${C.border}`,fontSize:11,fontWeight:700,color:i>=5?"#c62828":"#888",background:i>=5?"#fff8f8":"transparent"}}>{d}</th>)}
+          <th style={{padding:"8px 6px",textAlign:"center",minWidth:60,borderBottom:`2px solid ${C.border}`,fontSize:11,fontWeight:700,color:"#888"}}>h/týden</th>
+        </tr></thead>
+        <tbody>{emps.map((emp,ei)=>{
+          const isShared=(emp.extraStores||[]).length>0;
+          const wh=weekH(rows,emp).toFixed(1);
+          const hasCustom=!!(emp.customTimes?.[storeId]);
+          return <tr key={emp.id} style={{background:ei%2===0?"#fff":"#fafafe"}}>
+            <td style={{padding:"6px 10px",fontWeight:600,fontSize:12,color:C.topbar,borderBottom:`1px solid ${C.border}`,whiteSpace:"nowrap"}}>
+              <div style={{display:"flex",alignItems:"center",gap:5}}>
+                {emp.firstName} {emp.lastName}
+                {isShared&&<span style={{fontSize:9,background:"#e8f0fe",color:"#1565c0",padding:"1px 4px",borderRadius:3,fontWeight:700}}>SD</span>}
+                {hasCustom&&<span style={{fontSize:9,background:"#fff3e0",color:"#e65100",padding:"1px 4px",borderRadius:3,fontWeight:700}}>CT</span>}
+              </div>
+              <div style={{fontSize:10,color:"#bbb",fontWeight:400}}>{empContractDay(emp)}h/den úvazek</div>
+            </td>
+            {DOW_LBL.map((_,di)=><td key={di} style={{padding:"3px",borderBottom:`1px solid ${C.border}`,background:di>=5?"#fff8f8":"transparent",verticalAlign:"top"}}>
+              <PatternCellComp value={rows[ei]?.[di]??null} emp={emp} storeId={storeId} dow={di} stores={stores} onChange={v=>updCell(ei,di,v)}/>
+            </td>)}
+            <td style={{padding:"6px",textAlign:"center",fontWeight:800,color:Number(wh)>42?"#c62828":Number(wh)>=30?"#2e7d32":"#555",borderBottom:`1px solid ${C.border}`}}>{wh}h</td>
+          </tr>;
+        })}</tbody>
+      </table>
+    </div>
+    <div style={{display:"flex",gap:10,marginTop:20}}>
+      <Btn onClick={()=>{onSave(storeId,isBlatna?{flat,odd:[],even:[]}:{odd,even,flat:[]});onClose();}} style={{flex:1}}>💾 Uložit vzor</Btn>
+      <Btn variant="secondary" onClick={onClose} style={{flex:1}}>Zrušit</Btn>
+    </div>
+  </div>;
+}
+
+// ─── CELL EDITOR (klik v rozvrhu) ────────────────────────────
+function CellEditor({emp, date, year, month, current, viewStoreId, stores, employees, patterns, onSave, onClose, onRangeApply, onRangeDelete}){
+  const isShared=(emp.extraStores||[]).length>0;
+  const ownerStore=stores.find(s=>s.id===emp.mainStore);
+  const locOptions=[emp.mainStore,...(emp.extraStores||[])].map(sid=>({value:sid,label:`${STORE_SHORT[sid]} – ${stores.find(s=>s.id===sid)?.name}`}));
+  const dow=date.getDay()===0?6:date.getDay()-1;
+
+  const getPatternHours=()=>{
+    const mainStoreEmps=employees.filter(e=>e.active&&e.mainStore===emp.mainStore);
+    const empIdx=mainStoreEmps.findIndex(e=>e.id===emp.id);
+    const pc=getPatCell(patterns,emp.mainStore,empIdx,date);
+    if(!pc) return empContractDay(emp);
+    const st=typeof pc==="object"?pc.shift||"work":pc;
+    const lId=typeof pc==="object"?(pc.loc||emp.mainStore):emp.mainStore;
+    const [fr,to]=getEmpShiftTimes(emp,lId,st,dow,stores,typeof pc==="object"?pc:null);
+    const h=calcWorked(fr,to,getBreakRules(lId,stores));
+    return h>0?h:empContractDay(emp);
+  };
+
+  const initSegs=current?.length?current:[{type:"work",from:"",to:"",locationStoreId:viewStoreId}];
+  const [segs,setSegs]=useState(initSegs);
+  const [rangeMode,setRangeMode]=useState(false);
+  const [rangeType,setRangeType]=useState("vacation");
+  const [rangeFrom,setRangeFrom]=useState(fmtDate(year,month,date.getDate()));
+  const [rangeTo,setRangeTo]=useState(fmtDate(year,month,date.getDate()));
+  const [rangeHours,setRangeHours]=useState(()=>getPatternHours());
+
+  const typeOpts=Object.entries(TYPE_META).map(([k,v])=>({value:k,label:v.label}));
+  const tOpts=[{value:"",label:"—"},...HALF_HOURS.map(t=>({value:t,label:t}))];
+  const updSeg=(i,f,v)=>setSegs(s=>s.map((x,j)=>j===i?{...x,[f]:v}:x));
+  const delSeg=i=>setSegs(s=>s.filter((_,j)=>j!==i));
+  const brkSeg=seg=>calcBreak(seg.from,seg.to,getBreakRules(seg.locationStoreId||emp.mainStore,stores));
+  const wkdSeg=seg=>calcWorked(seg.from,seg.to,getBreakRules(seg.locationStoreId||emp.mainStore,stores));
+
+  const vacHOpts=[];
+  for(let h=0.5;h<=12;h+=0.5) vacHOpts.push({value:String(h),label:`${h%1===0?h:h.toFixed(1)}h`});
+
+  return <div style={{display:"flex",flexDirection:"column",gap:14}}>
+    <div style={{fontSize:13,fontWeight:600,color:"#888"}}>
+      {DOW_LBL[dow]} {date.getDate()}.{month+1}.{year} — <strong style={{color:C.topbar}}>{emp.firstName} {emp.lastName}</strong>
+    </div>
+    {isShared&&<div style={{padding:"8px 12px",background:"#e8f0fe",borderRadius:8,fontSize:12,color:"#1565c0",fontWeight:600}}>
+      🔗 Sdílený – edituje vedoucí <strong>{ownerStore?.name}</strong>. Propíše se do: {(emp.extraStores||[]).map(id=>stores.find(s=>s.id===id)?.name).join(", ")}
+    </div>}
+    {segs.map((seg,i)=><div key={i} style={{background:"#f8f9ff",borderRadius:8,padding:12,display:"flex",flexDirection:"column",gap:8,border:`1.5px solid ${C.border}`}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+        <span style={{fontSize:11,fontWeight:700,color:"#aaa"}}>ČÁST {i+1}</span>
+        {segs.length>1&&<button onClick={()=>delSeg(i)} style={{border:"none",background:"none",color:"#e57373",cursor:"pointer",fontSize:18,lineHeight:1}}>×</button>}
+      </div>
+      <FSel label="Typ" value={seg.type} onChange={v=>{
+        updSeg(i,"type",v);
+        if((v==="vacation"||v==="sick")&&!seg.hours) updSeg(i,"hours",getPatternHours());
+      }} options={typeOpts}/>
+      {isShared&&seg.type==="work"&&<FSel label="Prodejna" value={seg.locationStoreId||emp.mainStore}
+        onChange={v=>updSeg(i,"locationStoreId",Number(v))} options={locOptions}/>}
+      {seg.type==="work"&&<div style={{display:"flex",gap:8}}>
+        <FSel label="Od" value={seg.from||""} onChange={v=>updSeg(i,"from",v)} options={tOpts} style={{flex:1}}/>
+        <FSel label="Do" value={seg.to||""}   onChange={v=>updSeg(i,"to",v)}   options={tOpts} style={{flex:1}}/>
+      </div>}
+      {seg.type==="work"&&seg.from&&seg.to&&<div style={{fontSize:11,color:"#888",background:"#fff",padding:"5px 8px",borderRadius:5,display:"flex",gap:12}}>
+        <span>⏱️ Odprac.: <strong>{wkdSeg(seg).toFixed(1)}h</strong></span>
+        {brkSeg(seg)>0&&<span style={{color:"#bbb"}}>Přest.: {brkSeg(seg)} min</span>}
+      </div>}
+      {(seg.type==="vacation"||seg.type==="sick")&&<div style={{display:"flex",alignItems:"center",gap:8,background:"#fff",padding:"6px 10px",borderRadius:6}}>
+        <span style={{fontSize:12,fontWeight:600,color:"#555",whiteSpace:"nowrap"}}>Hodin tento den:</span>
+        <select value={String(seg.hours??getPatternHours())} onChange={e=>updSeg(i,"hours",Number(e.target.value))}
+          style={{padding:"4px 8px",borderRadius:6,border:`1.5px solid ${C.border}`,fontSize:13,background:"#fff"}}>
+          {vacHOpts.map(o=><option key={o.value} value={o.value}>{o.label}</option>)}
+        </select>
+        <span style={{fontSize:11,color:"#aaa"}}>(vzor: {getPatternHours()}h)</span>
+      </div>}
+    </div>)}
+    <Btn variant="ghost" small onClick={()=>setSegs(s=>[...s,{type:"work",from:"",to:"",locationStoreId:isShared?emp.mainStore:viewStoreId}])}>
+      {isShared?"+ Přidat část dne (jiná prodejna)":"+ Přidat část dne"}
+    </Btn>
+    <div style={{borderTop:`1.5px solid ${C.border}`,paddingTop:12}}>
+      <button onClick={()=>setRangeMode(r=>!r)} style={{background:"none",border:"none",color:"#1565c0",fontWeight:700,fontSize:13,cursor:"pointer",padding:0}}>
+        {rangeMode?"▲":"▼"} Zadat rozsah (dovolená / nemoc)
+      </button>
+      {rangeMode&&<div style={{marginTop:12,display:"flex",flexDirection:"column",gap:10}}>
+        {isShared&&<div style={{fontSize:12,color:"#e65100",fontWeight:600,padding:"6px 10px",background:"#fff8f0",borderRadius:6}}>
+          ⚠️ Propíše se automaticky do všech prodejen zaměstnance.
+        </div>}
+        <FSel label="Typ" value={rangeType} onChange={setRangeType} options={[{value:"vacation",label:"Dovolená"},{value:"sick",label:"Nemoc"}]}/>
+        <div style={{display:"flex",gap:8}}>
+          <FInput label="Od" type="date" value={rangeFrom} onChange={setRangeFrom} style={{flex:1}}/>
+          <FInput label="Do" type="date" value={rangeTo}   onChange={setRangeTo}   style={{flex:1}}/>
+        </div>
+        <div style={{fontSize:11,color:"#888",padding:"6px 10px",background:"#f0f4ff",borderRadius:6}}>
+          ℹ️ Víkendy bez naplánované směny se přeskočí. Hodiny se načtou ze vzoru pro každý den zvlášť.
+        </div>
+        <div style={{display:"flex",gap:8}}>
+          <Btn onClick={()=>{onRangeApply(rangeType,rangeFrom,rangeTo,emp);onClose();}} style={{flex:1}}>✅ Aplikovat rozsah</Btn>
+          <Btn variant="danger" onClick={()=>{onRangeDelete(rangeFrom,rangeTo,emp);onClose();}} style={{flex:1}}>🗑 Smazat rozsah</Btn>
+        </div>
+      </div>}
+    </div>
+    <div style={{display:"flex",gap:8}}>
+      <Btn onClick={()=>onSave(segs.filter(s=>s.type))} style={{flex:1}}>Uložit den</Btn>
+      <Btn variant="secondary" onClick={onClose} style={{flex:1}}>Zrušit</Btn>
+    </div>
+  </div>;
+}
+
+// ─── SCHEDULE VIEW ───────────────────────────────────────────
+function ScheduleView({storeId,employees,year,month,sched,onCellEdit,actions,holidays,stores,patterns}){
+  const mainEmps=employees.filter(e=>e.active&&e.mainStore===storeId);
+
+  // Sdílení zaměstnanci se zobrazí pokud mají v tomto měsíci alespoň jednu směnu (nebo část směny) v této prodejně
+  const mirrorEmps=employees.filter(e=>{
+    if(!e.active||e.mainStore===storeId) return false;
+    if(!(e.extraStores||[]).includes(storeId)) return false;
+    const dim=getDim(year,month);
+    const mainStoreEmps=employees.filter(x=>x.active&&x.mainStore===e.mainStore);
+    const empIdx=mainStoreEmps.findIndex(x=>x.id===e.id);
+    for(let d=1;d<=dim;d++){
+      const date=new Date(year,month,d);
+      const dateStr=fmtDate(year,month,d);
+      // Zkontroluj ruční zadání – jakýkoli work segment pro tuto prodejnu
+      const cell=getSchedCell(sched,e.id,dateStr,employees);
+      if(cell?.length){
+        const hasSegHere=cell.some(s=>s.type==="work"&&(s.locationStoreId||s.loc||e.mainStore)===storeId);
+        if(hasSegHere) return true;
+      }
+      // Zkontroluj vzor
+      const patCell=getPatCell(patterns,e.mainStore,empIdx,date);
+      if(patCell){
+        const locId=typeof patCell==="object"?(patCell.loc||e.mainStore):e.mainStore;
+        if(locId===storeId) return true;
+      }
+    }
+    return false;
+  });
+
+  const allEmps=[...mainEmps,...mirrorEmps];
+
+  const dim=getDim(year,month);
+  const calStart=new Date(year,month,1-getDow(year,month,1));
+  const calEnd=new Date(year,month,dim+(6-getDow(year,month,dim)));
+  const calDays=[]; for(let d=new Date(calStart);d<=calEnd;d.setDate(d.getDate()+1)) calDays.push(new Date(d));
+  const weeks=[]; for(let i=0;i<calDays.length;i+=7) weeks.push(calDays.slice(i,i+7));
+
+  const isCur=d=>d.getMonth()===month&&d.getFullYear()===year;
+  const ds=d=>fmtDate(d.getFullYear(),d.getMonth(),d.getDate());
+  const getHol=d=>isCur(d)?holidays.find(h=>h.date===ds(d)):null;
+  const isAct=d=>actions.some(a=>{const s=ds(d);return s>=a.from&&s<=a.to;});
+  const isBlatna=storeId===2;
+
+  // Pomocná: získá co vzor říká pro zaměstnance v daný den (from, to, loc) nebo null
+  const getPatternForDay=(emp,d)=>{
+    const dow=d.getDay()===0?6:d.getDay()-1;
+    const hol=getHol(d);
+    const mainStoreEmps=employees.filter(e=>e.active&&e.mainStore===emp.mainStore);
+    const empIdx=mainStoreEmps.findIndex(e=>e.id===emp.id);
+    const patCell=getPatCell(patterns,emp.mainStore,empIdx,d);
+    if(!patCell) return null;
+    const isObj=typeof patCell==="object";
+    const patShift=isObj?(patCell.shift||"work"):(patCell||"work");
+    if(!patShift||patShift==="null") return null;
+    const patLoc=isObj?(patCell.loc||emp.mainStore):emp.mainStore;
+    if(isObj&&patCell.shift==="custom"&&!(hol?.holidayFrom)){
+      return {from:patCell.from,to:patCell.to,loc:patLoc};
+    }
+    const [from,to]=getEmpShiftTimes(emp,patLoc,patShift,dow,stores,isObj?patCell:null,hol);
+    return from&&to?{from,to,loc:patLoc}:null;
+  };
+
+  // Vyhodnotí co zobrazit v buňce
+  const evalCell=(emp,d)=>{
+    if(!isCur(d)) return {bg:"#fafafa",lines:[],hrs:null,txtColor:"#ddd",clickable:false};
+    const dow=d.getDay()===0?6:d.getDay()-1;
+    const dateStr=ds(d);
+    const hol=getHol(d);
+    const isMirrorRow=emp.mainStore!==storeId;
+    const canEditRow=emp.mainStore===storeId;
+
+    const cell=getSchedCell(sched,emp.id,dateStr,employees);
+    const patternDay=getPatternForDay(emp,d);
+    const showLoc=(emp.extraStores||[]).length>0;
+
+    let bg=C.work, lines=[], hrs=null, txtColor="#1a1a2e", clickable=canEditRow;
+    let isModified=false; // změna oproti vzoru
+
+    if(cell?.length){
+      const workSegs=cell.filter(s=>s.type==="work");
+      const vacSeg=cell.find(s=>s.type==="vacation"||s.type==="sick");
+      const otherAbsSeg=cell.find(s=>s.type!=="work"&&s.type!=="vacation"&&s.type!=="sick");
+      const absSeg=vacSeg||otherAbsSeg;
+
+      if(workSegs.length&&vacSeg){
+        // Práce + Dovolená/Nemoc – zobraz práci a DOV Xh
+        const totalH=calcSplitWorked(workSegs,emp.mainStore,stores);
+        lines=workSegs.map(seg=>{
+          const loc=seg.locationStoreId||seg.loc||emp.mainStore;
+          const lbl=shiftLabel(seg.from,seg.to);
+          return showLoc?`${lbl} ${STORE_SHORT[loc]||""}`:lbl;
+        });
+        const dovH=vacSeg.hours||0;
+        lines.push(`${TYPE_SHORT[vacSeg.type]||"DOV"}${dovH>0?` ${dovH%1===0?dovH:dovH.toFixed(1)}h`:""}`);
+        hrs=totalH>0?totalH:null;
+        bg=C.modified;
+      } else if(absSeg){
+        // Čistá absence (dovolená/nemoc/jiné)
+        const patWasWork=patternDay!==null;
+        const dovH=absSeg.hours||0;
+        const dovLabel=`${TYPE_SHORT[absSeg.type]||"–"}${dovH>0?` ${dovH%1===0?dovH:dovH.toFixed(1)}h`:""}`;
+        if(patWasWork){
+          // Změna oproti vzoru → žlutě
+          bg=C.modified;
+          lines=[dovLabel];
+        } else {
+          // Volno ze vzoru → barva typu + "DOV Xh" + "V" pod tím
+          bg=TYPE_META[absSeg.type]?.color||C.dayOff;
+          lines=[dovLabel,"V"];
+        }
+        txtColor=TYPE_META[absSeg.type]?.text||"#333";
+      } else if(workSegs.length){
+        const totalH=calcSplitWorked(workSegs,emp.mainStore,stores);
+        if(isMirrorRow){
+          lines=workSegs.map(seg=>{
+            const loc=seg.locationStoreId||seg.loc||emp.mainStore;
+            return `${shiftLabel(seg.from,seg.to)} ${STORE_SHORT[loc]||""}`;
+          });
+          hrs=totalH>0?totalH:null;
+          const schedFrom=workSegs[0].from, schedTo=workSegs[workSegs.length-1].to;
+          if(!patternDay) isModified=true;
+          else if(patternDay.from!==schedFrom||patternDay.to!==schedTo) isModified=true;
+          bg=isModified?C.modified:C.work;
+        } else {
+          lines=workSegs.map(seg=>{
+            const loc=seg.locationStoreId||seg.loc||emp.mainStore;
+            const lbl=shiftLabel(seg.from,seg.to);
+            return showLoc?`${lbl} ${STORE_SHORT[loc]||""}`:lbl;
+          });
+          hrs=totalH>0?totalH:null;
+          const schedFrom=workSegs[0].from, schedTo=workSegs[workSegs.length-1].to;
+          if(!patternDay) isModified=true;
+          else if(patternDay.from!==schedFrom||patternDay.to!==schedTo) isModified=true;
+          bg=isModified?C.modified:C.work;
+        }
+      }
+    } else if(patternDay){
+      // Ze vzoru
+      const {from,to,loc:patLoc}=patternDay;
+      const physHere=patLoc===storeId;
+      if(!physHere&&isMirrorRow){ bg=C.otherStore; lines=[STORE_SHORT[patLoc]||"?"]; txtColor="#bbb"; }
+      else if(!physHere){ bg=C.otherStore; lines=[STORE_SHORT[patLoc]||"?"]; txtColor="#bbb"; }
+      else {
+        const h=calcWorked(from,to,getBreakRules(patLoc,stores));
+        const lbl=shiftLabel(from,to)+(showLoc?` ${STORE_SHORT[patLoc]||""}`:"")||"Práce";
+        lines=[lbl]; hrs=h>0?h:null;
+        // Ze vzoru = žádná změna → bílá
+        bg=C.work;
+      }
+    } else {
+      bg=C.dayOff; lines=["V"]; txtColor="#81c784";
+    }
+
+    if(hol) bg=hol.open?C.holidayOpen:C.holidayClose;
+    if(isMirrorRow) clickable=false;
+
+    return {bg, lines, hrs, txtColor, clickable};
+  };
+
+  return <div style={{overflowX:"auto"}}>
+    {weeks.map((wDays,wi)=>{
+      const fc=wDays.find(d=>isCur(d)); if(!fc) return null;
+      const wt=isBlatna?"":getWeekType(fc);
+      const isoW=getIsoWeek(fc);
+      return <div key={wi} style={{marginBottom:22}}>
+        <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:5,paddingLeft:152}}>
+          <span style={{fontSize:11,fontWeight:700,color:"#ccc"}}>Týden {isoW}</span>
+          {!isBlatna&&<span style={{background:wt==="odd"?"#e3f2fd":"#f3e5f5",color:wt==="odd"?"#1565c0":"#6a1b9a",padding:"2px 10px",borderRadius:4,fontSize:11,fontWeight:800}}>
+            {wt==="odd"?"Lichý (T1)":"Sudý (T2)"}
+          </span>}
+        </div>
+        <table style={{borderCollapse:"collapse",width:"100%"}}>
+          <thead><tr>
+            <th style={{width:150,padding:"5px 10px",textAlign:"left",fontSize:11,color:"#bbb",fontWeight:600,borderBottom:`2px solid ${C.border}`}}>Zaměstnanec</th>
+            {wDays.map((d,di)=>{
+              const cur=isCur(d),dow=d.getDay()===0?6:d.getDay()-1,isWE=dow>=5;
+              const hol=getHol(d),act=isAct(d);
+              const dc=!cur?"#ddd":act?"#c62828":hol?(hol.open?"#33691e":"#b71c1c"):isWE?"#bbb":"#1a1a2e";
+              return <th key={di} style={{padding:"4px 3px",textAlign:"center",borderBottom:`2px solid ${C.border}`,minWidth:72,background:!cur?"#fafafa":isWE?"#fff8f8":"transparent"}}>
+                <div style={{fontSize:10,color:cur?(isWE?"#ccc":"#bbb"):"#ddd"}}>{DOW_LBL[dow]}</div>
+                <div style={{fontSize:13,fontWeight:800,color:dc}}>{d.getDate()}.</div>
+                {hol&&cur&&<div style={{fontSize:8,color:hol.open?"#558b2f":"#c62828",fontWeight:700,overflow:"hidden",whiteSpace:"nowrap",maxWidth:70}}>{hol.name}</div>}
+              </th>;
+            })}
+          </tr></thead>
+          <tbody>{allEmps.map((emp,ei)=>{
+            const isMirrorRow=emp.mainStore!==storeId;
+            return <tr key={emp.id} style={{background:ei%2===0?"#fff":"#fafafe"}}>
+              <td style={{padding:"4px 10px",fontSize:12,fontWeight:600,borderBottom:`1px solid ${C.border}`,whiteSpace:"nowrap"}}>
+                <div style={{color:isMirrorRow?"#888":C.topbar,display:"flex",alignItems:"center",gap:4}}>
+                  {emp.firstName} {emp.lastName}
+                  {isMirrorRow&&<span style={{fontSize:9,background:"#e8f0fe",color:"#1565c0",padding:"1px 4px",borderRadius:3,fontWeight:700}}>SD</span>}
+                </div>
+                <div style={{fontSize:10,color:"#bbb",fontWeight:400}}>{emp.role} · {empContractDay(emp)}h/den</div>
+              </td>
+              {wDays.map((d,di)=>{
+                const {bg,lines,hrs,txtColor,clickable}=evalCell(emp,d);
+                return <td key={di}
+                  onClick={()=>isCur(d)&&clickable&&onCellEdit(emp,d)}
+                  title={!isCur(d)?"":clickable?"Kliknutím upravíte":`Read-only – edituje vedoucí ${stores.find(s=>s.id===emp.mainStore)?.name}`}
+                  style={{padding:"3px 2px",textAlign:"center",borderBottom:`1px solid ${C.border}`,borderLeft:"1px solid #f5f5f5",background:bg,cursor:isCur(d)&&clickable?"pointer":"default",minWidth:72,height:lines?.length>1?52:46,verticalAlign:"middle"}}>
+                  {(lines||[]).map((l,li)=><div key={li} style={{fontSize:10,fontWeight:700,color:txtColor,lineHeight:1.25}}>{l}</div>)}
+                  {hrs&&<div style={{fontSize:9,color:"#bbb",marginTop:1}}>({hrs%1===0?hrs:hrs.toFixed(1)}h)</div>}
+                </td>;
+              })}
+            </tr>;
+          })}</tbody>
+        </table>
+      </div>;
+    })}
+  </div>;
+}
+
+// ─── SETTINGS ────────────────────────────────────────────────
+function SettingsView({holidays,setHolidays,actions,setActions,stores,setStores,employees,patterns,setPatterns}){
+  const [section,setSection]=useState("pattern");
+  const [editHol,setEditHol]=useState(null);
+  const [showActModal,setShowActModal]=useState(false);
+  const [newAct,setNewAct]=useState({name:"",month:0,from:"",to:""});
+  const [editPatStore,setEditPatStore]=useState(null);
+  const [editBreakStore,setEditBreakStore]=useState(null);
+
+  const secs=[
+    {key:"pattern", label:"📋 Rozvrh VZOR"},
+    {key:"breaks",  label:"⏱️ Přestávky"},
+    {key:"holidays",label:"🗓️ Státní svátky"},
+    {key:"actions", label:"🎯 Akce"},
+  ];
+
+  return <div style={{display:"flex",gap:0,minHeight:500}}>
+    <div style={{width:200,borderRight:`1.5px solid ${C.border}`,flexShrink:0}}>
+      {secs.map(s=><button key={s.key} onClick={()=>setSection(s.key)}
+        style={{display:"block",width:"100%",textAlign:"left",padding:"12px 18px",background:section===s.key?"#eef2ff":"transparent",color:section===s.key?C.topbar:"#666",fontWeight:section===s.key?700:500,fontSize:13,border:"none",cursor:"pointer",borderLeft:section===s.key?"3px solid #4f8ef7":"3px solid transparent"}}>
+        {s.label}
+      </button>)}
+    </div>
+    <div style={{flex:1,paddingLeft:28,overflowX:"auto"}}>
+
+      {section==="pattern"&&<div>
+        <div style={{fontWeight:800,fontSize:16,marginBottom:8,color:C.topbar}}>Rozvrh VZOR</div>
+        <div style={{fontSize:13,color:"#888",marginBottom:16,padding:"10px 14px",background:"#f8f9ff",borderRadius:8,lineHeight:1.7}}>
+          Strakonice &amp; Pelhřimov: <strong>Lichý (T1) ↔ Sudý (T2)</strong>. &nbsp;
+          Blatná: <strong>jeden pevný vzor</strong>.<br/>
+          Sdílení zaměstnanci (extraStores ≠ ∅): v buňce volíte i prodejnu.
+        </div>
+        <div style={{display:"flex",flexDirection:"column",gap:10}}>
+          {stores.map(s=><div key={s.id} onClick={()=>setEditPatStore(s)}
+            style={{display:"flex",alignItems:"center",gap:16,padding:"14px 20px",background:"#fff",border:`1.5px solid ${C.border}`,borderRadius:10,cursor:"pointer"}}
+            onMouseEnter={e=>e.currentTarget.style.borderColor="#4f8ef7"}
+            onMouseLeave={e=>e.currentTarget.style.borderColor=C.border}>
+            <div style={{width:40,height:40,background:"#eef2ff",borderRadius:9,display:"flex",alignItems:"center",justifyContent:"center",fontSize:18}}>🏪</div>
+            <div style={{flex:1}}>
+              <div style={{fontWeight:800,fontSize:14,color:C.topbar}}>{s.name}</div>
+              <div style={{fontSize:12,color:"#aaa"}}>{employees.filter(e=>e.active&&e.mainStore===s.id).length} zaměstnanců · {s.id===2?"Jeden vzor":"T1/T2"}</div>
+            </div>
+            <span style={{fontSize:12,color:"#4f8ef7",fontWeight:700}}>Upravit →</span>
+          </div>)}
+        </div>
+        <Modal open={!!editPatStore} onClose={()=>setEditPatStore(null)} title={`Vzor – ${editPatStore?.name}`} width={1040}>
+          {editPatStore&&<PatternEditor storeId={editPatStore.id} employees={employees} patterns={patterns} stores={stores}
+            onSave={(sid,pat)=>setPatterns(p=>({...p,[sid]:pat}))} onClose={()=>setEditPatStore(null)}/>}
+        </Modal>
+      </div>}
+
+      {section==="breaks"&&<div>
+        <div style={{fontWeight:800,fontSize:16,marginBottom:8,color:C.topbar}}>Pravidla přestávek</div>
+        <div style={{fontSize:13,color:"#888",marginBottom:16,padding:"10px 14px",background:"#f8f9ff",borderRadius:8}}>
+          Nastavte přestávky pro každou prodejnu samostatně.
+        </div>
+        <div style={{display:"flex",flexDirection:"column",gap:10}}>
+          {stores.map(s=><div key={s.id} style={{border:`1.5px solid ${C.border}`,borderRadius:10,overflow:"hidden"}}>
+            <div style={{display:"flex",alignItems:"center",gap:12,padding:"12px 18px",background:"#f8f9ff",cursor:"pointer"}} onClick={()=>setEditBreakStore(editBreakStore===s.id?null:s.id)}>
+              <span style={{fontSize:16}}>⏱️</span>
+              <span style={{fontWeight:700,fontSize:14,color:C.topbar}}>{s.name}</span>
+              <span style={{fontSize:12,color:"#aaa",flex:1}}>{[...s.breakRules].sort((a,b)=>b.minMinutes-a.minMinutes).map(r=>{const h=Math.floor(r.minMinutes/60),m=r.minMinutes%60;const lbl=m>0?`${h}h${m}min`:`${h}h`;return `≥${lbl}→${r.breakMinutes}min`;}).join(" · ")}</span>
+              <span style={{fontSize:12,color:"#4f8ef7",fontWeight:700}}>{editBreakStore===s.id?"▲ Zavřít":"▼ Upravit"}</span>
+            </div>
+            {editBreakStore===s.id&&<div style={{padding:"16px 18px",borderTop:`1px solid ${C.border}`}}>
+              <BreakRulesEditor rules={s.breakRules} onChange={rules=>{
+                setStores(prev=>prev.map(x=>x.id===s.id?{...x,breakRules:rules}:x));
+              }}/>
+            </div>}
+          </div>)}
+        </div>
+      </div>}
+
+      {section==="holidays"&&<div>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
+          <div style={{fontWeight:800,fontSize:16,color:C.topbar}}>Státní svátky</div>
+          <Btn small onClick={()=>setEditHol({date:"",name:"",open:false,idx:-1})}>+ Přidat svátek</Btn>
+        </div>
+        {[...holidays].sort((a,b)=>a.date.localeCompare(b.date)).map((h,i)=>{
+          const origIdx=holidays.findIndex(x=>x.date===h.date&&x.name===h.name);
+          const anyHours=h.storeHours&&Object.values(h.storeHours).some(s=>s?.from&&s?.to);
+          return <div key={i} style={{display:"flex",alignItems:"center",gap:10,marginBottom:7,padding:"9px 14px",background:"#f8f9ff",borderRadius:8}}>
+            <span style={{color:"#aaa",minWidth:90,fontSize:12,fontWeight:600}}>{h.date}</span>
+            <span style={{flex:1,fontSize:13}}>{h.name}</span>
+            {anyHours&&<div style={{display:"flex",gap:4}}>
+              {[1,2,3].map(sid=>{
+                const sh=h.storeHours?.[sid];
+                if(!sh?.from) return null;
+                return <Badge key={sid} color={h.open?"#fff3e0":"#fce4ec"} textColor={h.open?"#e65100":"#b71c1c"}>{STORE_SHORT[sid]}: {sh.from}–{sh.to}</Badge>;
+              })}
+            </div>}
+            <Badge color={h.open?C.holidayOpen:C.holidayClose} textColor={h.open?"#33691e":"#b71c1c"}>{h.open?"Otevřeno":"Zavřeno"}</Badge>
+            <Btn small variant="ghost" onClick={()=>setEditHol({...h, storeHours:h.storeHours?{...h.storeHours}:{}, idx:origIdx})}>Upravit</Btn>
+            <Btn small variant="danger" onClick={()=>{if(window.confirm(`Smazat svátek "${h.name}"?`)) setHolidays(hs=>hs.filter((_,j)=>j!==origIdx));}}>✕</Btn>
+          </div>;
+        })}
+        <Modal open={!!editHol} onClose={()=>setEditHol(null)} title={editHol?.idx===-1?"Přidat svátek":"Upravit svátek"}>
+          {editHol&&<div style={{display:"flex",flexDirection:"column",gap:14}}>
+            <FInput label="Datum" type="date" value={editHol.date} onChange={v=>setEditHol(h=>({...h,date:v}))}/>
+            <FInput label="Název" value={editHol.name} onChange={v=>setEditHol(h=>({...h,name:v}))} placeholder="Název svátku..."/>
+            <FSel label="Prodejna v tento den" value={editHol.open?"open":"closed"}
+              onChange={v=>setEditHol(h=>({...h,open:v==="open",storeHours:h.storeHours||{}}))}
+              options={[{value:"closed",label:"Zavřeno"},{value:"open",label:"Otevřeno"}]}/>
+            <div style={{background:editHol.open?"#fff8e1":"#fce4ec",borderRadius:8,padding:"12px 14px",border:`1px solid ${editHol.open?"#ffe082":"#ef9a9a"}`}}>
+              <div style={{fontSize:12,fontWeight:700,color:editHol.open?"#e65100":"#b71c1c",marginBottom:12}}>
+                ⏰ {editHol.open?"Zkrácená otevírací doba":"Pracovní doba pro výkaz"} per prodejna (volitelné)
+              </div>
+              {[{id:1,name:"Strakonice"},{id:2,name:"Blatná"},{id:3,name:"Pelhřimov"}].map(st=>{
+                const sh=editHol.storeHours?.[st.id]||{};
+                const updSH=(field,val)=>setEditHol(h=>({...h,storeHours:{...(h.storeHours||{}),[st.id]:{...(h.storeHours?.[st.id]||{}),[field]:val}}}));
+                return <div key={st.id} style={{marginBottom:10}}>
+                  <div style={{fontSize:11,fontWeight:700,color:"#888",marginBottom:6}}>{STORE_SHORT[st.id]} – {st.name}</div>
+                  <div style={{display:"flex",gap:10,alignItems:"center"}}>
+                    <FSel label="Od" value={sh.from||""} onChange={v=>updSH("from",v)}
+                      options={[{value:"",label:"— ze vzoru"},...HALF_HOURS.map(t=>({value:t,label:t}))]}/>
+                    <FSel label="Do" value={sh.to||""} onChange={v=>updSH("to",v)}
+                      options={[{value:"",label:"— ze vzoru"},...HALF_HOURS.map(t=>({value:t,label:t}))]}/>
+                    {sh.from&&sh.to&&<span style={{fontSize:11,color:editHol.open?"#e65100":"#b71c1c",marginTop:14}}>
+                      {((sh.to.split(":").map(Number).reduce((a,b,i)=>i===0?a*60+b:a+b,0))-(sh.from.split(":").map(Number).reduce((a,b,i)=>i===0?a*60+b:a+b,0)))/60}h
+                    </span>}
+                  </div>
+                </div>;
+              })}
+            </div>
+            <Btn onClick={()=>{
+              if(!editHol.date||!editHol.name) return;
+              const rec={date:editHol.date,name:editHol.name,open:editHol.open};
+              if(editHol.storeHours) rec.storeHours=editHol.storeHours;
+              if(editHol.idx===-1) setHolidays(hs=>[...hs,rec]);
+              else setHolidays(hs=>hs.map((x,j)=>j===editHol.idx?rec:x));
+              setEditHol(null);
+            }}>Uložit</Btn>
+          </div>}
+        </Modal>
+      </div>}
+
+      {section==="actions"&&<div>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
+          <div style={{fontWeight:800,fontSize:16,color:C.topbar}}>Marketingové akce</div>
+          <Btn small onClick={()=>{setNewAct({name:"",month:new Date().getMonth(),from:"",to:""});setShowActModal(true);}}>+ Přidat</Btn>
+        </div>
+        {actions.length===0&&<div style={{color:"#bbb",padding:"24px 0",textAlign:"center"}}>Zatím žádné akce.</div>}
+        {MONTHS.map((mn,mi)=>{
+          const ma=actions.filter(a=>a.month===mi); if(!ma.length) return null;
+          return <div key={mi} style={{marginBottom:14}}>
+            <div style={{fontSize:11,fontWeight:800,color:"#aaa",textTransform:"uppercase",letterSpacing:"0.07em",marginBottom:6}}>{mn}</div>
+            {ma.map((a,ai)=><div key={ai} style={{display:"flex",alignItems:"center",gap:10,marginBottom:6,padding:"10px 14px",background:"#fff5f5",border:"1.5px solid #ffcdd2",borderRadius:8}}>
+              <span>🎯</span><span style={{flex:1,fontWeight:700,color:"#c62828",fontSize:13}}>{a.name}</span>
+              <span style={{fontSize:12,color:"#aaa"}}>{a.from} – {a.to}</span>
+              <Btn small variant="danger" onClick={()=>setActions(ac=>ac.filter(x=>x!==a))}>✕</Btn>
+            </div>)}
+          </div>;
+        })}
+        <Modal open={showActModal} onClose={()=>setShowActModal(false)} title="Přidat akci">
+          <div style={{display:"flex",flexDirection:"column",gap:14}}>
+            <FInput label="Název" value={newAct.name} onChange={v=>setNewAct(a=>({...a,name:v}))} placeholder="Jarní výprodej..."/>
+            <FSel label="Měsíc" value={newAct.month} onChange={v=>setNewAct(a=>({...a,month:Number(v)}))} options={MONTHS.map((m,i)=>({value:i,label:m}))}/>
+            <div style={{display:"flex",gap:8}}>
+              <FInput label="Od" type="date" value={newAct.from} onChange={v=>setNewAct(a=>({...a,from:v}))} style={{flex:1}}/>
+              <FInput label="Do" type="date" value={newAct.to}   onChange={v=>setNewAct(a=>({...a,to:v}))}   style={{flex:1}}/>
+            </div>
+            <Btn onClick={()=>{if(newAct.name&&newAct.from&&newAct.to){setActions(a=>[...a,{...newAct,id:Date.now()}]);setShowActModal(false);}}}>Přidat</Btn>
+          </div>
+        </Modal>
+      </div>}
+    </div>
+  </div>;
+}
+
+// ─── EMPLOYEES VIEW ──────────────────────────────────────────
+function EmployeesView({employees,setEmployees,stores}){
+  const [editEmp,setEditEmp]=useState(null);
+  const [showNew,setShowNew]=useState(false);
+  const newEmpTemplate={firstName:"",lastName:"",mainStore:1,extraStores:[],role:"",contract:8,vacHours:160,kdpStart:0,active:true,customTimes:{}};
+
+  return <div>
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
+      <h2 style={{margin:0,fontSize:20,fontWeight:800,color:C.topbar}}>Zaměstnanci</h2>
+      <Btn onClick={()=>setShowNew(true)}>+ Přidat zaměstnance</Btn>
+    </div>
+    {stores.map(store=>{
+      const emps=employees.filter(e=>e.mainStore===store.id);
+      return <div key={store.id} style={{marginBottom:28}}>
+        <div style={{fontSize:11,fontWeight:800,color:"#aaa",textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:8,padding:"4px 10px",background:"#f8f9ff",borderRadius:5,display:"inline-block"}}>{store.name} · {emps.length}</div>
+        <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
+          <thead><tr style={{background:"#f8f9ff"}}>
+            {["Jméno","Role","Úvazek","Hlavní prodejna","Sdílení do","Vlastní časy","Dov. nárok","Stav",""].map(h=>
+              <th key={h} style={{padding:"7px 10px",textAlign:"left",fontSize:11,fontWeight:700,color:"#888",textTransform:"uppercase",borderBottom:`2px solid ${C.border}`,whiteSpace:"nowrap"}}>{h}</th>)}
+          </tr></thead>
+          <tbody>{emps.map((emp,i)=>{
+            const shared=(emp.extraStores||[]).length>0;
+            const hasCT=Object.keys(emp.customTimes||{}).length>0;
+            return <tr key={emp.id} style={{background:i%2===0?"#fff":"#fafafe"}}>
+              <td style={{padding:"8px 10px",fontWeight:600,color:C.topbar,borderBottom:`1px solid ${C.border}`}}>{emp.firstName} {emp.lastName}</td>
+              <td style={{padding:"8px 10px",color:"#666",borderBottom:`1px solid ${C.border}`}}>{emp.role}</td>
+              <td style={{padding:"8px 10px",borderBottom:`1px solid ${C.border}`}}><Badge color="#e8f5e9" textColor="#2e7d32">{empContractDay(emp)}h / {empContractWeek(emp)}h týdně</Badge></td>
+              <td style={{padding:"8px 10px",borderBottom:`1px solid ${C.border}`}}>{stores.find(s=>s.id===emp.mainStore)?.name}</td>
+              <td style={{padding:"8px 10px",borderBottom:`1px solid ${C.border}`}}>
+                {shared
+                  ?<Badge color="#e8f0fe" textColor="#1565c0">{(emp.extraStores||[]).map(id=>stores.find(s=>s.id===id)?.name).join(", ")}</Badge>
+                  :<span style={{color:"#ddd"}}>—</span>}
+              </td>
+              <td style={{padding:"8px 10px",borderBottom:`1px solid ${C.border}`}}>
+                {hasCT
+                  ?<Badge color="#fff3e0" textColor="#e65100">{Object.keys(emp.customTimes||{}).map(id=>STORE_SHORT[id]).join(", ")}</Badge>
+                  :<span style={{color:"#ddd"}}>—</span>}
+              </td>
+              <td style={{padding:"8px 10px",borderBottom:`1px solid ${C.border}`}}>{emp.vacHours}h/rok</td>
+              <td style={{padding:"8px 10px",borderBottom:`1px solid ${C.border}`}}><Badge color={emp.active?"#e8f5e9":"#ffebee"} textColor={emp.active?"#2e7d32":"#c62828"}>{emp.active?"Aktivní":"Neaktivní"}</Badge></td>
+              <td style={{padding:"8px 10px",borderBottom:`1px solid ${C.border}`}}><Btn small variant="secondary" onClick={()=>setEditEmp(emp)}>Upravit</Btn></td>
+            </tr>;
+          })}</tbody>
+        </table>
+      </div>;
+    })}
+    <Modal open={!!editEmp} onClose={()=>setEditEmp(null)} title={`Upravit – ${editEmp?.firstName} ${editEmp?.lastName}`} width={600}>
+      {editEmp&&<EmployeeForm initial={editEmp} stores={stores}
+        onSave={f=>{setEmployees(p=>p.map(e=>e.id===editEmp.id?{...e,...f}:e));setEditEmp(null);}}
+        onClose={()=>setEditEmp(null)}/>}
+    </Modal>
+    <Modal open={showNew} onClose={()=>setShowNew(false)} title="Přidat zaměstnance" width={600}>
+      <EmployeeForm initial={newEmpTemplate} stores={stores}
+        onSave={f=>{setEmployees(p=>[...p,{...f,id:Date.now()}]);setShowNew(false);}}
+        onClose={()=>setShowNew(false)}/>
+    </Modal>
+  </div>;
+}
+
+// ─── TIMESHEET ───────────────────────────────────────────────
+function TimesheetView({employee, year, month, holidays, stores, sched, employees, patterns, rows, onRowChange, timesheetData, onKdpPaidChange}){
+  const dim = getDim(year, month);
+  const brRules = getBreakRules(employee.mainStore, stores);
+  const fund = getWorkingDays(year, month, holidays) * empContractDay(employee);
+  const holidayDays = getHolidayDays(year, month, holidays);
+  const upd = (d,f,v) => onRowChange(d,f,v);
+  const contractDay = empContractDay(employee);
+
+  const tOpts = [{value:"",label:"—"},...HALF_HOURS.map(t=>({value:t,label:t}))];
+  const adminOpts = [{value:"",label:"—"},...Array.from({length:24},(_,i)=>(i+1)*0.5).map(v=>({value:v,label:v%1===0?`${v}h`:`${v}h 30m`}))];
+  const rozOpts  = [{value:"",label:"—"},...Array.from({length:200},(_,i)=>i+1).map(v=>({value:v,label:`${v}×`}))];
+
+  const typeOpts = [
+    {value:"work",          label:"Pracovní den"},
+    {value:"vacation",      label:"Dovolená"},
+    {value:"work+vacation", label:"Práce + Dovolená"},
+    {value:"sick",          label:"Nemoc"},
+    {value:"holidayOpen",   label:"Svátek otevřeno"},
+    {value:"holidayClose",  label:"Svátek zavřeno"},
+    {value:"dayOff",        label:"Volno"},
+    {value:"ocr",           label:"OČR"},
+    {value:"other",         label:"Jiné"},
+  ];
+  const typeColor = {
+    work:"#1a1a2e", "work+vacation":"#6a1b9a", vacation:"#1565c0",
+    sick:"#616161", holidayOpen:"#2e7d32", holidayClose:"#b71c1c",
+    dayOff:"#aaa", ocr:"#e65100", other:"#e65100",
+  };
+
+  const ss = {width:"100%",border:"none",background:"transparent",textAlign:"center",fontSize:11,padding:"2px 1px",outline:"none"};
+
+  // ── Délka směny ze vzoru pro daný den (pro výpočet dovolené/nemoci/svátku) ──
+  const getPatternShiftHours = (d) => {
+    const date = new Date(year, month, d);
+    const dow  = getDow(year, month, d);
+    const mainStoreEmps = employees.filter(e=>e.active && e.mainStore===employee.mainStore);
+    const empIdx = mainStoreEmps.findIndex(e=>e.id===employee.id);
+    const pc = getPatCell(patterns, employee.mainStore, empIdx, date);
+    if(!pc) return 0;
+    const st  = typeof pc==="object"?pc.shift||"work":pc;
+    if(!st || st==="null") return 0;
+    const lId = typeof pc==="object"?(pc.loc||employee.mainStore):employee.mainStore;
+    if(typeof pc==="object" && pc.shift==="custom" && pc.from && pc.to)
+      return calcWorked(pc.from, pc.to, getBreakRules(lId, stores));
+    const [fr,to] = getEmpShiftTimes(employee, lId, st, dow, stores, typeof pc==="object"?pc:null);
+    return fr && to ? calcWorked(fr, to, getBreakRules(lId, stores)) : 0;
+  };
+
+  // ── Rozvrh pro daný den – včetně split směn ──
+  const getScheduleForDay = (d) => {
+    const date = new Date(year, month, d);
+    const dow  = getDow(year, month, d);
+    const dateStr = fmtDate(year, month, d);
+    const hol = holidays.find(h=>h.date===dateStr);
+    const mainStoreEmps = employees.filter(e=>e.active && e.mainStore===employee.mainStore);
+    const empIdx = mainStoreEmps.findIndex(e=>e.id===employee.id);
+    const cell = getSchedCell(sched, employee.id, dateStr, employees);
+    if(cell?.length){
+      const workSegs = cell.filter(s=>s.type==="work" && s.from && s.to);
+      const vacSeg   = cell.find(s=>s.type==="vacation");
+      const sickSeg  = cell.find(s=>s.type==="sick");
+      if(workSegs.length>1){
+        return {type:"work", segments:workSegs, split:true};
+      }
+      if(workSegs.length===1 && vacSeg) return {type:"work+vacation", from:workSegs[0].from, to:workSegs[0].to, vacHours:vacSeg.hours||0};
+      if(workSegs.length===1) return {type:"work", from:workSegs[0].from, to:workSegs[0].to};
+      if(vacSeg)  return {type:"vacation", vacHours:vacSeg.hours||0};
+      if(sickSeg) return {type:"sick", vacHours:sickSeg.hours||0};
+      return null;
+    }
+    const pc = getPatCell(patterns, employee.mainStore, empIdx, date);
+    if(!pc) return null;
+    const st = typeof pc==="object"?pc.shift||"work":pc;
+    if(!st || st==="null") return null;
+    const lId = typeof pc==="object"?(pc.loc||employee.mainStore):employee.mainStore;
+    if(typeof pc==="object" && pc.shift==="custom") {
+      // Svátek přebije i custom čas
+      const holStore=hol?.storeHours?.[lId];
+      if(holStore?.from&&holStore?.to) return {type:"work", from:holStore.from, to:holStore.to};
+      return {type:"work", from:pc.from, to:pc.to};
+    }
+    const [fr,to] = getEmpShiftTimes(employee, lId, st, dow, stores, typeof pc==="object"?pc:null, hol);
+    if(fr && to) return {type:"work", from:fr, to:to};
+    return null;
+  };
+
+  // ── Odvodit výchozí typ dne ──
+  const deriveType = (d) => {
+    const dow = getDow(year, month, d);
+    const hol = holidays.find(h=>h.date===fmtDate(year,month,d));
+    const patHours = getPatternShiftHours(d);
+    // Svátek – jen pokud měl zaměstnanec naplánovanou směnu, jinak volno
+    if(hol){
+      if(!hol.open) return patHours>0 ? "holidayClose" : "dayOff";
+      if(hol.open)  return patHours>0 ? "holidayOpen"  : "dayOff";
+    }
+    // Víkend i pracovní den: má-li vzor směnu → pracovní den, jinak volno
+    const sd = getScheduleForDay(d);
+    if(!sd) return "dayOff";
+    return sd.type || "work";
+  };
+
+  // ── Výpočet hodin ze záznamu ──
+  const calcRow = (row) => {
+    if(!row.arrival || !row.departure) return {worked:0, breakMin:0, autoBreak:false};
+    const [ah,am]=row.arrival.split(":").map(Number);
+    const [dh,dm]=row.departure.split(":").map(Number);
+    const physical=(dh*60+dm)-(ah*60+am);
+    let breakMin=0, autoBreak=false;
+    if(row.breakFrom && row.breakTo){
+      const [bfh,bfm]=row.breakFrom.split(":").map(Number);
+      const [bth,btm]=row.breakTo.split(":").map(Number);
+      breakMin=Math.max(0,(bth*60+btm)-(bfh*60+bfm));
+    } else {
+      breakMin=calcBreak(row.arrival,row.departure,brRules);
+      autoBreak=breakMin>0;
+    }
+    return {worked:Math.max(0,(physical-breakMin)/60), breakMin, autoBreak};
+  };
+
+  // ── Porovnání s rozvrhem ──
+  const compareWithSchedule = (row, d, effectiveType) => {
+    const sd = getScheduleForDay(d);
+    const hasEntry = row.arrival && row.departure;
+    if(effectiveType==="holidayClose") return {status:"ok"};
+    if(effectiveType==="dayOff" && hasEntry) return {status:"extra"};
+    if(effectiveType==="dayOff") return {status:"ok"};
+    if(!sd && hasEntry) return {status:"extra"};
+    if(sd?.type==="vacation"||sd?.type==="sick") return {status:"ok"};
+    if(sd?.from && !hasEntry && (effectiveType==="work"||effectiveType==="holidayOpen")) return {status:"missing", schedFrom:sd.from, schedTo:sd.to};
+    if(sd?.from && hasEntry){
+      const diff=t=>{const[h,m]=t.split(":").map(Number);return h*60+m;};
+      if(Math.abs(diff(row.arrival)-diff(sd.from))>15||Math.abs(diff(row.departure)-diff(sd.to))>15)
+        return {status:"warn"};
+    }
+    return {status:"ok"};
+  };
+
+  // ── Sestavení dat řádků ──
+  let totWorked=0,totVac=0,totSick=0,totHolClose=0,totHolOpen=0,totOcr=0,totOther=0;
+  let soH=0,neH=0,tix=0,totAdmin=0,totRoz1=0,totRoz2=0;
+
+  const rowData = Array.from({length:dim},(_,i)=>i+1).map(d=>{
+    const dow = getDow(year,month,d);
+    const hol = holidays.find(h=>h.date===fmtDate(year,month,d));
+    const row = rows[d];
+    const {worked, breakMin, autoBreak} = calcRow(row);
+    const schedDay = getScheduleForDay(d);
+    const isWE = dow>=5;
+
+    // Efektivní typ: ručně zadaný má přednost, jinak odvozený z rozvrhu
+    const effectiveType = row.type || deriveType(d);
+    const isAutoType = !row.type;
+
+    const patHours = getPatternShiftHours(d);
+    const schedInfo = compareWithSchedule(row, d, effectiveType);
+
+    // DOV hodiny: přímo ze sched záznamu (co vedoucí zadal)
+    const schedVacH = schedDay?.vacHours||0;
+    const vacH = effectiveType==="work+vacation"
+      ? (row.vacHours!==undefined && row.vacHours!=="" ? Number(row.vacHours) : schedVacH||Math.max(0, patHours - worked))
+      : 0;
+
+    // Hodiny pro svátek zavřeno: ze storeHours svátku pokud nastaven, jinak ze vzoru
+    const holStoreH = hol?.storeHours?.[employee.mainStore];
+    const holCloseH = holStoreH?.from && holStoreH?.to
+      ? calcWorked(holStoreH.from, holStoreH.to, getBreakRules(employee.mainStore, stores))
+      : patHours;
+
+    // Součty
+    let wc=0,vc=0,sc=0,hcc=0,hoc=0,oc=0,otc=0;
+    switch(effectiveType){
+      case "vacation":      vc  = schedVacH||patHours; break;
+      case "work+vacation": wc  = worked; vc = vacH; break;
+      case "sick":          sc  = schedVacH||patHours; break;
+      case "holidayClose":  hcc = holCloseH; break;
+      case "holidayOpen":   hoc = worked; wc = worked; break;
+      case "ocr":           oc  = patHours; break;
+      case "other":         otc = worked||patHours; break;
+      case "dayOff":        wc  = worked; break;
+      default:              wc  = worked;
+    }
+    totWorked+=wc; totVac+=vc; totSick+=sc; totHolClose+=hcc; totHolOpen+=hoc;
+    totOcr+=oc; totOther+=otc;
+    if(wc>0&&dow===5) soH+=wc;
+    if(wc>0&&dow===6) neH+=wc;
+    // Stravenka: ≥5h odpracováno bez ohledu na typ (včetně "extra" mimo rozvrh)
+    if(worked>=5) tix++;
+    const admin = row.admin ? Number(row.admin) : 0;
+    const roz1  = row.roz1  ? Number(row.roz1)  : 0;
+    const roz2  = row.roz2  ? Number(row.roz2)  : 0;
+    totAdmin+=admin; totRoz1+=roz1; totRoz2+=roz2;
+
+    return {d,dow,hol,row,worked,breakMin,autoBreak,effectiveType,isAutoType,schedInfo,schedDay,vacH,schedVacH,patHours,isWE};
+  });
+
+  const totAll = totWorked+totVac+totSick+totHolClose+totOcr+totOther;
+  const overtime = totAll - fund;
+  const fmtH = h => h===0?"—":(h%1===0?`${h}h`:`${h.toFixed(1)}h`);
+  const fmtHsign = h => h===0?"0h":((h>0?"+":"-")+Math.abs(h%1===0?h:+h.toFixed(1))+"h");
+
+  // KDP výpočet pro tento výkaz
+  // KDP vstup = kumulativní KDP ke konci předchozího měsíce
+  const prevMonthY = month===0?year-1:year;
+  const prevMonthM = month===0?11:month-1;
+  const isFirstMonth = year===APP_START.year && month===APP_START.month;
+  const kdpVstup = isFirstMonth
+    ? (employee.kdpStart||0)
+    : calcKdpCumulative(employee, prevMonthY, prevMonthM, sched, holidays, stores, patterns, employees, timesheetData);
+  const tsKeyThis = `${employee.id}-${year}-${month+1}`;
+  const kdpPaidThis = Number(timesheetData?.[tsKeyThis]?.kdpPaid || 0);
+  const kdpVystup = kdpVstup + overtime - kdpPaidThis;
+
+  // ── Export Excel ──
+  const exportExcel = () => {
+    const XLSX = window.XLSX;
+    if(!XLSX){ alert("Excel export se načítá, zkuste za chvíli."); return; }
+    const fmtT = v => v||"";
+    const fmtHx = h => h>0?(h%1===0?`${h}h`:`${h.toFixed(1)}h`):"";
+
+    // Hlavička
+    const wsData = [
+      [`Výkaz práce – ${employee.firstName} ${employee.lastName}`, "", "", "", "", "", "", "", "", "", "", "", ""],
+      [`${MONTHS[month]} ${year}  |  Fond: ${fund}h  |  Prodejna: ${stores.find(s=>s.id===employee.mainStore)?.name}`],
+      [],
+      ["Den","Datum","Rozvrh","Příchod","Odchod","Přest.od","Přest.do","Odprac.","DOV h","Admin","Roz.1","Roz.2","Typ dne"],
+    ];
+
+    rowData.forEach(({d,dow,row,worked,breakMin,effectiveType,schedDay,vacH,schedVacH})=>{
+      const schedLbl = schedDay?.from ? `${schedDay.from}–${schedDay.to}` : (schedDay?.type==="vacation"?"DOV":schedDay?.type==="sick"?"NEM":"");
+      const dovH = (effectiveType==="work+vacation"||effectiveType==="vacation"||effectiveType==="sick")
+        ? (effectiveType==="work+vacation"?vacH:schedVacH)||0 : 0;
+      wsData.push([
+        DOW_LBL[dow],
+        `${d}.${month+1}.${year}`,
+        schedLbl,
+        fmtT(row.arrival),
+        fmtT(row.departure),
+        fmtT(row.breakFrom),
+        fmtT(row.breakTo),
+        worked>0?(worked%1===0?`${worked}h`:`${worked.toFixed(1)}h`):"",
+        dovH>0?(dovH%1===0?`${dovH}h`:`${dovH.toFixed(1)}h`):"",
+        row.admin?`${row.admin}h`:"",
+        row.roz1?`${row.roz1}×`:"",
+        row.roz2?`${row.roz2}×`:"",
+        TYPE_META[effectiveType]?.label||effectiveType,
+      ]);
+    });
+
+    // Prázdný řádek + souhrn
+    wsData.push([]);
+    wsData.push(["SOUHRN"]);
+    wsData.push(["Fond hodin", `${fund}h`]);
+    wsData.push(["Odpracováno", fmtHx(totWorked)]);
+    wsData.push(["Dovolená", fmtHx(totVac)]);
+    wsData.push(["Nemoc", fmtHx(totSick)]);
+    wsData.push(["Svátek zavřeno", fmtHx(totHolClose)]);
+    wsData.push(["Svátek otevřeno", fmtHx(totHolOpen)]);
+    wsData.push(["Víkendy", fmtHx(soH+neH)]);
+    wsData.push(["Celkem hod.", fmtHx(totAll)]);
+    wsData.push(["Přesčas / minus", (overtime>=0?"+":"")+fmtHx(Math.abs(overtime))]);
+    wsData.push(["Admin práce", totAdmin>0?`${totAdmin}h`:"—"]);
+    wsData.push(["Rozvoz 1", totRoz1>0?`${totRoz1}×`:"—"]);
+    wsData.push(["Rozvoz 2", totRoz2>0?`${totRoz2}×`:"—"]);
+    wsData.push(["Stravenky", tix>0?`${tix} ks`:"—"]);
+    wsData.push([]);
+    wsData.push(["KDP vstup", fmtHsign(kdpVstup)]);
+    wsData.push(["KDP proplaceno", kdpPaidThis>0?`${kdpPaidThis}h`:"—"]);
+    wsData.push(["KDP výstup", fmtHsign(kdpVystup)]);
+
+    const ws = XLSX.utils.aoa_to_sheet(wsData);
+    ws["!cols"] = [6,8,12,8,8,8,8,8,7,7,6,6,16].map(w=>({wch:w}));
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, `${MONTHS[month]} ${year}`);
+    XLSX.writeFile(wb, `Vykaz_${employee.firstName}_${employee.lastName}_${MONTHS[month]}_${year}.xlsx`);
+  };
+
+  // ── Export PDF (tisk) ──
+  const exportPdf = () => {
+    const jsPDFLib = window.jspdf?.jsPDF || window.jsPDF;
+    if(!jsPDFLib){ alert("PDF export se načítá, zkuste za chvíli."); return; }
+    const doc = new jsPDFLib({ orientation:"landscape", unit:"mm", format:"a4" });
+    const storeName = stores.find(s=>s.id===employee.mainStore)?.name||"";
+
+    // Záhlaví
+    doc.setFont("helvetica","bold");
+    doc.setFontSize(14);
+    doc.text(`Výkaz práce – ${employee.firstName} ${employee.lastName}`, 14, 14);
+    doc.setFont("helvetica","normal");
+    doc.setFontSize(9);
+    doc.text(`${MONTHS[month]} ${year}  |  Fond: ${fund}h  |  Prodejna: ${storeName}  |  Role: ${employee.role}`, 14, 21);
+
+    // Tabulka dnů
+    const head = [["Den","Datum","Rozvrh","Příchod","Odchod","Přest.od","Přest.do","Odprac.","DOV h","Admin","Roz.1","Roz.2","Typ dne"]];
+    const body = rowData.map(({d,dow,row,worked,effectiveType,schedDay,vacH,schedVacH})=>{
+      const schedLbl = schedDay?.from?`${schedDay.from}–${schedDay.to}`:(schedDay?.type==="vacation"?"DOV":schedDay?.type==="sick"?"NEM":"—");
+      const dovH = (effectiveType==="work+vacation"||effectiveType==="vacation"||effectiveType==="sick")
+        ? (effectiveType==="work+vacation"?vacH:schedVacH)||0 : 0;
+      return [
+        DOW_LBL[dow],
+        `${d}.${month+1}.`,
+        schedLbl,
+        row.arrival||"—", row.departure||"—",
+        row.breakFrom||"—", row.breakTo||"—",
+        worked>0?(worked%1===0?`${worked}h`:`${worked.toFixed(1)}h`):"—",
+        dovH>0?(dovH%1===0?`${dovH}h`:`${dovH.toFixed(1)}h`):"—",
+        row.admin?`${row.admin}h`:"—",
+        row.roz1?`${row.roz1}×`:"—",
+        row.roz2?`${row.roz2}×`:"—",
+        TYPE_META[effectiveType]?.label||effectiveType,
+      ];
+    });
+
+    doc.autoTable({
+      head, body,
+      startY: 26,
+      styles:{ fontSize:7.5, cellPadding:1.5, font:"helvetica" },
+      headStyles:{ fillColor:[26,26,46], textColor:255, fontStyle:"bold", fontSize:7 },
+      columnStyles:{
+        0:{cellWidth:8}, 1:{cellWidth:13}, 2:{cellWidth:22}, 3:{cellWidth:14},
+        4:{cellWidth:14}, 5:{cellWidth:14}, 6:{cellWidth:14}, 7:{cellWidth:14},
+        8:{cellWidth:12}, 9:{cellWidth:12}, 10:{cellWidth:11}, 11:{cellWidth:11}, 12:{cellWidth:22},
+      },
+      alternateRowStyles:{ fillColor:[247,248,252] },
+      didParseCell: (data)=>{
+        if(data.section==="body"){
+          const dow = rowData[data.row.index]?.dow;
+          if(dow>=5) data.cell.styles.fillColor=[255,248,248];
+          const et = rowData[data.row.index]?.effectiveType;
+          if(et==="vacation"||et==="sick") data.cell.styles.fillColor=[232,244,253];
+          if(et==="holidayClose") data.cell.styles.fillColor=[255,235,238];
+          if(et==="holidayOpen") data.cell.styles.fillColor=[241,248,233];
+        }
+      },
+    });
+
+    // Souhrn
+    const sy = doc.lastAutoTable.finalY + 6;
+    doc.setFont("helvetica","bold"); doc.setFontSize(9);
+    doc.text("Souhrn měsíce", 14, sy);
+    doc.setFont("helvetica","normal"); doc.setFontSize(8);
+    const fmtHx = h => h===0?"—":(h%1===0?`${h}h`:`${h.toFixed(1)}h`);
+    const cols = [
+      ["Fond", fmtHx(fund)], ["Odprac.", fmtHx(totWorked)], ["Dovolená", fmtHx(totVac)],
+      ["Nemoc", fmtHx(totSick)], ["Sv.zavřeno", fmtHx(totHolClose)], ["Sv.otevřeno", fmtHx(totHolOpen)],
+      ["Víkendy", fmtHx(soH+neH)], ["Celkem", fmtHx(totAll)],
+      ["Přesčas", (overtime>=0?"+":"")+fmtHx(Math.abs(overtime))],
+      ["Stravenky", tix>0?`${tix} ks`:"—"],
+    ];
+    let sx = 14;
+    cols.forEach(([lbl,val])=>{
+      doc.setFont("helvetica","bold"); doc.text(lbl, sx, sy+5);
+      doc.setFont("helvetica","normal"); doc.text(val, sx, sy+9);
+      sx += 27;
+    });
+
+    // KDP
+    const ky = sy + 15;
+    doc.setFont("helvetica","bold"); doc.setFontSize(9);
+    doc.text("KDP – Konto přesčasových hodin", 14, ky);
+    doc.setFont("helvetica","normal"); doc.setFontSize(8);
+    doc.text(`Vstup: ${fmtHsign(kdpVstup)}`, 14, ky+6);
+    doc.text(`Přesčas tento měsíc: ${fmtHsign(overtime)}`, 55, ky+6);
+    doc.text(`Proplaceno: ${kdpPaidThis>0?`${kdpPaidThis}h`:"—"}`, 115, ky+6);
+    doc.setFont("helvetica","bold");
+    doc.text(`Výstup do příštího měsíce: ${fmtHsign(kdpVystup)}`, 155, ky+6);
+
+    doc.save(`Vykaz_${employee.firstName}_${employee.lastName}_${MONTHS[month]}_${year}.pdf`);
+  };
+
+  return <div>
+    {/* Hlavička */}
+    <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:12,flexWrap:"wrap"}}>
+      <div style={{fontSize:20,fontWeight:800,color:C.topbar}}>{employee.firstName} {employee.lastName}</div>
+      <Badge color="#e3f2fd" textColor="#1565c0">{MONTHS[month]} {year}</Badge>
+      <Badge color="#f3e5f5" textColor="#6a1b9a">Fond: {fund}h</Badge>
+      {holidayDays>0&&<Badge color="#ffebee" textColor="#c62828">Svátky zavřeno: {holidayDays} dní</Badge>}
+    </div>
+
+    {/* Legenda */}
+    <div style={{display:"flex",gap:10,marginBottom:10,flexWrap:"wrap",fontSize:11,color:"#888",padding:"6px 10px",background:"#f8f9ff",borderRadius:6,alignItems:"center"}}>
+      <strong>Rozvrh:</strong>
+      <span><span style={{color:"#c62828",fontWeight:700}}>⚠</span> <span style={{color:"#c62828"}}>červeně</span> = nevyplněno / mimo rozvrh</span>
+      <span><span style={{color:"#f57f17",fontWeight:700}}>⚡</span> <span style={{color:"#f57f17"}}>žlutě</span> = odlišný čas &gt;15 min</span>
+      <span style={{color:"#bbb"}}>│</span>
+      <strong>Typ:</strong>
+      <span style={{color:"#9c27b0",fontStyle:"italic"}}>kurzíva = z rozvrhu</span>
+      <span>tučné = ručně</span>
+    </div>
+
+    <div style={{overflowX:"auto"}}>
+      <table style={{borderCollapse:"collapse",fontSize:11,width:"100%",minWidth:980}}>
+        <thead>
+          <tr style={{background:C.topbar,color:"#fff"}}>
+            <th style={{padding:"6px 5px",whiteSpace:"nowrap",fontWeight:600,width:26}}>Den</th>
+            <th style={{padding:"6px 5px",whiteSpace:"nowrap",fontWeight:600,width:42}}>Datum</th>
+            <th style={{padding:"6px 5px",whiteSpace:"nowrap",fontWeight:600,width:58}}>Rozvrh</th>
+            <th style={{padding:"6px 5px",whiteSpace:"nowrap",fontWeight:600,width:66}}>Příchod</th>
+            <th style={{padding:"6px 5px",whiteSpace:"nowrap",fontWeight:600,width:66}}>Odchod</th>
+            <th style={{padding:"6px 5px",whiteSpace:"nowrap",fontWeight:600,width:60}}>Přest.od</th>
+            <th style={{padding:"6px 5px",whiteSpace:"nowrap",fontWeight:600,width:60}}>Přest.do</th>
+            <th style={{padding:"6px 5px",whiteSpace:"nowrap",fontWeight:600,width:50,background:"#2a3f6f"}}>Odprac.</th>
+            <th style={{padding:"6px 5px",whiteSpace:"nowrap",fontWeight:600,width:50,background:"#1a3a5c"}}>DOV h</th>
+            <th style={{padding:"6px 5px",whiteSpace:"nowrap",fontWeight:600,width:58,background:"#1e3a1e"}}>Admin</th>
+            <th style={{padding:"6px 5px",whiteSpace:"nowrap",fontWeight:600,width:46,background:"#2d2a1a"}}>Roz.1</th>
+            <th style={{padding:"6px 5px",whiteSpace:"nowrap",fontWeight:600,width:46,background:"#2d2a1a"}}>Roz.2</th>
+            <th style={{padding:"6px 4px",whiteSpace:"nowrap",fontWeight:600,minWidth:118}}>Typ dne</th>
+          </tr>
+        </thead>
+        <tbody>{rowData.map(({d,dow,hol,row,worked,breakMin,autoBreak,effectiveType,isAutoType,schedInfo,schedDay,vacH,schedVacH,patHours,isWE})=>{
+          const isInactive = ["holidayClose","vacation","sick","ocr"].includes(effectiveType);
+          // Barva řádku
+          let rbg="#fff";
+          if(effectiveType==="holidayClose")     rbg=C.holidayClose;
+          else if(effectiveType==="holidayOpen") rbg=C.holidayOpen;
+          else if(effectiveType==="vacation")    rbg="#e8f4fd";
+          else if(effectiveType==="sick")        rbg="#f5f5f5";
+          else if(effectiveType==="dayOff")      rbg=C.dayOff;   // světle zelená = volno
+          else if(isWE)                          rbg="#f0f0f0";   // víkend = šedá
+
+          // Sloupec Rozvrh – podporuje split
+          const schedCol = ()=>{
+            if(schedInfo.status==="extra")
+              return <span style={{color:"#c62828",fontWeight:700,lineHeight:1.4,fontSize:10}}>⚠ —<br/><span style={{fontSize:9,fontWeight:400}}>mimo rozvrh</span></span>;
+            if(!schedDay) return <span style={{color:"#ddd"}}>—</span>;
+            if(schedDay.type==="vacation") return <span style={{color:"#1565c0",fontSize:10}}>DOV{schedDay.vacHours>0?` ${schedDay.vacHours%1===0?schedDay.vacHours:schedDay.vacHours.toFixed(1)}h`:""}</span>;
+            if(schedDay.type==="sick")     return <span style={{color:"#888",fontSize:10}}>NEM{schedDay.vacHours>0?` ${schedDay.vacHours%1===0?schedDay.vacHours:schedDay.vacHours.toFixed(1)}h`:""}</span>;
+            // Split směna – více segmentů
+            if(schedDay.split && schedDay.segments){
+              const labels = schedDay.segments.map(seg=>{
+                const storeName = STORE_SHORT[seg.locationStoreId||seg.loc||employee.mainStore]||"";
+                return shiftLabel(seg.from,seg.to)+(storeName?` ${storeName}`:"");
+              });
+              const isMissing = !row.arrival && !row.departure;
+              const color = isMissing ? "#c62828" : "#555";
+              return <span style={{color,fontSize:10,lineHeight:1.5,fontWeight:isMissing?700:400}}>
+                {isMissing&&"⚠ "}{labels.map((l,i)=><span key={i}>{l}{i<labels.length-1&&<br/>}</span>)}
+              </span>;
+            }
+            if(!schedDay.from) return <span style={{color:"#ddd"}}>—</span>;
+            const lbl = shiftLabel(schedDay.from, schedDay.to);
+            if(schedInfo.status==="missing")
+              return <span style={{color:"#c62828",fontWeight:700,lineHeight:1.4,fontSize:10}}>⚠ {lbl}<br/><span style={{fontSize:9,fontWeight:400}}>nevyplněno</span></span>;
+            if(schedInfo.status==="warn")
+              return <span style={{color:"#f57f17",fontWeight:700,lineHeight:1.4,fontSize:10}}>⚡ {lbl}<br/><span style={{fontSize:9,fontWeight:400}}>odl. čas</span></span>;
+            return <span style={{color:"#bbb",fontSize:10}}>{lbl}{schedDay.type==="work+vacation"&&<span style={{color:"#9c27b0"}}><br/>+DOV{schedDay.vacHours>0?` ${schedDay.vacHours%1===0?schedDay.vacHours:schedDay.vacHours.toFixed(1)}h`:""}</span>}</span>;
+          };
+
+          return <tr key={d} style={{background:rbg,borderBottom:"1px solid #f0f0f0"}}>
+            {/* Den */}
+            <td style={{padding:"2px 5px",textAlign:"center",fontWeight:700,color:isWE?"#e57373":"#aaa",fontSize:11}}>{DOW_LBL[dow]}</td>
+            {/* Datum */}
+            <td style={{padding:"2px 5px",textAlign:"center",fontWeight:700,color:isWE?"#e57373":C.topbar,whiteSpace:"nowrap",fontSize:11}}>{d}.{month+1}.</td>
+            {/* Rozvrh */}
+            <td style={{padding:"2px 4px",textAlign:"center",lineHeight:1.3}}>{schedCol()}</td>
+            {/* Příchod */}
+            <td style={{opacity:isInactive?0.3:1}}>
+              <select value={row.arrival} onChange={e=>upd(d,"arrival",e.target.value)} style={{...ss,width:60}} disabled={isInactive}>
+                {tOpts.map(o=><option key={o.value} value={o.value}>{o.label}</option>)}
+              </select>
+            </td>
+            {/* Odchod */}
+            <td style={{opacity:isInactive?0.3:1}}>
+              <select value={row.departure} onChange={e=>upd(d,"departure",e.target.value)} style={{...ss,width:60}} disabled={isInactive}>
+                {tOpts.map(o=><option key={o.value} value={o.value}>{o.label}</option>)}
+              </select>
+            </td>
+            {/* Přest od */}
+            <td>
+              <select value={row.breakFrom||""} onChange={e=>upd(d,"breakFrom",e.target.value)} style={{...ss,width:57,color:row.breakFrom?"#e65100":"#ccc"}} disabled={isInactive}>
+                {tOpts.map(o=><option key={o.value} value={o.value}>{o.label}</option>)}
+              </select>
+            </td>
+            {/* Přest do */}
+            <td>
+              <select value={row.breakTo||""} onChange={e=>upd(d,"breakTo",e.target.value)} style={{...ss,width:57,color:row.breakTo?"#e65100":"#ccc"}} disabled={isInactive}>
+                {tOpts.map(o=><option key={o.value} value={o.value}>{o.label}</option>)}
+              </select>
+            </td>
+            {/* Odpracováno */}
+            <td style={{textAlign:"center",fontWeight:800,background:"#f0f4ff",minWidth:46,padding:"2px 3px"}}>
+              {worked>0
+                ? <span style={{color:"#1565c0",fontSize:12}}>{worked%1===0?worked:worked.toFixed(1)}h</span>
+                : <span style={{color:"#ddd",fontSize:11}}>—</span>}
+              {breakMin>0&&<div style={{fontSize:9,color:autoBreak?"#ccc":"#e65100",fontWeight:400}}>−{breakMin}m{autoBreak?" aut":""}</div>}
+            </td>
+            {/* DOV hodiny – read-only ze sched záznamu */}
+            <td style={{textAlign:"center",background:"#f3e5f5",minWidth:48,padding:"2px 3px"}}>
+              {(effectiveType==="work+vacation"||effectiveType==="vacation"||effectiveType==="sick")&&(schedVacH>0||vacH>0)
+                ? <span style={{color:"#6a1b9a",fontWeight:700,fontSize:11}}>
+                    {(effectiveType==="work+vacation"?vacH:schedVacH)%1===0
+                      ? `${effectiveType==="work+vacation"?vacH:schedVacH}h`
+                      : `${(effectiveType==="work+vacation"?vacH:schedVacH).toFixed(1)}h`}
+                  </span>
+                : <span style={{color:"#ddd",fontSize:10}}>—</span>}
+            </td>
+            {/* Admin práce */}
+            <td style={{textAlign:"center",background:"#f1f8f1",minWidth:55,padding:"2px 3px"}}>
+              <select value={row.admin||""} onChange={e=>upd(d,"admin",e.target.value===""?"":Number(e.target.value))} style={{...ss,width:53,color:row.admin?"#2e7d32":"#ccc",fontWeight:row.admin?700:400,fontSize:11}}>
+                {adminOpts.map(o=><option key={o.value} value={o.value}>{o.label}</option>)}
+              </select>
+            </td>
+            {/* Rozvoz 1 */}
+            <td style={{textAlign:"center",background:"#fffde7",minWidth:44,padding:"2px 2px"}}>
+              <select value={row.roz1||""} onChange={e=>upd(d,"roz1",e.target.value===""?"":Number(e.target.value))} style={{...ss,width:42,color:row.roz1?"#f57f17":"#ccc",fontWeight:row.roz1?700:400,fontSize:11}}>
+                {rozOpts.map(o=><option key={o.value} value={o.value}>{o.label}</option>)}
+              </select>
+            </td>
+            {/* Rozvoz 2 */}
+            <td style={{textAlign:"center",background:"#fff8e1",minWidth:44,padding:"2px 2px"}}>
+              <select value={row.roz2||""} onChange={e=>upd(d,"roz2",e.target.value===""?"":Number(e.target.value))} style={{...ss,width:42,color:row.roz2?"#e65100":"#ccc",fontWeight:row.roz2?700:400,fontSize:11}}>
+                {rozOpts.map(o=><option key={o.value} value={o.value}>{o.label}</option>)}
+              </select>
+            </td>
+            {/* Typ dne – užší */}
+            <td style={{padding:"2px 4px",minWidth:118}}>
+              <select
+                value={effectiveType}
+                onChange={e=>upd(d,"type",e.target.value)}
+                style={{...ss,minWidth:114,fontStyle:isAutoType?"italic":"normal",color:typeColor[effectiveType]||"#333",fontWeight:isAutoType?400:700,fontSize:11}}
+              >
+                {typeOpts.map(o=><option key={o.value} value={o.value}>{o.label}</option>)}
+              </select>
+              {isAutoType&&<div style={{fontSize:8,color:"#ccc",textAlign:"center",lineHeight:1,marginTop:1}}>z rozvrhu</div>}
+            </td>
+          </tr>;
+        })}</tbody>
+      </table>
+    </div>
+
+    {/* Souhrnný panel */}
+    <div style={{marginTop:16,background:"#fff",borderRadius:10,border:`1.5px solid ${C.border}`,overflow:"hidden"}}>
+      <div style={{background:C.topbar,color:"#fff",padding:"8px 16px",fontWeight:700,fontSize:13}}>📊 Souhrn měsíce</div>
+      <div style={{padding:"12px 14px",display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(110px,1fr))",gap:8}}>
+        {[
+          {label:"Fond hodin",         val:fund,             color:"#e3f2fd",tc:"#1565c0"},
+          {label:"Odpracováno",        val:totWorked,        color:"#e8f5e9",tc:"#2e7d32"},
+          {label:"Dovolená",           val:totVac,           color:"#e8eaf6",tc:"#3949ab"},
+          {label:"Nemoc",              val:totSick,          color:"#f5f5f5",tc:"#616161"},
+          {label:"Svátek zavřeno",     val:totHolClose,      color:"#ffebee",tc:"#c62828"},
+          {label:"Svátek otevřeno",    val:totHolOpen,       color:"#f1f8e9",tc:"#33691e"},
+          {label:"Víkendy",             val:soH+neH,          color:"#fce4ec",tc:"#c2185b"},
+          {label:"OČR + Jiné",         val:totOcr+totOther,  color:"#fff3e0",tc:"#e65100"},
+          {label:"Celkem hod.",         val:totAll,           color:"#ede7f6",tc:"#4527a0"},
+          {label:"Přesčas / minus",    val:overtime,         color:overtime>=0?"#e8f5e9":"#ffebee",tc:overtime>=0?"#2e7d32":"#c62828",sign:true},
+          {label:"Admin práce",        val:totAdmin,         color:"#f1f8f1",tc:"#2e7d32",unit:"h"},
+          {label:"Rozvoz 1",           val:totRoz1,          color:"#fffde7",tc:"#f57f17",unit:"×"},
+          {label:"Rozvoz 2",           val:totRoz2,          color:"#fff8e1",tc:"#e65100",unit:"×"},
+          {label:"Stravenky",          val:tix,              color:"#f9fbe7",tc:"#827717",unit:"ks"},
+        ].map(item=>{
+          const display = item.sign
+            ? (overtime>=0?"+":"")+(Math.abs(overtime)%1===0?`${Math.abs(overtime)}h`:`${Math.abs(overtime).toFixed(1)}h`)
+            : item.unit==="×"
+              ? (item.val===0?"—":`${item.val}×`)
+            : item.unit==="ks"
+              ? (item.val===0?"—":`${item.val} ks`)
+            : fmtH(item.val);
+          return <div key={item.label} style={{background:item.color,borderRadius:8,padding:"9px 10px",textAlign:"center"}}>
+            <div style={{fontSize:9,color:item.tc,fontWeight:700,textTransform:"uppercase",marginBottom:3,lineHeight:1.3}}>{item.label}</div>
+            <div style={{fontSize:16,fontWeight:800,color:item.tc}}>{display}</div>
+          </div>;
+        })}
+      </div>
+      <div style={{padding:"6px 16px",background:"#f8f9ff",fontSize:11,color:"#aaa",borderTop:`1px solid ${C.border}`}}>
+        Celkem = Odprac. + Dovolená + Nemoc + Sv.zavřeno + OČR + Jiné &nbsp;│&nbsp;
+        So: {fmtH(soH)} &nbsp;│&nbsp; Ne: {fmtH(neH)}
+      </div>
+      {/* KDP sekce */}
+      <div style={{borderTop:`2px solid ${C.border}`,padding:"14px 16px",background:"#f0f4ff"}}>
+        <div style={{fontSize:12,fontWeight:800,color:C.topbar,marginBottom:10,textTransform:"uppercase",letterSpacing:"0.06em"}}>📈 KDP – Konto přesčasových hodin</div>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))",gap:10,alignItems:"end"}}>
+          {/* KDP vstup */}
+          <div style={{background:"#e8eaf6",borderRadius:8,padding:"10px 12px",textAlign:"center"}}>
+            <div style={{fontSize:9,fontWeight:700,color:"#3949ab",textTransform:"uppercase",marginBottom:4}}>KDP vstup (z min. měsíce)</div>
+            <div style={{fontSize:18,fontWeight:800,color:kdpVstup>=0?"#3949ab":"#c62828"}}>{fmtHsign(kdpVstup)}</div>
+          </div>
+          {/* Přesčas tento měsíc – odkaz na stávající hodnotu */}
+          <div style={{background:overtime>=0?"#e8f5e9":"#ffebee",borderRadius:8,padding:"10px 12px",textAlign:"center"}}>
+            <div style={{fontSize:9,fontWeight:700,color:overtime>=0?"#2e7d32":"#c62828",textTransform:"uppercase",marginBottom:4}}>Přesčas / minus tento měsíc</div>
+            <div style={{fontSize:18,fontWeight:800,color:overtime>=0?"#2e7d32":"#c62828"}}>{fmtHsign(overtime)}</div>
+          </div>
+          {/* KDP proplaceno – editovatelné */}
+          <div style={{background:"#fff3e0",borderRadius:8,padding:"10px 12px",textAlign:"center"}}>
+            <div style={{fontSize:9,fontWeight:700,color:"#e65100",textTransform:"uppercase",marginBottom:6}}>KDP proplaceno (vedoucí)</div>
+            <select
+              value={kdpPaidThis}
+              onChange={e=>onKdpPaidChange(Number(e.target.value))}
+              style={{padding:"5px 8px",borderRadius:6,border:`1.5px solid #ffcc80`,fontSize:14,fontWeight:700,color:"#e65100",background:"#fff",width:"100%",textAlign:"center"}}
+            >
+              {[0,0.5,1,1.5,2,2.5,3,3.5,4,4.5,5,6,7,8,9,10,12,14,16,20,24,32,40].map(v=>(
+                <option key={v} value={v}>{v===0?"— (nic)":v%1===0?`${v}h`:`${v}h`}</option>
+              ))}
+            </select>
+          </div>
+          {/* KDP výstup */}
+          <div style={{background:kdpVystup>=0?"#e3f2fd":"#ffebee",borderRadius:8,padding:"10px 12px",textAlign:"center",border:`2px solid ${kdpVystup>=0?"#90caf9":"#ef9a9a"}`}}>
+            <div style={{fontSize:9,fontWeight:700,color:kdpVystup>=0?"#1565c0":"#c62828",textTransform:"uppercase",marginBottom:4}}>KDP výstup (do příštího měsíce)</div>
+            <div style={{fontSize:20,fontWeight:800,color:kdpVystup>=0?"#1565c0":"#c62828"}}>{fmtHsign(kdpVystup)}</div>
+            <div style={{fontSize:9,color:"#aaa",marginTop:2}}>= vstup {fmtHsign(kdpVstup)} + přesčas {fmtHsign(overtime)}{kdpPaidThis>0?` − proplaceno ${kdpPaidThis}h`:""}</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div style={{marginTop:12,display:"flex",gap:8}}>
+      <Btn onClick={()=>alert("Funkce bude dostupná po napojení na server.")}>Odeslat ke schválení</Btn>
+      <Btn variant="secondary" onClick={exportPdf}>🖨️ Export PDF</Btn>
+      <Btn variant="secondary" onClick={exportExcel}>📊 Export Excel</Btn>
+    </div>
+  </div>;
+}
+
+
+// ─── SUMMARY TABLE ───────────────────────────────────────────
+// ─── KDP HELPER ──────────────────────────────────────────────
+// Vypočítá kumulativní KDP pro zaměstnance k danému měsíci (včetně).
+// Prochází všechny měsíce od APP_START do (year,month) a sčítá přesčas − proplaceno.
+function calcKdpCumulative(emp, toYear, toMonth, sched, holidays, stores, patterns, employees, timesheetData){
+  let kdp = emp.kdpStart || 0;
+  let y = APP_START.year, m = APP_START.month;
+  while(y < toYear || (y === toYear && m <= toMonth)){
+    const dim = getDim(y, m);
+    const wd  = getWorkingDays(y, m, holidays);
+    const fund = wd * empContractDay(emp);
+    const mainStoreEmps = employees.filter(e=>e.active && e.mainStore===emp.mainStore);
+    const empIdx = mainStoreEmps.findIndex(e=>e.id===emp.id);
+    let planned = 0;
+    for(let d=1;d<=dim;d++){
+      const date = new Date(y,m,d);
+      const dow  = getDow(y,m,d);
+      const ds   = fmtDate(y,m,d);
+      const hol  = holidays.find(h=>h.date===ds);
+      const cell = getSchedCell(sched, emp.id, ds, employees);
+      if(cell?.length){
+        const workSegs = cell.filter(s=>s.type==="work" && s.from && s.to);
+        const vacSeg   = cell.find(s=>s.type==="vacation"||s.type==="sick");
+        const otherAbs = cell.find(s=>s.type!=="work"&&s.type!=="vacation"&&s.type!=="sick");
+        if(workSegs.length){ planned += calcSplitWorked(workSegs, emp.mainStore, stores); if(vacSeg) planned += (vacSeg.hours||0); }
+        else if(vacSeg||otherAbs){ planned += ((vacSeg||otherAbs).hours||0); }
+      } else {
+        const pc = getPatCell(patterns, emp.mainStore, empIdx, date);
+        if(pc){
+          const st  = typeof pc==="object"?pc.shift||"work":pc;
+          const lId = typeof pc==="object"?(pc.loc||emp.mainStore):emp.mainStore;
+          const [fr,to] = getEmpShiftTimes(emp, lId, st, dow, stores, typeof pc==="object"?pc:null, hol);
+          if(fr&&to) planned += calcWorked(fr, to, getBreakRules(lId, stores));
+        }
+      }
+    }
+    const overtime = planned - fund;
+    // KDP proplaceno z timesheetData pro tento měsíc
+    const tsKey = `${emp.id}-${y}-${m+1}`;
+    const tsMonth = timesheetData?.[tsKey] || {};
+    const paid = Number(tsMonth.kdpPaid || 0);
+    kdp += overtime - paid;
+    // posun na další měsíc
+    if(m===11){y++;m=0;}else{m++;}
+  }
+  return kdp;
+}
+
+function SummaryTable({storeId, employees, year, month, sched, holidays, stores, patterns, timesheetData}){
+  const emps = employees.filter(e=>e.active && e.mainStore===storeId);
+  const dim  = getDim(year, month);
+  const wd   = getWorkingDays(year, month, holidays);
+
+  const fmtH = h => h===0?"0h":(h%1===0?`${h}h`:`${h.toFixed(1)}h`);
+  const colStyle = (val, pos="#2e7d32", neg="#c62828") => ({
+    padding:"8px 10px", textAlign:"center", borderBottom:`1px solid ${C.border}`,
+    fontWeight:700, color: val>0?pos: val<0?neg:"#aaa"
+  });
+
+  const headers = [
+    "Zaměstnanec",
+    "Měsíční fond",
+    "Naplánováno",
+    "Přesčas",
+    "KDP zůstatek",
+    "Dovolená nárok",
+    "Dovolená čerpáno",
+    "Dovolená zbývá",
+  ];
+
+  return <div style={{overflowX:"auto"}}>
+    <table style={{borderCollapse:"collapse", width:"100%", fontSize:13}}>
+      <thead>
+        <tr style={{background:"#f8f9ff"}}>
+          {headers.map(h=><th key={h} style={{
+            padding:"8px 10px", textAlign: h==="Zaměstnanec"?"left":"center",
+            fontSize:11, fontWeight:700, color:"#888", textTransform:"uppercase",
+            letterSpacing:"0.05em", borderBottom:`2px solid ${C.border}`, whiteSpace:"nowrap"
+          }}>{h}</th>)}
+        </tr>
+      </thead>
+      <tbody>
+        {emps.map((emp, i)=>{
+          const fund = wd * empContractDay(emp);
+
+          // Naplánované hodiny – vzor + ruční změny v rozvrhu
+          const mainStoreEmps = employees.filter(e=>e.active&&e.mainStore===storeId);
+          const empIdx = mainStoreEmps.findIndex(e=>e.id===emp.id);
+          let planned = 0;
+          for(let d=1;d<=dim;d++){
+            const date = new Date(year,month,d);
+            const dow  = getDow(year,month,d);
+            const ds   = fmtDate(year,month,d);
+            const cell = getSchedCell(sched, emp.id, ds, employees);
+
+            if(cell?.length){
+              // Ruční záznam má přednost
+              const workSegs = cell.filter(s=>s.type==="work" && s.from && s.to);
+              const vacSeg   = cell.find(s=>s.type==="vacation"||s.type==="sick");
+              const otherAbs = cell.find(s=>s.type!=="work"&&s.type!=="vacation"&&s.type!=="sick");
+
+              if(workSegs.length){
+                // Práce (případně i s dovolenou) – reálné hodiny práce
+                planned += calcSplitWorked(workSegs, emp.mainStore, stores);
+                // Dovolená část (seg.hours přímo ze záznamu)
+                if(vacSeg) planned += (vacSeg.hours||0);
+              } else if(vacSeg||otherAbs){
+                // Čistá absence – přičti seg.hours přímo ze záznamu (co vedoucí zadal)
+                const abs = vacSeg||otherAbs;
+                planned += (abs.hours||0);
+              }
+            } else {
+              // Ze vzoru – respektuj sváteční čas
+              const hol = holidays.find(h=>h.date===ds);
+              const pc = getPatCell(patterns, storeId, empIdx, date);
+              if(pc){
+                const st  = typeof pc==="object"?pc.shift||"work":pc;
+                const lId = typeof pc==="object"?(pc.loc||storeId):storeId;
+                const [fr,to] = getEmpShiftTimes(emp, lId, st, dow, stores, typeof pc==="object"?pc:null, hol);
+                if(fr&&to) planned += calcWorked(fr, to, getBreakRules(lId, stores));
+              }
+            }
+          }
+
+          // Ze sched: dovolená hodiny
+          let vacUsed = 0;
+          for(let d=1;d<=dim;d++){
+            const ds  = fmtDate(year,month,d);
+            const cell= getSchedCell(sched, emp.id, ds, employees);
+            if(!cell) continue;
+            for(const seg of cell){
+              if(seg.type==="vacation") vacUsed += (seg.hours||0);
+            }
+          }
+
+          const overtime   = planned - fund;
+          const beforeStart = year<APP_START.year||(year===APP_START.year&&month<APP_START.month);
+          const kdp        = beforeStart ? null : calcKdpCumulative(emp, year, month, sched, holidays, stores, patterns, employees, timesheetData);
+          const kdpPaid    = 0;
+          const kdpBalance = kdp!==null ? kdp : null;
+          const vacLeft    = emp.vacHours - vacUsed;
+          const kdpFmt = v => v===null?"—":(v>0?"+":v<0?"-":"")+fmtH(Math.abs(v));
+          const kdpStyle = v => v===null
+            ? {padding:"8px 10px",textAlign:"center",borderBottom:`1px solid ${C.border}`,color:"#ccc"}
+            : colStyle(v,"#1565c0","#c62828");
+
+          return <tr key={emp.id} style={{background: i%2===0?"#fff":"#fafafe"}}>
+            <td style={{padding:"8px 10px", fontWeight:700, color:C.topbar, borderBottom:`1px solid ${C.border}`, whiteSpace:"nowrap"}}>
+              {emp.firstName} {emp.lastName}
+              <div style={{fontSize:10,color:"#bbb",fontWeight:400}}>{emp.role} · {empContractDay(emp)}h/den · {empContractWeek(emp)}h/týden</div>
+            </td>
+            <td style={{padding:"8px 10px",textAlign:"center",borderBottom:`1px solid ${C.border}`,color:"#555"}}>{fmtH(fund)}</td>
+            <td style={{padding:"8px 10px",textAlign:"center",borderBottom:`1px solid ${C.border}`,color:"#1a1a2e",fontWeight:600}}>{fmtH(planned)}</td>
+            <td style={colStyle(overtime)}>{overtime>0?"+":""}{fmtH(overtime)}</td>
+            <td style={kdpStyle(kdp)}>{kdpFmt(kdp)}</td>
+            <td style={{padding:"8px 10px",textAlign:"center",borderBottom:`1px solid ${C.border}`,color:"#555"}}>{fmtH(emp.vacHours)}</td>
+            <td style={{padding:"8px 10px",textAlign:"center",borderBottom:`1px solid ${C.border}`,color:"#1565c0",fontWeight:600}}>{fmtH(vacUsed)}</td>
+            <td style={colStyle(vacLeft, "#2e7d32", "#c62828")}>{fmtH(vacLeft)}</td>
+          </tr>;
+        })}
+      </tbody>
+    </table>
+    <div style={{marginTop:10,fontSize:11,color:"#bbb",padding:"6px 0"}}>
+      * KDP zaplacené – bude dostupné po napojení na výplatní evidenci. Přesčas = Naplánováno − Fond.
+    </div>
+  </div>;
+}
+
+// ─── MAIN APP ────────────────────────────────────────────────
+export default function App(){
+  const [tab,setTab]=useState("schedule");
+  const [storeId,setStoreId]=useState(1);
+  const [year,setYear]=useState(2026);
+  const [month,setMonth]=useState(3);
+  const [employees,setEmployees]=useState(INIT_EMPS);
+  const [stores,setStores]=useState(INIT_STORES);
+  const [sched,setSched]=useState({});
+  const [holidays,setHolidays]=useState(DEFAULT_HOLIDAYS);
+  const [actions,setActions]=useState([]);
+  const [patterns,setPatterns]=useState(makeDefaultPatterns);
+  const [editCell,setEditCell]=useState(null);
+  const [tsEmp,setTsEmp]=useState(null);
+
+  // Načti SheetJS + jsPDF z CDN
+  useEffect(()=>{
+    if(!window.XLSX){
+      const s=document.createElement("script");
+      s.src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js";
+      document.head.appendChild(s);
+    }
+    if(!window.jspdf){
+      const s=document.createElement("script");
+      s.src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js";
+      document.head.appendChild(s);
+    }
+    if(!window.jspdfAutotable){
+      const s=document.createElement("script");
+      s.src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js";
+      document.head.appendChild(s);
+    }
+  },[]);
+  // Výkaz – perzistentní data: klíč = "empId-year-month", hodnota = {1:{arrival,departure,...}, 2:...}
+  const [timesheetData,setTimesheetData]=useState({});
+  const tsKey=(empId,y,m)=>`${empId}-${y}-${m}`;
+  const updTimesheetRow=(empId,y,m,day,field,value)=>{
+    const k=tsKey(empId,y,m);
+    setTimesheetData(prev=>{
+      const month=prev[k]||{};
+      return {...prev,[k]:{...month,[day]:{...(month[day]||{}), [field]:value}}};
+    });
+  };
+  const getTimesheetRows=(empId,y,m)=>{
+    const k=tsKey(empId,y,m);
+    const dim=getDim(y,m-1); // m je 0-indexed
+    const stored=timesheetData[k]||{};
+    const rows={};
+    for(let d=1;d<=dim;d++) rows[d]={arrival:"",departure:"",breakFrom:"",breakTo:"",type:"",...(stored[d]||{})};
+    return rows;
+  };
+
+  const isAtStart = year===APP_START.year && month===APP_START.month;
+  const isBeforeStart = (y,m) => y<APP_START.year||(y===APP_START.year&&m<APP_START.month);
+  const prevM=()=>{if(isAtStart) return; const d=new Date(year,month-1,1);setYear(d.getFullYear());setMonth(d.getMonth());};
+  const nextM=()=>{const d=new Date(year,month+1,1);setYear(d.getFullYear());setMonth(d.getMonth());};
+
+  const onCellEdit=(emp,date)=>{
+    const ds=fmtDate(date.getFullYear(),date.getMonth(),date.getDate());
+    const k=schedKey(emp.id,ds,employees);
+    setEditCell({emp,date,ds,k,cur:sched[k]||null});
+  };
+  const onCellSave=segs=>{setSched(p=>({...p,[editCell.k]:segs.length?segs:undefined}));setEditCell(null);};
+  const onRangeApply=(type,fromStr,toStr,emp)=>{
+    const from=parseDate(fromStr), to=parseDate(toStr);
+    const updates={};
+    const mainStoreEmps=employees.filter(e=>e.active&&e.mainStore===emp.mainStore);
+    const empIdx=mainStoreEmps.findIndex(e=>e.id===emp.id);
+    for(let d=new Date(from);d<=to;d.setDate(d.getDate()+1)){
+      const dow=d.getDay()===0?6:d.getDay()-1;
+      const ds=fmtDate(d.getFullYear(),d.getMonth(),d.getDate());
+      const patCell=getPatCell(patterns,emp.mainStore,empIdx,d);
+      if(!patCell){
+        // Volno ze vzoru – zapište vizuální marker bez hodin
+        updates[schedKey(emp.id,ds,employees)]=[{type,hours:0}];
+        continue;
+      }
+      // Hodiny ze vzoru pro daný den (čistý čas směny po přestávce)
+      const isObj=typeof patCell==="object";
+      const patShift=isObj?(patCell.shift||"work"):(patCell||"work");
+      const patLoc=isObj?(patCell.loc||emp.mainStore):emp.mainStore;
+      const [fr,to2]=getEmpShiftTimes(emp,patLoc,patShift,dow,stores,isObj?patCell:null);
+      const h=calcWorked(fr,to2,getBreakRules(patLoc,stores));
+      const hoursThisDay=h>0?h:empContractDay(emp);
+      updates[schedKey(emp.id,ds,employees)]=[{type,hours:hoursThisDay}];
+    }
+    setSched(p=>({...p,...updates}));
+  };
+
+  const onRangeDelete=(fromStr,toStr,emp)=>{
+    const from=parseDate(fromStr), to=parseDate(toStr);
+    setSched(p=>{
+      const next={...p};
+      for(let d=new Date(from);d<=to;d.setDate(d.getDate()+1)){
+        const ds=fmtDate(d.getFullYear(),d.getMonth(),d.getDate());
+        delete next[schedKey(emp.id,ds,employees)];
+      }
+      return next;
+    });
+  };
+
+  const mOpts=MONTHS.map((m,i)=>({value:i,label:m})).filter(o=>!(year===APP_START.year&&o.value<APP_START.month));
+  const curYear=new Date().getFullYear();
+  const yOpts=Array.from({length:curYear+2-APP_START.year+1},(_,i)=>APP_START.year+i).map(y=>({value:y,label:String(y)}));
+  const eOpts=[{value:"",label:"— vyberte zaměstnance —"},...employees.filter(e=>e.active).map(e=>({value:e.id,label:`${e.firstName} ${e.lastName}`}))];
+  const tabs=[{key:"schedule",label:"📅 Rozvrh"},{key:"timesheet",label:"📋 Výkaz"},{key:"employees",label:"👥 Zaměstnanci"},{key:"settings",label:"⚙️ Nastavení"}];
+
+  return <div style={{fontFamily:"'Segoe UI',system-ui,sans-serif",background:C.bg,minHeight:"100vh"}}>
+    <div style={{background:C.topbar,boxShadow:"0 2px 12px rgba(0,0,0,0.18)"}}>
+      <div style={{display:"flex",alignItems:"center",padding:"0 20px",gap:16}}>
+        <div style={{color:"#fff",fontSize:16,fontWeight:800,padding:"14px 0",whiteSpace:"nowrap"}}>🏪 ShiftFlow</div>
+        <div style={{flex:1,display:"flex",justifyContent:"center",gap:6,padding:"10px 0"}}>
+          {stores.map(s=><Btn key={s.id} variant="store" active={storeId===s.id} small onClick={()=>setStoreId(s.id)} style={{minWidth:90}}>{s.name}</Btn>)}
+        </div>
+        <div style={{color:"rgba(255,255,255,0.55)",fontSize:12,display:"flex",alignItems:"center",gap:8}}>
+          <span>👤 Jankovský</span>
+          <span style={{background:"rgba(255,255,255,0.15)",color:"rgba(255,255,255,0.9)",padding:"2px 8px",borderRadius:4,fontSize:11,fontWeight:700}}>Vedoucí</span>
+        </div>
+      </div>
+      <div style={{display:"flex",padding:"0 20px",borderTop:"1px solid rgba(255,255,255,0.08)"}}>
+        {tabs.map(t=><button key={t.key} onClick={()=>setTab(t.key)} style={{padding:"11px 18px",background:"none",border:"none",color:tab===t.key?"#fff":"rgba(255,255,255,0.45)",fontWeight:tab===t.key?700:500,fontSize:13,cursor:"pointer",borderBottom:tab===t.key?"3px solid #4f8ef7":"3px solid transparent",whiteSpace:"nowrap"}}>{t.label}</button>)}
+      </div>
+    </div>
+
+    <div style={{padding:"20px",maxWidth:1500,margin:"0 auto"}}>
+      {tab==="schedule"&&<div>
+        <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:16,flexWrap:"wrap"}}>
+          <div style={{display:"flex",alignItems:"center",gap:4,background:"#fff",borderRadius:8,border:`1.5px solid ${C.border}`,overflow:"hidden"}}>
+            <button onClick={prevM} disabled={isAtStart} style={{padding:"8px 14px",border:"none",background:"none",cursor:isAtStart?"not-allowed":"pointer",fontSize:18,color:isAtStart?"#ddd":"#555",lineHeight:1}}>‹</button>
+            <select value={month} onChange={e=>setMonth(Number(e.target.value))} style={{border:"none",fontSize:15,fontWeight:700,color:C.topbar,background:"transparent",cursor:"pointer",padding:"0 4px"}}>
+              {mOpts.map(o=><option key={o.value} value={o.value}>{o.label}</option>)}
+            </select>
+            <select value={year} onChange={e=>setYear(Number(e.target.value))} style={{border:"none",fontSize:15,fontWeight:700,color:C.topbar,background:"transparent",cursor:"pointer",padding:"0 4px"}}>
+              {yOpts.map(o=><option key={o.value} value={o.value}>{o.label}</option>)}
+            </select>
+            <button onClick={nextM} style={{padding:"8px 14px",border:"none",background:"none",cursor:"pointer",fontSize:18,color:"#555",lineHeight:1}}>›</button>
+          </div>
+          <div style={{marginLeft:"auto",display:"flex",gap:8}}>
+            <Btn small variant="secondary">Export Excel</Btn>
+            <Btn small variant="secondary">Export PDF</Btn>
+          </div>
+        </div>
+        <div style={{background:"#fff",borderRadius:10,padding:"10px 18px",marginBottom:14,display:"flex",alignItems:"center",gap:12,flexWrap:"wrap",boxShadow:"0 1px 4px rgba(0,0,0,0.05)"}}>
+          <div style={{fontWeight:800,fontSize:15,color:C.topbar}}>{stores.find(s=>s.id===storeId)?.name}</div>
+          <div style={{fontSize:12,color:"#aaa"}}>{stores.find(s=>s.id===storeId)?.hours}</div>
+          <Badge color="#e3f2fd" textColor="#1565c0">{MONTHS[month]} {year}</Badge>
+          <Badge color="#f3e5f5" textColor="#6a1b9a">{getWorkingDays(year,month,holidays)} prac. dní · {getWorkingDays(year,month,holidays)*8}h fond</Badge>
+          {getHolidayDays(year,month,holidays)>0&&<Badge color="#ffebee" textColor="#c62828">🗓️ {getHolidayDays(year,month,holidays)} svátek zavřeno</Badge>}
+          {actions.filter(a=>a.month===month).map(a=><Badge key={a.id} color="#FFCDD2" textColor="#c62828">🎯 {a.name}</Badge>)}
+        </div>
+        <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:14,padding:"8px 14px",background:"#fff",borderRadius:8,border:`1px solid ${C.border}`,alignItems:"center"}}>
+          {Object.entries(TYPE_META).map(([k,v])=><Badge key={k} color={v.color} textColor={v.text}>{v.label}</Badge>)}
+          <Badge color={C.modified} textColor="#b8860b">Změna oproti vzoru</Badge>
+          <Badge color={C.mirror} textColor="#1565c0">Sdílený (čtení)</Badge>
+          <Badge color={C.otherStore} textColor="#888">Jiná prodejna</Badge>
+          <span style={{marginLeft:"auto",fontSize:11,color:"#bbb"}}>▼ = odprac. hodiny po přestávce</span>
+        </div>
+        <div style={{background:"#fff",borderRadius:10,padding:"20px",boxShadow:"0 1px 4px rgba(0,0,0,0.05)",marginBottom:20}}>
+          <ScheduleView storeId={storeId} employees={employees} year={year} month={month}
+            sched={sched} onCellEdit={onCellEdit} actions={actions} holidays={holidays}
+            stores={stores} patterns={patterns}/>
+        </div>
+        <div style={{background:"#fff",borderRadius:10,padding:"20px",boxShadow:"0 1px 4px rgba(0,0,0,0.05)",marginBottom:20}}>
+          <div style={{fontSize:15,fontWeight:800,color:C.topbar,marginBottom:14}}>📊 Přehled hodin – {MONTHS[month]} {year}</div>
+          <SummaryTable storeId={storeId} employees={employees} year={year} month={month}
+            sched={sched} holidays={holidays} stores={stores} patterns={patterns} timesheetData={timesheetData}/>
+        </div>
+      </div>}
+
+      {tab==="timesheet"&&<div style={{background:"#fff",borderRadius:10,padding:"24px",boxShadow:"0 1px 4px rgba(0,0,0,0.05)"}}>
+        <div style={{display:"flex",gap:12,alignItems:"flex-end",marginBottom:20,flexWrap:"wrap"}}>
+          <FSel label="Zaměstnanec" value={tsEmp||""} onChange={v=>setTsEmp(v?Number(v):null)} options={eOpts} style={{minWidth:220}}/>
+          <FSel label="Měsíc" value={month} onChange={v=>setMonth(Number(v))} options={mOpts} style={{minWidth:130}}/>
+          <FSel label="Rok" value={year} onChange={v=>setYear(Number(v))} options={yOpts} style={{minWidth:90}}/>
+        </div>
+        {tsEmp
+          ?<TimesheetView employee={employees.find(e=>e.id===tsEmp)} year={year} month={month} holidays={holidays} stores={stores} sched={sched} employees={employees} patterns={patterns}
+            rows={getTimesheetRows(tsEmp,year,month+1)} onRowChange={(day,field,value)=>updTimesheetRow(tsEmp,year,month+1,day,field,value)}
+            timesheetData={timesheetData}
+            onKdpPaidChange={v=>{
+              const k=tsKey(tsEmp,year,month+1);
+              setTimesheetData(prev=>({...prev,[k]:{...(prev[k]||{}),kdpPaid:v}}));
+            }}/>
+          :<div style={{textAlign:"center",padding:"60px 0",color:"#ccc",fontSize:16}}>Vyberte zaměstnance</div>}
+      </div>}
+
+      {tab==="employees"&&<div style={{background:"#fff",borderRadius:10,padding:"24px",boxShadow:"0 1px 4px rgba(0,0,0,0.05)"}}>
+        <EmployeesView employees={employees} setEmployees={setEmployees} stores={stores}/>
+      </div>}
+
+      {tab==="settings"&&<div style={{background:"#fff",borderRadius:10,padding:"24px",boxShadow:"0 1px 4px rgba(0,0,0,0.05)"}}>
+        <h2 style={{margin:"0 0 20px 0",fontSize:20,fontWeight:800,color:C.topbar}}>Nastavení</h2>
+        <SettingsView holidays={holidays} setHolidays={setHolidays} actions={actions} setActions={setActions}
+          stores={stores} setStores={setStores} employees={employees} patterns={patterns} setPatterns={setPatterns}/>
+      </div>}
+    </div>
+
+    {editCell&&<Modal open={!!editCell} onClose={()=>setEditCell(null)} title="Upravit směnu" width={520}>
+      <CellEditor emp={editCell.emp} date={editCell.date} year={editCell.date.getFullYear()} month={editCell.date.getMonth()}
+        current={editCell.cur} viewStoreId={storeId} stores={stores} employees={employees} patterns={patterns}
+        onSave={onCellSave} onClose={()=>setEditCell(null)} onRangeApply={onRangeApply} onRangeDelete={onRangeDelete}/>
+    </Modal>}
+  </div>;
+}
