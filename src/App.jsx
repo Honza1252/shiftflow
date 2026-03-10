@@ -2106,12 +2106,11 @@ function LoginScreen({onLogin}){
   );
 }
 
-export default function App(){
-  // ─── VŠECHNY HOOKS MUSÍ BÝT VŽDY NAHOŘE (React pravidlo) ───
+function MainApp({currentUser, handleLogout}){
+  // ─── HELPERS ─────────────────────────────────────────────────
   const lsGet=(key,fb)=>{try{const v=localStorage.getItem(key);return v?JSON.parse(v):fb;}catch{return fb;}};
   const lsSet=(key,val)=>{try{localStorage.setItem(key,JSON.stringify(val));}catch{}};
 
-  const [currentUser,setCurrentUser]=useState(()=>lsGet("sf_user",null));
   const [tab,setTab]=useState("schedule");
   const [storeId,setStoreId]=useState(()=>{const u=lsGet("sf_user",null);return u?.storeIds?.[0]??1;});
   const [year,setYear]=useState(()=>lsGet("sf_year",2026));
@@ -2133,9 +2132,6 @@ export default function App(){
   useEffect(()=>lsSet("sf_holidays",holidays),[holidays]);
   useEffect(()=>lsSet("sf_actions",actions),[actions]);
   useEffect(()=>lsSet("sf_patterns",patterns),[patterns]);
-
-  const handleLogin=(user)=>{lsSet("sf_user",user);setCurrentUser(user);setStoreId(user.storeIds?.[0]??1);};
-  const handleLogout=()=>{localStorage.removeItem("sf_user");setCurrentUser(null);};
 
   // Načti SheetJS + jsPDF z CDN
   useEffect(()=>{
@@ -2159,8 +2155,6 @@ export default function App(){
   const [timesheetData,setTimesheetData]=useState(()=>lsGet("sf_timesheetData",{}));
   useEffect(()=>lsSet("sf_timesheetData",timesheetData),[timesheetData]);
 
-  // AŽ ZDE, PO VŠECH HOOKS, zkontroluj přihlášení
-  if(!currentUser) return <LoginScreen onLogin={handleLogin}/>;
   const canEdit=currentUser.role==="admin"||currentUser.role==="vedouci";
 
   const tsKey=(empId,y,m)=>`${empId}-${y}-${m}`;
@@ -2334,4 +2328,21 @@ export default function App(){
         onSave={onCellSave} onClose={()=>setEditCell(null)} onRangeApply={onRangeApply} onRangeDelete={onRangeDelete}/>
     </Modal>}
   </div>;
+}
+
+// ─── WRAPPER – řídí přihlášení BEZ hook problémů ─────────────
+export default function App(){
+  const [currentUser,setCurrentUser]=useState(()=>{
+    try{const v=localStorage.getItem("sf_user");return v?JSON.parse(v):null;}catch{return null;}
+  });
+  const handleLogin=(user)=>{
+    localStorage.setItem("sf_user",JSON.stringify(user));
+    setCurrentUser(user);
+  };
+  const handleLogout=()=>{
+    localStorage.removeItem("sf_user");
+    setCurrentUser(null);
+  };
+  if(!currentUser) return <LoginScreen onLogin={handleLogin}/>;
+  return <MainApp currentUser={currentUser} handleLogout={handleLogout}/>;
 }
