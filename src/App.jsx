@@ -2026,18 +2026,37 @@ function SummaryTable({storeId, employees, year, month, sched, holidays, stores,
 
 // ─── MAIN APP ────────────────────────────────────────────────
 export default function App(){
+  // ─── localStorage helpers ────────────────────────────────────
+  const lsGet = (key, fallback) => {
+    try { const v = localStorage.getItem(key); return v ? JSON.parse(v) : fallback; }
+    catch { return fallback; }
+  };
+  const lsSet = (key, value) => {
+    try { localStorage.setItem(key, JSON.stringify(value)); } catch {}
+  };
+
   const [tab,setTab]=useState("schedule");
   const [storeId,setStoreId]=useState(1);
-  const [year,setYear]=useState(2026);
-  const [month,setMonth]=useState(3);
-  const [employees,setEmployees]=useState(INIT_EMPS);
-  const [stores,setStores]=useState(INIT_STORES);
-  const [sched,setSched]=useState({});
-  const [holidays,setHolidays]=useState(DEFAULT_HOLIDAYS);
-  const [actions,setActions]=useState([]);
-  const [patterns,setPatterns]=useState(makeDefaultPatterns);
+  const [year,setYear]=useState(()=>lsGet("sf_year",2026));
+  const [month,setMonth]=useState(()=>lsGet("sf_month",3));
+  const [employees,setEmployees]=useState(()=>lsGet("sf_employees",INIT_EMPS));
+  const [stores,setStores]=useState(()=>lsGet("sf_stores",INIT_STORES));
+  const [sched,setSched]=useState(()=>lsGet("sf_sched",{}));
+  const [holidays,setHolidays]=useState(()=>lsGet("sf_holidays",DEFAULT_HOLIDAYS));
+  const [actions,setActions]=useState(()=>lsGet("sf_actions",[]));
+  const [patterns,setPatterns]=useState(()=>lsGet("sf_patterns",makeDefaultPatterns()));
   const [editCell,setEditCell]=useState(null);
   const [tsEmp,setTsEmp]=useState(null);
+
+  // ─── Automatické ukládání do localStorage ────────────────────
+  useEffect(()=>{ lsSet("sf_year",year); },[year]);
+  useEffect(()=>{ lsSet("sf_month",month); },[month]);
+  useEffect(()=>{ lsSet("sf_employees",employees); },[employees]);
+  useEffect(()=>{ lsSet("sf_stores",stores); },[stores]);
+  useEffect(()=>{ lsSet("sf_sched",sched); },[sched]);
+  useEffect(()=>{ lsSet("sf_holidays",holidays); },[holidays]);
+  useEffect(()=>{ lsSet("sf_actions",actions); },[actions]);
+  useEffect(()=>{ lsSet("sf_patterns",patterns); },[patterns]);
 
   // Načti SheetJS + jsPDF z CDN
   useEffect(()=>{
@@ -2058,7 +2077,8 @@ export default function App(){
     }
   },[]);
   // Výkaz – perzistentní data: klíč = "empId-year-month", hodnota = {1:{arrival,departure,...}, 2:...}
-  const [timesheetData,setTimesheetData]=useState({});
+  const [timesheetData,setTimesheetData]=useState(()=>lsGet("sf_timesheetData",{}));
+  useEffect(()=>{ lsSet("sf_timesheetData",timesheetData); },[timesheetData]);
   const tsKey=(empId,y,m)=>`${empId}-${y}-${m}`;
   const updTimesheetRow=(empId,y,m,day,field,value)=>{
     const k=tsKey(empId,y,m);
