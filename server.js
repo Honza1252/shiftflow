@@ -1,0 +1,1 @@
+const express=require('express'),path=require('path'),app=express();app.use(express.static(path.join(__dirname,'frontend/dist')));app.get('*',(q,r)=>r.sendFile(path.join(__dirname,'frontend/dist/index.html')));app.listen(process.env.PORT||3000,()=>console.log('ShiftFlow OK'));
