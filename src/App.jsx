@@ -2568,13 +2568,18 @@ function MainApp({currentUser, handleLogout}){
           for(const r of tsD){
             const k=`${r.emp_id}-${r.year}-${r.month}`;
             if(!td[k]) td[k]={};
-            td[k][r.day]={
-              arrival:r.arrival||"", departure:r.departure||"",
-              breakFrom:r.break_from||"", breakTo:r.break_to||"",
-              type:r.day_type||"",
-              admin:r.admin||"", roz1:r.roz1||"", roz2:r.roz2||"",
-            };
-            // Status výkazu – uložen na den=0 jako metadata
+            // Den=0 je metadata (kdpPaid, status) – neukladame ho jako normalni den
+            if(r.day > 0){
+              td[k][r.day]={
+                arrival:r.arrival||"", departure:r.departure||"",
+                breakFrom:r.break_from||"", breakTo:r.break_to||"",
+                type:r.day_type||"",
+                admin:r.admin||"", roz1:r.roz1||"", roz2:r.roz2||"",
+              };
+            }
+            // KDP proplaceno – čte se z libovolného řádku kde je nastaveno
+            if(r.kdp_paid && Number(r.kdp_paid)>0) td[k].kdpPaid = Number(r.kdp_paid);
+            // Status výkazu
             if(r.status && r.status!=="draft") td[k]._status = r.status;
           }
           setTimesheetData(td);
@@ -2653,6 +2658,14 @@ function MainApp({currentUser, handleLogout}){
       break_from:breakFrom||null, break_to:breakTo||null,
       day_type:type||null,
       admin:admin||null, roz1:roz1||null, roz2:roz2||null,
+    },{onConflict:"emp_id,year,month,day"});
+  },[]);
+
+  // Uložení KDP proplaceno do DB – ukládá se na speciální den=0
+  const dbSaveKdpPaid=useCallback(async(empId,y,m,kdpPaid)=>{
+    await supabase.from("timesheets").upsert({
+      emp_id:empId, year:y, month:m, day:0,
+      kdp_paid: kdpPaid,
     },{onConflict:"emp_id,year,month,day"});
   },[]);
 
@@ -3020,9 +3033,11 @@ function MainApp({currentUser, handleLogout}){
             onSubmit={handleSubmit}
             onApprove={handleApprove}
             onReturn={handleReturn}
-            onKdpPaidChange={isLocked&&!isVedouci?null:v=>{
+            onKdpPaidChange={isLocked&&!isVedouci?null:async v=>{
               const k2=tsKey(tsEmp,year,month+1);
               setTimesheetData(prev=>({...prev,[k2]:{...(prev[k2]||{}),kdpPaid:v}}));
+              // Ulož do DB ihned
+              await dbSaveKdpPaid(tsEmp, year, month+1, v);
             }}/>;
         })()
           :<div style={{textAlign:"center",padding:"60px 0",color:"#ccc",fontSize:16}}>Vyberte zaměstnance</div>}
