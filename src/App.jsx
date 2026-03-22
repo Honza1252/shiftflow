@@ -2967,36 +2967,36 @@ function MainApp({currentUser, handleLogout}){
 
   // ── Export rozvrhu do PDF ──
   const exportSchedPdf = () => {
-    const storeName=stores.find(s=>s.id===storeId)?.name||"";
-    const dim=getDim(year,month);
-    const mainEmps=employees.filter(e=>e.active&&e.mainStore===storeId);
-    // A4 portrait: 210 x 297 mm
-    const doc=new jsPDF({orientation:"portrait",unit:"mm",format:"a4"});
-    const pageW=210; const pageH=297;
-    const marginL=8; const marginR=8; const marginT=10;
-    const usableW=pageW-marginL-marginR; // 194 mm
+    const storeName = stores.find(s=>s.id===storeId)?.name||"";
+    const dim = getDim(year,month);
+    const mainEmps = employees.filter(e=>e.active&&e.mainStore===storeId);
+    const doc = new jsPDF({orientation:"landscape",unit:"mm",format:"a4"});
+    const pageW=297; const pageH=210;
+    const mL=10; const mR=10; const mT=12;
+    const usableW = pageW-mL-mR;
 
-    // Barvy buněk – stejné jako web
+    // Barvy
     const cellBg=(label,dow)=>{
       if(label==="DOV") return [227,242,253];
       if(label==="NEM") return [245,245,245];
       if(label==="SZ")  return [255,235,238];
-      if(label==="SO")  return [241,248,233]; // svátek otevřeno
+      if(label==="SO")  return [241,248,233];
       if(label==="V")   return [232,245,233];
       if(dow>=5)        return [255,248,248];
       return [255,255,255];
     };
-    const cellTc=(label)=>{
+    const cellTc=(label,dow)=>{
       if(label==="DOV") return [21,101,192];
       if(label==="NEM") return [97,97,97];
       if(label==="SZ")  return [198,40,40];
       if(label==="SO")  return [51,105,30];
       if(label==="V")   return [46,125,50];
+      if(dow>=5)        return [180,40,40];
       return [26,26,46];
     };
 
-    // Sestavení dat zaměstnanců
-    const rowsData=mainEmps.map((emp)=>{
+    // Získej data pro každý den každého zaměstnance
+    const empDays = mainEmps.map(emp=>{
       const empIdx=mainEmps.findIndex(e=>e.id===emp.id);
       const days=[];
       for(let d=1;d<=dim;d++){
@@ -3020,133 +3020,265 @@ function MainApp({currentUser, handleLogout}){
             label=fr&&to?shiftLabel(fr,to):"Pr";
           } else label=pc==="vacation"?"DOV":pc==="sick"?"NEM":"V";
         }
-        if(hol&&!hol.open&&label!="DOV"&&label!="NEM") label="SZ";
+        if(hol&&!hol.open&&!["DOV","NEM"].includes(label)) label="SZ";
         if(hol&&hol.open&&!label) label="SO";
-        days.push({label,dow,hol:!!hol});
+        days.push({label,dow,d,hol});
       }
       return {emp,days};
     });
 
-    // Rozdělení na 2 týdny (1-15, 16-konec) – každý týden na samostatné sekci
-    const half1=Math.ceil(dim/2);
-    const half2=dim-half1;
-    const sections=[
-      {from:0, to:half1, label:`1.–${half1}.`},
-      {from:half1, to:dim, label:`${half1+1}.–${dim}.`},
-    ];
+    // Rozděl na týdny (Po–Ne)
+    const weeks=[];
+    let i=1;
+    while(i<=dim){
+      const wDays=[];
+      // Začni od aktuálního dne, do konce týdne (Ne) nebo konce měsíce
+      const startDow=getDow(year,month,i);
+      // Přidej dny tohoto týdne
+      while(i<=dim){
+        const dow=getDow(year,month,i);
+        wDays.push(i);
+        i++;
+        if(dow===6) break; // konec týdne (Ne)
+      }
+      weeks.push(wDays);
+    }
 
-    // Rozměry
-    const nameW=38;  // sloupec se jménem a rolí
-    const rowH=10;   // výška řádku
-    const hdrH=12;   // výška záhlaví
+    // Layout: jméno+role sloupec, pak 7 sloupců dnů
+    const nameW=38;
+    const rowH=8.5;
+    const hdrH=11;
+    const weekGap=4;
 
-    const drawSection=(sec, startY)=>{
-      const days=sec.to-sec.from;
-      const dayW=(usableW-nameW)/days;
+    // Spočítej výšku všech týdnů
+    const totalWeeksH = weeks.length*(hdrH+mainEmps.length*rowH) + (weeks.length-1)*weekGap;
+    const legendH=8;
+    const summaryNeeded=true;
 
-      // Záhlaví sloupce Zaměstnanec
+    // Záhlaví stránky
+    doc.setFont("helvetica","bold"); doc.setFontSize(12); doc.setTextColor(26,26,46);
+    doc.text(cz(`Rozvrh – ${storeName} – ${MONTHS[month]} ${year}`), mL, mT);
+    doc.setFont("helvetica","normal"); doc.setFontSize(7.5); doc.setTextColor(100,100,120);
+    const wd=getWorkingDays(year,month,holidays);
+    doc.text(cz(`${wd} pracovnich dni  |  fond ${wd*8}h`), mL, mT+6);
+    doc.setDrawColor(200,200,215);
+    doc.line(mL, mT+8, pageW-mR, mT+8);
+
+    let curY=mT+12;
+
+    // Kresli každý týden
+    weeks.forEach((wDays,wi)=>{
+      const wNum=wDays.length;
+      // Číslo týdne
+      const firstDate=new Date(year,month,wDays[0]);
+      const wType=storeId===2?"flat":getWeekType(firstDate);
+      const wLabel=wType==="odd"?"Lichy (T1)":wType==="even"?"Sudy (T2)":"Vzor";
+      doc.setFont("helvetica","bold"); doc.setFontSize(6.5); doc.setTextColor(100,100,140);
+      const isoW=getIsoWeek(firstDate);
+      doc.text(`Tyden ${isoW}  ${wLabel}`, mL, curY-1);
+
+      // Šířka sloupce dne – rozlož zbývající místo rovnoměrně
+      const dayW=(usableW-nameW)/wNum;
+
+      // Header – záhlaví
       doc.setFillColor(26,26,46);
-      doc.rect(marginL, startY, nameW, hdrH, "F");
-      doc.setFont("helvetica","bold"); doc.setFontSize(7); doc.setTextColor(255,255,255);
-      doc.text("Zamestnanec / Role", marginL+2, startY+7.5);
+      doc.rect(mL, curY, nameW, hdrH, "F");
+      doc.setFont("helvetica","bold"); doc.setFontSize(6.5); doc.setTextColor(255,255,255);
+      doc.text("Zamestnanec", mL+2, curY+7);
 
-      // Záhlaví dnů
-      for(let i=0;i<days;i++){
-        const d=sec.from+i+1;
+      wDays.forEach((d,di)=>{
         const dow=getDow(year,month,d);
         const ds=fmtDate(year,month,d);
         const hol=holidays.find(h=>h.date===ds);
-        const x=marginL+nameW+i*dayW;
+        const x=mL+nameW+di*dayW;
         const isWE=dow>=5;
-        const bg=hol&&!hol.open?[140,20,20]:isWE?[80,40,40]:[26,26,46];
+        const isSvatekZ=hol&&!hol.open;
+        const bg=isSvatekZ?[160,30,30]:isWE?[70,40,50]:[26,26,46];
         doc.setFillColor(...bg);
-        doc.rect(x, startY, dayW, hdrH, "F");
+        doc.rect(x, curY, dayW, hdrH, "F");
         doc.setFont("helvetica","bold"); doc.setFontSize(6); doc.setTextColor(255,255,255);
-        doc.text(DOW_LBL[dow], x+dayW/2, startY+4.5, {align:"center"});
+        doc.text(DOW_LBL[dow], x+dayW/2, curY+4, {align:"center"});
         doc.setFontSize(7);
-        doc.text(String(d)+(hol?"!":"."), x+dayW/2, startY+9.5, {align:"center"});
-      }
+        const suffix=hol?"!":".";
+        doc.text(`${d}${suffix}`, x+dayW/2, curY+8.5, {align:"center"});
+        if(hol){
+          doc.setFontSize(4.5);
+          doc.text(cz(hol.name).substring(0,10), x+dayW/2, curY+11, {align:"center"});
+        }
+      });
 
       // Řádky zaměstnanců
-      rowsData.forEach(({emp,days:empDays},ri)=>{
-        const y=startY+hdrH+ri*rowH;
+      empDays.forEach(({emp,days},ri)=>{
+        const y=curY+hdrH+ri*rowH;
         const altBg=ri%2===0?[255,255,255]:[248,249,252];
 
-        // Buňka se jménem
+        // Jméno + role
         doc.setFillColor(...altBg);
-        doc.rect(marginL, y, nameW, rowH, "F");
-        doc.setFont("helvetica","bold"); doc.setFontSize(7.5); doc.setTextColor(26,26,46);
-        doc.text(cz(`${emp.firstName} ${emp.lastName}`).substring(0,18), marginL+2, y+5);
+        doc.rect(mL, y, nameW, rowH, "F");
+        doc.setFont("helvetica","bold"); doc.setFontSize(7); doc.setTextColor(26,26,46);
+        doc.text(cz(`${emp.firstName} ${emp.lastName}`).substring(0,18), mL+2, y+5);
         doc.setFont("helvetica","normal"); doc.setFontSize(5.5); doc.setTextColor(120,120,140);
-        doc.text(cz(emp.role).substring(0,22), marginL+2, y+9);
+        doc.text(cz(emp.role).substring(0,22), mL+2, y+8.5);
 
-        // Buňky dnů
-        for(let i=0;i<days;i++){
-          const di=sec.from+i;
-          const{label,dow}=empDays[di];
-          const x=marginL+nameW+i*dayW;
+        // Dny
+        wDays.forEach((d,di)=>{
+          const {label,dow}=days[d-1];
+          const x=mL+nameW+di*dayW;
           const bg=cellBg(label,dow);
-          const tc=cellTc(label);
+          const tc=cellTc(label,dow);
           doc.setFillColor(...bg);
           doc.rect(x, y, dayW, rowH, "F");
           if(label){
             doc.setTextColor(...tc);
-            const fs=label.includes("-")?5:label.length>4?5:6;
-            doc.setFont("helvetica", label==="V"||label==="SZ"||label==="SO"?"normal":"bold");
+            const fs=label.includes("-")?4.8:label.length>3?5:6.5;
+            doc.setFont("helvetica",["V","SZ","SO","NEM","DOV"].includes(label)?"normal":"bold");
             doc.setFontSize(fs);
-            doc.text(label, x+dayW/2, y+6.5, {align:"center"});
+            // Čas – zobraz na 2 řádky (9–19 → "9" a "19")
+            if(label.includes("–")){
+              const parts=label.split("–");
+              doc.text(parts[0], x+dayW/2, y+3.5, {align:"center"});
+              doc.setFontSize(fs-0.5);
+              doc.text(parts[1], x+dayW/2, y+7, {align:"center"});
+            } else {
+              doc.text(label, x+dayW/2, y+5.5, {align:"center"});
+            }
           }
-        }
+        });
 
         // Horizontální linka
-        doc.setDrawColor(210,212,220);
-        doc.line(marginL, y+rowH, marginL+nameW+days*dayW, y+rowH);
+        doc.setDrawColor(210,212,222);
+        doc.line(mL, y+rowH, mL+nameW+wNum*dayW, y+rowH);
       });
 
-      // Ohraničení sekce
-      doc.setDrawColor(80,82,100);
-      doc.rect(marginL, startY, nameW+days*dayW, hdrH+rowsData.length*rowH);
-      // Vertikální linka za jménem
-      doc.setDrawColor(150,152,170);
-      doc.line(marginL+nameW, startY, marginL+nameW, startY+hdrH+rowsData.length*rowH);
-    };
+      // Ohraničení týdne
+      doc.setDrawColor(80,85,110);
+      const tblH=hdrH+mainEmps.length*rowH;
+      doc.rect(mL, curY, nameW+wNum*dayW, tblH);
+      // Svislá linka za jménem
+      doc.setDrawColor(150,155,180);
+      doc.line(mL+nameW, curY, mL+nameW, curY+tblH);
 
-    // Záhlaví stránky
-    doc.setFont("helvetica","bold"); doc.setFontSize(13); doc.setTextColor(26,26,46);
-    doc.text(cz(`Rozvrh – ${storeName}`), marginL, marginT+6);
-    doc.setFont("helvetica","normal"); doc.setFontSize(8); doc.setTextColor(100,100,120);
-    doc.text(cz(`${MONTHS[month]} ${year}  |  ${getWorkingDays(year,month,holidays)} prac. dni  |  fond ${getWorkingDays(year,month,holidays)*8}h`), marginL, marginT+12);
-    doc.setDrawColor(200,200,210);
-    doc.line(marginL, marginT+14, pageW-marginR, marginT+14);
-
-    // Sekce 1 – první polovina měsíce
-    const sec1Y=marginT+18;
-    drawSection(sections[0], sec1Y);
-
-    // Mezera + Sekce 2 – druhá polovina
-    const sec1H=hdrH+rowsData.length*rowH;
-    const sec2Y=sec1Y+sec1H+10;
-    drawSection(sections[1], sec2Y);
+      curY+=tblH+weekGap;
+    });
 
     // Legenda
-    const legendY=sec2Y+hdrH+rowsData.length*rowH+6;
     const legendItems=[
-      {label:"Prace",bg:[255,255,255],tc:[26,26,46]},
-      {label:"Vikend",bg:[255,248,248],tc:[180,40,40]},
-      {label:"Dovolena",bg:[227,242,253],tc:[21,101,192]},
-      {label:"Nemoc",bg:[245,245,245],tc:[97,97,97]},
-      {label:"Sv.zavreno",bg:[255,235,238],tc:[198,40,40]},
-      {label:"Sv.otevreno",bg:[241,248,233],tc:[51,105,30]},
-      {label:"Volno",bg:[232,245,233],tc:[46,125,50]},
+      {label:"Prace",bg:[255,255,255]},
+      {label:"Vikend",bg:[255,248,248]},
+      {label:"Dovolena",bg:[227,242,253]},
+      {label:"Nemoc",bg:[245,245,245]},
+      {label:"Sv.zavreno",bg:[255,235,238]},
+      {label:"Sv.otevreno",bg:[241,248,233]},
+      {label:"Volno",bg:[232,245,233]},
     ];
-    let lx=marginL;
-    legendItems.forEach(({label,bg,tc})=>{
-      doc.setFillColor(...bg); doc.rect(lx,legendY,3.5,3.5,"F");
-      doc.setDrawColor(160,160,170); doc.rect(lx,legendY,3.5,3.5);
-      doc.setFont("helvetica","normal"); doc.setFontSize(6); doc.setTextColor(...tc);
-      doc.text(label,lx+5,legendY+2.8);
+    let lx=mL;
+    legendItems.forEach(({label,bg})=>{
+      doc.setFillColor(...bg);
+      doc.rect(lx,curY,3,3,"F");
+      doc.setDrawColor(160,160,170);
+      doc.rect(lx,curY,3,3);
+      doc.setFont("helvetica","normal"); doc.setFontSize(6); doc.setTextColor(60,60,80);
+      doc.text(label,lx+4.5,curY+2.5);
       lx+=doc.getTextWidth(label)+10;
     });
+    curY+=8;
+
+    // ── STRANA 2: Přehled hodin ──
+    doc.addPage();
+    doc.setFont("helvetica","bold"); doc.setFontSize(12); doc.setTextColor(26,26,46);
+    doc.text(cz(`Prehled hodin – ${storeName} – ${MONTHS[month]} ${year}`), mL, mT);
+    doc.setDrawColor(200,200,215);
+    doc.line(mL, mT+4, pageW-mR, mT+4);
+
+    const sHdrs=["Zamestnanec","Fond","Naplanováno","Presc.","KDP","Dov.narok","Dov.cerpano","Dov.zbývá"];
+    const sColW=[60,20,24,20,20,24,24,24];
+    let sx=mL; let sy=mT+10;
+    // Záhlaví tabulky
+    sHdrs.forEach((h,hi)=>{
+      doc.setFillColor(26,26,46);
+      doc.rect(sx,sy,sColW[hi],9,"F");
+      doc.setFont("helvetica","bold"); doc.setFontSize(6); doc.setTextColor(255,255,255);
+      doc.text(cz(h),sx+sColW[hi]/2,sy+6,{align:"center"});
+      sx+=sColW[hi];
+    });
+    sy+=9;
+
+    const fmtH2=h=>h===0?"0h":(h%1===0?`${h}h`:`${h.toFixed(1)}h`);
+    const fmtHs=v=>v===null?"—":(v>0?"+":v<0?"-":"")+fmtH2(Math.abs(v||0));
+
+    mainEmps.forEach((emp,ri)=>{
+      // Vypočítej hodiny stejnou logikou jako SummaryTable
+      const empIdx=mainEmps.findIndex(e=>e.id===emp.id);
+      let planned=0;
+      let vacUsed=0;
+      for(let d=1;d<=dim;d++){
+        const date=new Date(year,month,d);
+        const dow=getDow(year,month,d);
+        const ds=fmtDate(year,month,d);
+        const cell=getSchedCell(sched,emp.id,ds,employees);
+        if(cell?.length){
+          const workSegs=cell.filter(s=>s.type==="work"&&s.from&&s.to);
+          const vacSeg=cell.find(s=>s.type==="vacation"||s.type==="sick");
+          const otherAbs=cell.find(s=>s.type!=="work"&&s.type!=="vacation"&&s.type!=="sick");
+          if(workSegs.length){planned+=calcSplitWorked(workSegs,emp.mainStore,stores);if(vacSeg)planned+=(vacSeg.hours||0);}
+          else if(vacSeg||otherAbs)planned+=((vacSeg||otherAbs).hours||0);
+          if(cell.find(s=>s.type==="vacation")) vacUsed+=cell.find(s=>s.type==="vacation").hours||0;
+        } else {
+          const hol=holidays.find(h=>h.date===ds);
+          const pc=getPatCell(patterns,storeId,empIdx,date);
+          if(pc){
+            const st=typeof pc==="object"?pc.shift||"work":pc;
+            const lId=typeof pc==="object"?(pc.loc||storeId):storeId;
+            const[fr,to]=getEmpShiftTimes(emp,lId,st,dow,stores,typeof pc==="object"?pc:null,hol);
+            if(fr&&to)planned+=calcWorked(fr,to,getBreakRules(lId,stores));
+          }
+        }
+      }
+      const fund2=wd*empContractDay(emp);
+      const overtime=planned-fund2;
+      const kdp=calcKdpCumulative(emp,year,month,sched,holidays,stores,patterns,employees,timesheetData);
+      const vacLeft=emp.vacHours-vacUsed;
+      const altBg=ri%2===0?[255,255,255]:[248,249,252];
+      const rowH2=9;
+      sx=mL;
+      const vals=[
+        cz(`${emp.firstName} ${emp.lastName}`),
+        fmtH2(fund2),
+        fmtH2(planned),
+        (overtime>0?"+":"")+fmtH2(overtime),
+        fmtHs(kdp),
+        fmtH2(emp.vacHours),
+        fmtH2(vacUsed),
+        fmtH2(vacLeft),
+      ];
+      const tcs=[
+        [26,26,46],
+        [80,80,100],
+        [26,26,46],
+        overtime>0?[46,125,50]:overtime<0?[198,40,40]:[140,140,140],
+        kdp>0?[21,101,192]:kdp<0?[198,40,40]:[140,140,140],
+        [80,80,100],
+        [21,101,192],
+        vacLeft>0?[46,125,50]:[198,40,40],
+      ];
+      sHdrs.forEach((_,hi)=>{
+        doc.setFillColor(...altBg);
+        doc.rect(sx,sy,sColW[hi],rowH2,"F");
+        doc.setFont("helvetica",hi===0?"bold":"normal"); doc.setFontSize(hi===0?7:7.5);
+        doc.setTextColor(...tcs[hi]);
+        doc.text(vals[hi].substring(0,hi===0?22:8),sx+(hi===0?2:sColW[hi]/2),sy+6,{align:hi===0?"left":"center"});
+        // Linka
+        doc.setDrawColor(210,212,222);
+        doc.line(sx,sy+rowH2,sx+sColW[hi],sy+rowH2);
+        sx+=sColW[hi];
+      });
+      sy+=rowH2;
+    });
+
+    // Ohraničení tabulky přehledu
+    const totalSW=sColW.reduce((a,b)=>a+b,0);
+    doc.setDrawColor(80,85,110);
+    doc.rect(mL,mT+10,totalSW,9+mainEmps.length*9);
 
     doc.save(`Rozvrh_${storeName}_${MONTHS[month]}_${year}.pdf`);
   };
