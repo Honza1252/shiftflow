@@ -2970,22 +2970,20 @@ function MainApp({currentUser, handleLogout}){
     const storeName = stores.find(s=>s.id===storeId)?.name||"";
     const dim = getDim(year,month);
     const mainEmps = employees.filter(e=>e.active&&e.mainStore===storeId);
-    // A4 landscape – 1 tyden = 1 stranka, posledni stranka = prehled hodin
-    const doc = new jsPDF({orientation:"landscape",unit:"mm",format:"a4"});
-    const pageW=297; const pageH=210;
-    const mL=8; const mR=8; const mT=8;
-    const usableW=pageW-mL-mR; // 281mm
+    const doc = new jsPDF({orientation:"portrait",unit:"mm",format:"a4"});
+    const pageW=210; const pageH=297;
+    const mL=8; const mR=8; const mT=8; const mB=6;
+    const usableW=pageW-mL-mR; // 194mm
     const DOW_PDF=["Po","Ut","St","Ct","Pa","So","Ne"];
 
-    // Barvy
     const cellBg=(label,dow)=>{
-      if(!label) return dow>=5?[255,248,248]:[255,255,255];
+      if(!label) return dow>=5?[255,246,246]:[255,255,255];
       if(label==="DOV") return [227,242,253];
       if(label==="NEM") return [245,245,245];
       if(label==="SZ")  return [255,235,238];
       if(label==="SO")  return [241,248,233];
       if(label==="V")   return [232,245,233];
-      if(dow>=5)        return [255,248,248];
+      if(dow>=5)        return [255,246,246];
       return [255,255,255];
     };
     const cellTc=(label,dow)=>{
@@ -2994,11 +2992,11 @@ function MainApp({currentUser, handleLogout}){
       if(label==="SZ")  return [198,40,40];
       if(label==="SO")  return [51,105,30];
       if(label==="V")   return [46,125,50];
-      if(dow>=5)        return [180,50,50];
+      if(dow>=5)        return [170,40,40];
       return [26,26,46];
     };
 
-    // Sestaveni dat pro vsechny dny
+    // Data pro vsechny dny
     const empDays=mainEmps.map(emp=>{
       const empIdx=mainEmps.findIndex(e=>e.id===emp.id);
       const days=[];
@@ -3008,14 +3006,11 @@ function MainApp({currentUser, handleLogout}){
         const ds=fmtDate(year,month,d);
         const hol=holidays.find(h=>h.date===ds);
         const cell=getSchedCell(sched,emp.id,ds,employees);
-        let label=""; let hrs=null;
+        let label="";
         if(cell?.length){
           const ws2=cell.filter(s=>s.type==="work");
-          if(ws2.length){
-            label=ws2.map(s=>s.from&&s.to?shiftLabel(s.from,s.to):"Pr").join("/");
-            const worked=calcSplitWorked(ws2,emp.mainStore,stores);
-            if(worked>0) hrs=worked%1===0?`${worked}h`:`${worked.toFixed(1)}h`;
-          } else { const ab=cell[0]; label=TYPE_SHORT[ab.type]||"V"; }
+          if(ws2.length) label=ws2.map(s=>s.from&&s.to?shiftLabel(s.from,s.to):"Pr").join("/");
+          else { const ab=cell[0]; label=TYPE_SHORT[ab.type]||"V"; }
         } else {
           const pc=getPatCell(patterns,storeId,empIdx,date);
           if(!pc){ label=dow>=5?"":"V"; }
@@ -3023,16 +3018,12 @@ function MainApp({currentUser, handleLogout}){
             const st=typeof pc==="object"?pc.shift||"work":pc;
             const lId=typeof pc==="object"?(pc.loc||storeId):storeId;
             const[fr,to]=getEmpShiftTimes(emp,lId,st,dow,stores,typeof pc==="object"?pc:null,hol);
-            if(fr&&to){
-              label=shiftLabel(fr,to);
-              const w=calcWorked(fr,to,getBreakRules(lId,stores));
-              if(w>0) hrs=w%1===0?`${w}h`:`${w.toFixed(1)}h`;
-            }
+            if(fr&&to) label=shiftLabel(fr,to);
           } else { label=pc==="vacation"?"DOV":pc==="sick"?"NEM":"V"; }
         }
         if(hol&&!hol.open&&!["DOV","NEM"].includes(label)) label="SZ";
         if(hol&&hol.open&&!label) label="SO";
-        days.push({label,hrs,dow,d,hol});
+        days.push({label,dow,d,hol});
       }
       return {emp,days};
     });
@@ -3049,74 +3040,76 @@ function MainApp({currentUser, handleLogout}){
       if(calStart>dim+1) break;
     }
 
-    // Layout pro 1 tyden na strance
-    const nameW=48;
+    // Dynamicky vypocet rozmerun – vse se vejde na 1 stranku
+    const pageHeaderH=12;
+    const legendH=7;
+    const gapH=2;
+    const nameW=42;
     const dayW=(usableW-nameW)/7;
-    // Dynamicka vyska radku podle poctu zamestnancu – vejde se vzdy
-    const availH=pageH-mT-22; // 22mm = stranky header + tyden label
-    const hdrH=12;
-    const rowH=Math.min(14, Math.floor((availH-hdrH)/mainEmps.length));
+    const weekLabelH=4;
+    const hdrH=8;
+    const available=pageH-mT-mB-pageHeaderH-legendH-(weeks.length-1)*gapH;
+    const oneWeekH=available/weeks.length;
+    const rowH=(oneWeekH-weekLabelH-hdrH)/mainEmps.length;
+    // Fonty podle rowH
+    const fNameSize=Math.min(6.5, rowH*1.2);
+    const fCellSize=Math.min(6, rowH*1.1);
+
+    // === STRANA 1: ROZVRH ===
+    // Zahlavi stranky
+    doc.setFont("helvetica","bold"); doc.setFontSize(11); doc.setTextColor(26,26,46);
+    doc.text(cz(`Rozvrh – ${storeName} – ${MONTHS[month]} ${year}`), mL, mT+5);
+    doc.setFont("helvetica","normal"); doc.setFontSize(6.5); doc.setTextColor(90,90,110);
     const wd=getWorkingDays(year,month,holidays);
+    doc.text(cz(`${wd} pracovnich dni  |  fond ${wd*8}h  |  ${mainEmps.length} zamestnancu`), mL, mT+10);
+    doc.setDrawColor(190,192,210);
+    doc.line(mL, mT+11.5, pageW-mR, mT+11.5);
+
+    let curY=mT+pageHeaderH;
 
     weeks.forEach((wDays,wi)=>{
-      if(wi>0) doc.addPage();
-
-      // Stranka header
-      doc.setFont("helvetica","bold"); doc.setFontSize(11); doc.setTextColor(26,26,46);
-      doc.text(cz(`Rozvrh – ${storeName} – ${MONTHS[month]} ${year}`), mL, mT+5);
-      doc.setFont("helvetica","normal"); doc.setFontSize(7); doc.setTextColor(90,90,110);
-      doc.text(cz(`${wd} pracovnich dni  |  fond ${wd*8}h`), mL, mT+10);
-      doc.setDrawColor(190,192,210);
-      doc.line(mL, mT+12, pageW-mR, mT+12);
+      if(wi>0) curY+=gapH;
 
       // Tyden label
-      const firstInMonth=wDays.find(d=>d>=1&&d<=dim)||wDays[0];
+      const firstInMonth=wDays.find(d=>d>=1&&d<=dim)||1;
       const firstDate=new Date(year,month,Math.max(1,firstInMonth));
       const wType=storeId===2?"flat":getWeekType(firstDate);
       const wLabel=wType==="odd"?"Lichy (T1)":wType==="even"?"Sudy (T2)":"Vzor";
       const isoW=getIsoWeek(firstDate);
-      let curY=mT+15;
-      doc.setFont("helvetica","normal"); doc.setFontSize(7); doc.setTextColor(130,130,160);
-      doc.text(`Tyden ${isoW}`, mL, curY+4);
-      doc.setFont("helvetica","bold"); doc.setFontSize(8);
-      if(wType==="odd") doc.setTextColor(30,100,180); else doc.setTextColor(50,150,70);
-      doc.text(wLabel, mL+22, curY+4);
-      curY+=7;
+      doc.setFont("helvetica","normal"); doc.setFontSize(5.5); doc.setTextColor(140,140,165);
+      doc.text(`Tyden ${isoW}`, mL, curY+3);
+      doc.setFont("helvetica","bold"); doc.setFontSize(5.5);
+      if(wType==="odd") doc.setTextColor(30,100,180); else doc.setTextColor(40,140,60);
+      doc.text(wLabel, mL+17, curY+3);
+      curY+=weekLabelH;
 
-      // Zahlavi sloupec Zamestnanec
+      // Zahlavi: jmeno sloupec
       doc.setFillColor(26,26,46);
       doc.rect(mL, curY, nameW, hdrH, "F");
-      doc.setFont("helvetica","bold"); doc.setFontSize(7); doc.setTextColor(255,255,255);
-      doc.text("Zamestnanec / Role", mL+2, curY+8);
+      doc.setFont("helvetica","bold"); doc.setFontSize(6); doc.setTextColor(255,255,255);
+      doc.text("Zamestnanec", mL+2, curY+5.5);
 
-      // Zahlavi 7 dnu
+      // Zahlavi: 7 dnu
       for(let di=0;di<7;di++){
         const d=wDays[di];
         const inMonth=d>=1&&d<=dim;
         const dow=inMonth?getDow(year,month,d):di;
         const ds=inMonth?fmtDate(year,month,d):"";
         const hol=inMonth?holidays.find(h=>h.date===ds):null;
-        const isWE=dow>=5;
-        const isSZ=hol&&!hol.open;
         const x=mL+nameW+di*dayW;
-        if(!inMonth) doc.setFillColor(55,55,65);
-        else if(isSZ) doc.setFillColor(140,30,30);
-        else if(isWE) doc.setFillColor(70,42,52);
+        if(!inMonth) doc.setFillColor(55,55,70);
+        else if(hol&&!hol.open) doc.setFillColor(140,30,30);
+        else if(dow>=5) doc.setFillColor(75,45,55);
         else doc.setFillColor(26,26,46);
         doc.rect(x, curY, dayW, hdrH, "F");
         if(inMonth){
-          doc.setFont("helvetica","bold"); doc.setFontSize(7); doc.setTextColor(255,255,255);
-          doc.text(DOW_PDF[dow], x+dayW/2, curY+4.5, {align:"center"});
-          doc.setFontSize(8.5);
-          doc.text(`${d}${hol?"!":"."}`, x+dayW/2, curY+9.5, {align:"center"});
-          if(hol&&hol.name){
-            doc.setFontSize(5); doc.setTextColor(255,210,210);
-            doc.text(cz(hol.name).substring(0,12), x+dayW/2, curY+12.5, {align:"center"});
-          }
+          doc.setFont("helvetica","bold"); doc.setFontSize(5.5); doc.setTextColor(255,255,255);
+          doc.text(DOW_PDF[dow], x+dayW/2, curY+3.5, {align:"center"});
+          doc.setFontSize(6.5);
+          doc.text(`${d}${hol?"!":"."}`, x+dayW/2, curY+7, {align:"center"});
         } else {
-          doc.setFontSize(7); doc.setTextColor(140,140,155);
-          const prevD=d<=0?getDim(year,month-1>=0?month-1:11,year-(month===0?1:0))+d:d;
-          doc.text(String(prevD>0?prevD:""), x+dayW/2, curY+7, {align:"center"});
+          doc.setFontSize(5.5); doc.setTextColor(130,130,145);
+          doc.text("—", x+dayW/2, curY+5, {align:"center"});
         }
       }
       curY+=hdrH;
@@ -3125,102 +3118,88 @@ function MainApp({currentUser, handleLogout}){
       empDays.forEach(({emp,days},ri)=>{
         const y=curY+ri*rowH;
         const altBg=ri%2===0?[255,255,255]:[248,249,253];
-        // Jmeno+role
+        // Jmeno
         doc.setFillColor(altBg[0],altBg[1],altBg[2]);
         doc.rect(mL, y, nameW, rowH, "F");
-        doc.setFont("helvetica","bold"); doc.setFontSize(7.5); doc.setTextColor(26,26,46);
-        doc.text(cz(`${emp.firstName} ${emp.lastName}`).substring(0,20), mL+2, y+rowH*0.45);
-        doc.setFont("helvetica","normal"); doc.setFontSize(5.5); doc.setTextColor(120,120,145);
-        doc.text(cz(emp.role).substring(0,26)+` · ${empContractDay(emp)}h`, mL+2, y+rowH*0.78);
-
+        doc.setFont("helvetica","bold"); doc.setFontSize(fNameSize); doc.setTextColor(26,26,46);
+        doc.text(cz(`${emp.firstName} ${emp.lastName}`).substring(0,20), mL+2, y+rowH*0.65);
         // 7 dnu
         for(let di=0;di<7;di++){
           const d=wDays[di];
           const inMonth=d>=1&&d<=dim;
           const x=mL+nameW+di*dayW;
           if(!inMonth){
-            doc.setFillColor(250,250,253);
+            doc.setFillColor(251,251,254);
             doc.rect(x, y, dayW, rowH, "F");
           } else {
-            const{label,hrs,dow}=days[d-1];
+            const{label,dow}=days[d-1];
             const bg=cellBg(label,dow);
             const tc=cellTc(label,dow);
             doc.setFillColor(bg[0],bg[1],bg[2]);
             doc.rect(x, y, dayW, rowH, "F");
             if(label){
               doc.setTextColor(tc[0],tc[1],tc[2]);
-              const isShift=label.includes("–");
-              doc.setFont("helvetica",isShift?"bold":"normal");
-              doc.setFontSize(isShift?6.5:8);
-              // Cas na 1 radek (9–19), hodiny pod tim (9h)
-              if(isShift&&hrs){
-                doc.text(label, x+dayW/2, y+rowH*0.42, {align:"center"});
-                doc.setFont("helvetica","normal"); doc.setFontSize(5.5); doc.setTextColor(140,140,160);
-                doc.text(`(${hrs})`, x+dayW/2, y+rowH*0.75, {align:"center"});
-              } else {
-                doc.text(label, x+dayW/2, y+rowH*0.58, {align:"center"});
-              }
+              doc.setFont("helvetica",label.includes("–")?"bold":"normal");
+              doc.setFontSize(fCellSize);
+              doc.text(label, x+dayW/2, y+rowH*0.65, {align:"center"});
             }
           }
         }
         // Horizontalni linka
-        doc.setDrawColor(215,217,228);
+        doc.setDrawColor(218,220,230);
         doc.line(mL, y+rowH, mL+usableW, y+rowH);
       });
 
       // Ohraniceni tydne
       const tblH=hdrH+mainEmps.length*rowH;
-      doc.setDrawColor(80,85,115);
+      doc.setDrawColor(85,88,118);
       doc.rect(mL, curY-hdrH, usableW, tblH);
-      doc.setDrawColor(150,155,185);
+      doc.setDrawColor(155,158,190);
       doc.line(mL+nameW, curY-hdrH, mL+nameW, curY-hdrH+tblH);
-      doc.setDrawColor(210,212,228);
+      doc.setDrawColor(212,214,228);
       for(let di=1;di<7;di++) doc.line(mL+nameW+di*dayW, curY-hdrH, mL+nameW+di*dayW, curY-hdrH+tblH);
-
-      // Legenda na poslednim tydnu
-      if(wi===weeks.length-1){
-        const legendY=curY-hdrH+tblH+5;
-        const items=[
-          {l:"Prace",bg:[255,255,255]},{l:"Vikend",bg:[255,248,248]},
-          {l:"Dovolena",bg:[227,242,253]},{l:"Nemoc",bg:[245,245,245]},
-          {l:"Sv.zavreno",bg:[255,235,238]},{l:"Sv.otevreno",bg:[241,248,233]},
-          {l:"Volno",bg:[232,245,233]},
-        ];
-        let lx=mL;
-        items.forEach(({l,bg})=>{
-          doc.setFillColor(bg[0],bg[1],bg[2]);
-          doc.rect(lx,legendY,3.5,3.5,"F");
-          doc.setDrawColor(160,162,175); doc.rect(lx,legendY,3.5,3.5);
-          doc.setFont("helvetica","normal"); doc.setFontSize(6.5); doc.setTextColor(60,62,80);
-          doc.text(l, lx+5, legendY+2.8);
-          lx+=doc.getTextWidth(l)+11;
-        });
-      }
+      curY+=mainEmps.length*rowH;
     });
 
-    // POSLEDNI STRANKA – Prehled hodin
+    // Legenda
+    curY+=3;
+    const legendItems=[
+      {l:"Prace",bg:[255,255,255]},{l:"Vikend",bg:[255,246,246]},
+      {l:"Dovolena",bg:[227,242,253]},{l:"Nemoc",bg:[245,245,245]},
+      {l:"Sv.zavreno",bg:[255,235,238]},{l:"Sv.otevreno",bg:[241,248,233]},
+      {l:"Volno",bg:[232,245,233]},
+    ];
+    let lx=mL;
+    legendItems.forEach(({l,bg})=>{
+      doc.setFillColor(bg[0],bg[1],bg[2]);
+      doc.rect(lx,curY,3,3,"F");
+      doc.setDrawColor(162,164,178); doc.rect(lx,curY,3,3);
+      doc.setFont("helvetica","normal"); doc.setFontSize(5.5); doc.setTextColor(60,62,80);
+      doc.text(l, lx+4, curY+2.3);
+      lx+=doc.getTextWidth(l)+9;
+    });
+
+    // === STRANA 2: PREHLED HODIN ===
     doc.addPage();
-    doc.setFont("helvetica","bold"); doc.setFontSize(13); doc.setTextColor(26,26,46);
+    doc.setFont("helvetica","bold"); doc.setFontSize(12); doc.setTextColor(26,26,46);
     doc.text(cz(`Prehled hodin – ${storeName} – ${MONTHS[month]} ${year}`), mL, mT+6);
     doc.setFont("helvetica","normal"); doc.setFontSize(7.5); doc.setTextColor(90,90,110);
     doc.text(cz(`${wd} pracovnich dni  |  fond ${wd*8}h  |  ${mainEmps.length} zamestnancu`), mL, mT+12);
     doc.setDrawColor(190,192,210);
     doc.line(mL, mT+14, pageW-mR, mT+14);
 
-    const sHdrs=["Zamestnanec","Mesicni fond","Naplanováno","Presc.","KDP zustaltek","Dov.narok","Dov.cerpano","Dov.zbývá"];
-    const sColW=[60,25,25,22,28,24,25,24];
+    const sHdrs=["Zamestnanec","Fond","Naplan.","Presc.","KDP","Dov.narok","Dov.cerp.","Dov.zbyva"];
+    const sColW=[52,18,20,18,20,22,22,22];
     const totalSW=sColW.reduce((a,b)=>a+b,0);
-    const sRowH=10;
-    let sx=mL; let sy=mT+18;
-    // Zahlavi
+    const sRowH=10; let sx=mL; let sy=mT+19;
     sHdrs.forEach((h,hi)=>{
       doc.setFillColor(26,26,46);
-      doc.rect(sx,sy,sColW[hi],10,"F");
+      doc.rect(sx,sy,sColW[hi],9,"F");
       doc.setFont("helvetica","bold"); doc.setFontSize(6.5); doc.setTextColor(255,255,255);
-      doc.text(cz(h), sx+sColW[hi]/2, sy+7, {align:"center"});
+      doc.text(cz(h), sx+sColW[hi]/2, sy+6.2, {align:"center"});
       sx+=sColW[hi];
     });
-    sy+=10;
+    sy+=9;
 
     const fmtH2=h=>h===0?"0h":(h%1===0?`${h}h`:`${h.toFixed(1)}h`);
     const fmtHs=v=>v===null?"—":(v>=0?"+":"")+fmtH2(v||0);
@@ -3233,11 +3212,11 @@ function MainApp({currentUser, handleLogout}){
         const ds=fmtDate(year,month,d);
         const cell=getSchedCell(sched,emp.id,ds,employees);
         if(cell?.length){
-          const workSegs=cell.filter(s=>s.type==="work"&&s.from&&s.to);
-          const vacSeg=cell.find(s=>s.type==="vacation"||s.type==="sick");
-          const otherAbs=cell.find(s=>s.type!=="work"&&s.type!=="vacation"&&s.type!=="sick");
-          if(workSegs.length){ planned+=calcSplitWorked(workSegs,emp.mainStore,stores); if(vacSeg) planned+=(vacSeg.hours||0); }
-          else if(vacSeg||otherAbs) planned+=((vacSeg||otherAbs).hours||0);
+          const ws=cell.filter(s=>s.type==="work"&&s.from&&s.to);
+          const vac=cell.find(s=>s.type==="vacation"||s.type==="sick");
+          const oth=cell.find(s=>s.type!=="work"&&s.type!=="vacation"&&s.type!=="sick");
+          if(ws.length){ planned+=calcSplitWorked(ws,emp.mainStore,stores); if(vac) planned+=(vac.hours||0); }
+          else if(vac||oth) planned+=((vac||oth).hours||0);
           for(const seg of cell) if(seg.type==="vacation") vacUsed+=(seg.hours||0);
         } else {
           const hol=holidays.find(h=>h.date===ds);
@@ -3246,19 +3225,19 @@ function MainApp({currentUser, handleLogout}){
         }
       }
       const fund2=wd*empContractDay(emp);
-      const overtime=planned-fund2;
+      const ot=planned-fund2;
       const kdp=calcKdpCumulative(emp,year,month,sched,holidays,stores,patterns,employees,timesheetData);
       const vacLeft=emp.vacHours-vacUsed;
       const altBg=ri%2===0?[255,255,255]:[248,249,252];
       sx=mL;
-      const vals=[cz(`${emp.firstName} ${emp.lastName}`),fmtH2(fund2),fmtH2(planned),(overtime>=0?"+":"")+fmtH2(overtime),fmtHs(kdp),fmtH2(emp.vacHours),fmtH2(vacUsed),fmtH2(vacLeft)];
-      const tcs=[[26,26,46],[80,82,100],[26,26,46],overtime>0?[46,125,50]:overtime<0?[198,40,40]:[120,120,130],kdp>0?[21,101,192]:kdp<0?[198,40,40]:[120,120,130],[80,82,100],[21,101,192],vacLeft>0?[46,125,50]:[198,40,40]];
+      const vals=[cz(`${emp.firstName} ${emp.lastName}`),fmtH2(fund2),fmtH2(planned),(ot>=0?"+":"")+fmtH2(ot),fmtHs(kdp),fmtH2(emp.vacHours),fmtH2(vacUsed),fmtH2(vacLeft)];
+      const tcs=[[26,26,46],[80,82,100],[26,26,46],ot>0?[46,125,50]:ot<0?[198,40,40]:[120,120,130],kdp>0?[21,101,192]:kdp<0?[198,40,40]:[120,120,130],[80,82,100],[21,101,192],vacLeft>0?[46,125,50]:[198,40,40]];
       sHdrs.forEach((_,hi)=>{
         doc.setFillColor(altBg[0],altBg[1],altBg[2]);
         doc.rect(sx,sy,sColW[hi],sRowH,"F");
         doc.setFont("helvetica",hi===0?"bold":"normal"); doc.setFontSize(hi===0?8:8);
         doc.setTextColor(tcs[hi][0],tcs[hi][1],tcs[hi][2]);
-        doc.text(vals[hi].substring(0,hi===0?26:8), sx+(hi===0?3:sColW[hi]/2), sy+6.8, {align:hi===0?"left":"center"});
+        doc.text(vals[hi].substring(0,hi===0?26:8), sx+(hi===0?2:sColW[hi]/2), sy+6.8, {align:hi===0?"left":"center"});
         doc.setDrawColor(210,212,222);
         doc.line(sx,sy+sRowH,sx+sColW[hi],sy+sRowH);
         sx+=sColW[hi];
@@ -3266,7 +3245,7 @@ function MainApp({currentUser, handleLogout}){
       sy+=sRowH;
     });
     doc.setDrawColor(80,85,115);
-    doc.rect(mL, mT+28, totalSW, mainEmps.length*sRowH+10);
+    doc.rect(mL, mT+28, totalSW, mainEmps.length*sRowH+9);
 
     doc.save(`Rozvrh_${storeName}_${MONTHS[month]}_${year}.pdf`);
   };
