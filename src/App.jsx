@@ -74,6 +74,16 @@ const TYPE_META = {
 };
 const TYPE_SHORT = { vacation:"DOV", sick:"NEM", dayOff:"V", obstacle:"PŘE", holidayOpen:"SV.O", holidayClose:"SV.Z" };
 const STORE_SHORT = {1:"ST", 2:"BL", 3:"PE"};
+
+// Převod české diakritiky na ASCII pro PDF export (jsPDF helvetica nepodporuje Unicode)
+function cz(s){ return String(s)
+  .replace(/[áÁ]/g,"a").replace(/[éÉ]/g,"e").replace(/[íÍ]/g,"i")
+  .replace(/[óÓ]/g,"o").replace(/[úÚůŮ]/g,"u").replace(/[ýÝ]/g,"y")
+  .replace(/[čČ]/g,"c").replace(/[ďĎ]/g,"d").replace(/[ěĚ]/g,"e")
+  .replace(/[ňŇ]/g,"n").replace(/[řŘ]/g,"r").replace(/[šŠ]/g,"s")
+  .replace(/[ťŤ]/g,"t").replace(/[žŽ]/g,"z").replace(/[ľĽ]/g,"l")
+  .replace(/[ôÔ]/g,"o").replace(/[ä]/g,"a").replace(/[ö]/g,"o");
+}
 const DOW_LBL = ["Po","Út","St","Čt","Pá","So","Ne"];
 const MONTHS = ["Leden","Únor","Březen","Duben","Květen","Červen","Červenec","Srpen","Září","Říjen","Listopad","Prosinec"];
 
@@ -1761,14 +1771,7 @@ function TimesheetView({employee, year, month, holidays, stores, sched, employee
 
   // ── Export PDF – A4 na výšku, jedna stránka ──
   const exportPdf = () => {
-    // Převod české diakritiky na ASCII (jsPDF helvetica nepodporuje Unicode)
-    const cz = (s) => String(s)
-      .replace(/[áÁ]/g,"a").replace(/[éÉ]/g,"e").replace(/[íÍ]/g,"i")
-      .replace(/[óÓ]/g,"o").replace(/[úÚůŮ]/g,"u").replace(/[ýÝ]/g,"y")
-      .replace(/[čČ]/g,"c").replace(/[ďĎ]/g,"d").replace(/[ěĚ]/g,"e")
-      .replace(/[ňŇ]/g,"n").replace(/[řŘ]/g,"r").replace(/[šŠ]/g,"s")
-      .replace(/[ťŤ]/g,"t").replace(/[žŽ]/g,"z").replace(/[ľĽ]/g,"l")
-      .replace(/[ôÔ]/g,"o").replace(/[ä]/g,"a").replace(/[ö]/g,"o");
+    // cz() je globální funkce definovaná níže
     const jsPDFLib = jsPDF;
     // A4 portrait: 210 x 297 mm, použitelná šířka ~182 mm (margin 14 mm)
     const doc = new jsPDFLib({ orientation:"portrait", unit:"mm", format:"a4" });
