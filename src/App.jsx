@@ -1696,23 +1696,45 @@ function TimesheetView({employee, year, month, holidays, stores, sched, employee
     XLSX.writeFile(wb, `Vykaz_${employee.firstName}_${employee.lastName}_${MONTHS[month]}_${year}.xlsx`);
   };
 
-  // ── Export PDF (tisk) ──
+  // ── Export PDF – A4 na výšku, jedna stránka ──
   const exportPdf = () => {
     const jsPDFLib = window.jspdf?.jsPDF || window.jsPDF;
     if(!jsPDFLib){ alert("PDF export se načítá, zkuste za chvíli."); return; }
-    const doc = new jsPDFLib({ orientation:"landscape", unit:"mm", format:"a4" });
+    // A4 portrait: 210 x 297 mm, použitelná šířka ~182 mm (margin 14 mm)
+    const doc = new jsPDFLib({ orientation:"portrait", unit:"mm", format:"a4" });
     const storeName = stores.find(s=>s.id===employee.mainStore)?.name||"";
+    const pageW = 210;
+    const marginL = 14;
+    const usableW = pageW - marginL * 2; // 182 mm
 
-    // Záhlaví
+    // ── Záhlaví ──
     doc.setFont("helvetica","bold");
-    doc.setFontSize(14);
-    doc.text(`Výkaz práce – ${employee.firstName} ${employee.lastName}`, 14, 14);
+    doc.setFontSize(13);
+    doc.text(`Výkaz práce – ${employee.firstName} ${employee.lastName}`, marginL, 14);
     doc.setFont("helvetica","normal");
-    doc.setFontSize(9);
-    doc.text(`${MONTHS[month]} ${year}  |  Fond: ${fund}h  |  Prodejna: ${storeName}  |  Role: ${employee.role}`, 14, 21);
+    doc.setFontSize(8);
+    doc.text(`${MONTHS[month]} ${year}  |  Fond: ${fund}h  |  Prodejna: ${storeName}  |  Role: ${employee.role}`, marginL, 20);
+    // Oddělovací linka
+    doc.setDrawColor(200,200,210);
+    doc.line(marginL, 22, pageW - marginL, 22);
 
-    // Tabulka dnů
-    const head = [["Den","Datum","Rozvrh","Příchod","Odchod","Přest.od","Přest.do","Odprac.","DOV h","Admin","Roz.1","Roz.2","Typ dne"]];
+    // ── Zkrácené popisky typů dne ──
+    const typeLabelShort = {
+      work:         "Práce",
+      dayOff:       "Volno",
+      vacation:     "Dovolená",
+      sick:         "Nemoc",
+      obstacle:     "Překážka",
+      holidayOpen:  "Sv.otevř.",
+      holidayClose: "Sv.zavř.",
+      "work+vacation": "Práce+DOV",
+      ocr:          "OČR",
+      other:        "Jiné",
+    };
+
+    // ── Tabulka dnů ──
+    const fmtHx = h => h===0?"—":(h%1===0?`${h}h`:`${h.toFixed(1)}h`);
+    const head = [["Den","Datum","Rozvrh","Příchod","Odchod","Př.od","Př.do","Odprac.","DOV","Adm.","R1","R2","Typ dne"]];
     const body = rowData.map(({d,dow,row,worked,effectiveType,schedDay,vacH,schedVacH})=>{
       const schedLbl = schedDay?.from?`${schedDay.from}–${schedDay.to}`:(schedDay?.type==="vacation"?"DOV":schedDay?.type==="sick"?"NEM":"—");
       const dovH = (effectiveType==="work+vacation"||effectiveType==="vacation"||effectiveType==="sick")
@@ -1723,68 +1745,132 @@ function TimesheetView({employee, year, month, holidays, stores, sched, employee
         schedLbl,
         row.arrival||"—", row.departure||"—",
         row.breakFrom||"—", row.breakTo||"—",
-        worked>0?(worked%1===0?`${worked}h`:`${worked.toFixed(1)}h`):"—",
-        dovH>0?(dovH%1===0?`${dovH}h`:`${dovH.toFixed(1)}h`):"—",
+        worked>0?fmtHx(worked):"—",
+        dovH>0?fmtHx(dovH):"—",
         row.admin?`${row.admin}h`:"—",
         row.roz1?`${row.roz1}×`:"—",
         row.roz2?`${row.roz2}×`:"—",
-        TYPE_META[effectiveType]?.label||effectiveType,
+        typeLabelShort[effectiveType]||effectiveType,
       ];
     });
 
     doc.autoTable({
       head, body,
-      startY: 26,
-      styles:{ fontSize:7.5, cellPadding:1.5, font:"helvetica" },
-      headStyles:{ fillColor:[26,26,46], textColor:255, fontStyle:"bold", fontSize:7 },
+      startY: 25,
+      margin:{ left: marginL, right: marginL },
+      styles:{ fontSize:7, cellPadding:1.2, font:"helvetica", overflow:"linebreak" },
+      headStyles:{ fillColor:[26,26,46], textColor:255, fontStyle:"bold", fontSize:6.5, cellPadding:1.5 },
       columnStyles:{
-        0:{cellWidth:8}, 1:{cellWidth:13}, 2:{cellWidth:22}, 3:{cellWidth:14},
-        4:{cellWidth:14}, 5:{cellWidth:14}, 6:{cellWidth:14}, 7:{cellWidth:14},
-        8:{cellWidth:12}, 9:{cellWidth:12}, 10:{cellWidth:11}, 11:{cellWidth:11}, 12:{cellWidth:22},
+        0:{cellWidth:8},   // Den
+        1:{cellWidth:12},  // Datum
+        2:{cellWidth:20},  // Rozvrh
+        3:{cellWidth:14},  // Příchod
+        4:{cellWidth:14},  // Odchod
+        5:{cellWidth:12},  // Př.od
+        6:{cellWidth:12},  // Př.do
+        7:{cellWidth:14},  // Odprac.
+        8:{cellWidth:11},  // DOV
+        9:{cellWidth:10},  // Adm.
+        10:{cellWidth:9},  // R1
+        11:{cellWidth:9},  // R2
+        12:{cellWidth:37}, // Typ dne – zbytek
       },
       alternateRowStyles:{ fillColor:[247,248,252] },
-      didParseCell: (data)=>{
+      didParseCell:(data)=>{
         if(data.section==="body"){
           const dow = rowData[data.row.index]?.dow;
-          if(dow>=5) data.cell.styles.fillColor=[255,248,248];
-          const et = rowData[data.row.index]?.effectiveType;
-          if(et==="vacation"||et==="sick") data.cell.styles.fillColor=[232,244,253];
-          if(et==="holidayClose") data.cell.styles.fillColor=[255,235,238];
-          if(et==="holidayOpen") data.cell.styles.fillColor=[241,248,233];
+          const et  = rowData[data.row.index]?.effectiveType;
+          if(dow>=5)                            data.cell.styles.fillColor=[255,248,248];
+          if(et==="vacation"||et==="sick")      data.cell.styles.fillColor=[232,244,253];
+          if(et==="holidayClose")               data.cell.styles.fillColor=[255,235,238];
+          if(et==="holidayOpen")                data.cell.styles.fillColor=[241,248,233];
+          if(et==="dayOff")                     data.cell.styles.fillColor=[232,245,233];
         }
       },
     });
 
-    // Souhrn
-    const sy = doc.lastAutoTable.finalY + 6;
-    doc.setFont("helvetica","bold"); doc.setFontSize(9);
-    doc.text("Souhrn měsíce", 14, sy);
-    doc.setFont("helvetica","normal"); doc.setFontSize(8);
-    const fmtHx = h => h===0?"—":(h%1===0?`${h}h`:`${h.toFixed(1)}h`);
-    const cols = [
-      ["Fond", fmtHx(fund)], ["Odprac.", fmtHx(totWorked)], ["Dovolená", fmtHx(totVac)],
-      ["Nemoc", fmtHx(totSick)], ["Sv.zavřeno", fmtHx(totHolClose)], ["Sv.otevřeno", fmtHx(totHolOpen)],
-      ["Víkendy", fmtHx(soH+neH)], ["Celkem", fmtHx(totAll)],
-      ["Přesčas", (overtime>=0?"+":"")+fmtHx(Math.abs(overtime))],
-      ["Stravenky", tix>0?`${tix} ks`:"—"],
+    // ── Souhrn měsíce – barevné dlaždice jako na webu ──
+    const sy = doc.lastAutoTable.finalY + 5;
+    const tileH   = 12;   // výška dlaždice
+    const tileGap = 2;    // mezera
+    const cols1   = 6;    // počet dlaždic v řadě 1
+    const tileW   = (usableW - (cols1-1)*tileGap) / cols1;
+
+    // Nadpis sekce
+    doc.setFont("helvetica","bold"); doc.setFontSize(8.5);
+    doc.setTextColor(26,26,46);
+    doc.text("Souhrn měsíce", marginL, sy);
+
+    const tiles1 = [
+      { label:"Fond hodin",    val:fmtHx(fund),                        bg:[227,242,253], tc:[21,101,192] },
+      { label:"Odpracováno",   val:fmtHx(totWorked),                   bg:[232,245,233], tc:[46,125,50]  },
+      { label:"Dovolená",      val:fmtHx(totVac),                      bg:[232,234,246], tc:[57,73,171]  },
+      { label:"Nemoc",         val:fmtHx(totSick),                     bg:[245,245,245], tc:[97,97,97]   },
+      { label:"Sv.zavřeno",    val:fmtHx(totHolClose),                 bg:[255,235,238], tc:[198,40,40]  },
+      { label:"Sv.otevřeno",   val:fmtHx(totHolOpen),                  bg:[241,248,233], tc:[51,105,30]  },
     ];
-    let sx = 14;
-    cols.forEach(([lbl,val])=>{
-      doc.setFont("helvetica","bold"); doc.text(lbl, sx, sy+5);
-      doc.setFont("helvetica","normal"); doc.text(val, sx, sy+9);
-      sx += 27;
+    const tiles2 = [
+      { label:"Víkendy",       val:fmtHx(soH+neH),                     bg:[252,228,236], tc:[194,24,91]  },
+      { label:"OČR + Jiné",    val:fmtHx(totOcr+totOther),             bg:[255,243,224], tc:[230,81,0]   },
+      { label:"Celkem hod.",   val:fmtHx(totAll),                      bg:[237,231,246], tc:[69,39,160]  },
+      { label:"Přesčas/minus", val:(overtime>=0?"+":"")+fmtHx(Math.abs(overtime)), bg:overtime>=0?[232,245,233]:[255,235,238], tc:overtime>=0?[46,125,50]:[198,40,40] },
+      { label:"Admin práce",   val:totAdmin>0?fmtHx(totAdmin):"—",     bg:[241,248,241], tc:[46,125,50]  },
+      { label:"Stravenky",     val:tix>0?`${tix} ks`:"—",              bg:[249,251,231], tc:[130,119,23] },
+    ];
+
+    const drawTiles = (tiles, startX, startY) => {
+      tiles.forEach((t, i)=>{
+        const tx = startX + i*(tileW+tileGap);
+        // Barevné pozadí
+        doc.setFillColor(...t.bg);
+        doc.roundedRect(tx, startY+1, tileW, tileH, 1, 1, "F");
+        // Label
+        doc.setFont("helvetica","normal"); doc.setFontSize(5.5);
+        doc.setTextColor(...t.tc);
+        doc.text(t.label.toUpperCase(), tx+tileW/2, startY+4.5, {align:"center"});
+        // Hodnota
+        doc.setFont("helvetica","bold"); doc.setFontSize(9);
+        doc.text(t.val, tx+tileW/2, startY+10, {align:"center"});
+      });
+    };
+
+    drawTiles(tiles1, marginL, sy+1);
+    drawTiles(tiles2, marginL, sy+1+tileH+tileGap);
+
+    // ── KDP – vizuální blok ──
+    const ky = sy + 1 + (tileH+tileGap)*2 + 6;
+    doc.setFont("helvetica","bold"); doc.setFontSize(8.5);
+    doc.setTextColor(26,26,46);
+    doc.text("KDP – Konto přesčasových hodin", marginL, ky);
+
+    const kdpTiles = [
+      { label:"KDP vstup (z min. měsíce)", val:fmtHsign(kdpVstup),   bg:[232,234,246], tc:[57,73,171]  },
+      { label:"Přesčas tento měsíc",       val:fmtHsign(overtime),   bg:overtime>=0?[232,245,233]:[255,235,238], tc:overtime>=0?[46,125,50]:[198,40,40] },
+      { label:"KDP proplaceno",            val:kdpPaidThis>0?`${kdpPaidThis}h`:"— (nic)", bg:[255,243,224], tc:[230,81,0] },
+      { label:"KDP výstup (příští měsíc)", val:fmtHsign(kdpVystup),  bg:kdpVystup>=0?[227,242,253]:[255,235,238], tc:kdpVystup>=0?[21,101,192]:[198,40,40] },
+    ];
+    const kdpTileW = (usableW - 3*tileGap) / 4;
+    kdpTiles.forEach((t, i)=>{
+      const tx = marginL + i*(kdpTileW+tileGap);
+      doc.setFillColor(...t.bg);
+      doc.roundedRect(tx, ky+2, kdpTileW, tileH+2, 1, 1, "F");
+      doc.setFont("helvetica","normal"); doc.setFontSize(5.5);
+      doc.setTextColor(...t.tc);
+      doc.text(t.label.toUpperCase(), tx+kdpTileW/2, ky+6, {align:"center"});
+      doc.setFont("helvetica","bold"); doc.setFontSize(10);
+      doc.text(t.val, tx+kdpTileW/2, ky+12, {align:"center"});
     });
 
-    // KDP
-    const ky = sy + 15;
-    doc.setFont("helvetica","bold"); doc.setFontSize(9);
-    doc.text("KDP – Konto přesčasových hodin", 14, ky);
+    // ── Podpis – pravý dolní roh ──
+    const pageH = 297;
     doc.setFont("helvetica","normal"); doc.setFontSize(8);
-    doc.text(`Vstup: ${fmtHsign(kdpVstup)}`, 14, ky+6);
-    doc.text(`Přesčas tento měsíc: ${fmtHsign(overtime)}`, 55, ky+6);
-    doc.text(`Proplaceno: ${kdpPaidThis>0?`${kdpPaidThis}h`:"—"}`, 115, ky+6);
-    doc.setFont("helvetica","bold");
-    doc.text(`Výstup do příštího měsíce: ${fmtHsign(kdpVystup)}`, 155, ky+6);
+    doc.setTextColor(100,100,100);
+    doc.text("Podpis zaměstnance:", pageW - marginL - 70, pageH - 14);
+    doc.setDrawColor(80,80,80);
+    doc.line(pageW - marginL - 55, pageH - 14, pageW - marginL, pageH - 14);
+    doc.setFontSize(7);
+    doc.setTextColor(160,160,160);
+    doc.text(`${employee.firstName} ${employee.lastName}`, pageW - marginL - 55, pageH - 10);
 
     doc.save(`Vykaz_${employee.firstName}_${employee.lastName}_${MONTHS[month]}_${year}.pdf`);
   };
