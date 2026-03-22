@@ -1691,6 +1691,47 @@ function TimesheetView({employee, year, month, holidays, stores, sched, employee
 
     const ws = XLSX.utils.aoa_to_sheet(wsData);
     ws["!cols"] = [6,8,12,8,8,8,8,8,7,7,6,6,16].map(w=>({wch:w}));
+
+    // Barevné řádky – header řádky dat začínají na indexu 4 (0-based)
+    const dataStartRow = 4; // řádky 0-3 jsou hlavička
+    const xlColors = {
+      work:         null,                      // bílá – výchozí
+      dayOff:       "E8F5E9",                  // zelená
+      vacation:     "E3F2FD",                  // modrá
+      sick:         "F5F5F5",                  // šedá
+      obstacle:     "FFF3E0",                  // oranžová
+      holidayOpen:  "F1F8E9",                  // světle zelená
+      holidayClose: "FFEBEE",                  // červená
+      "work+vacation": "EDE7F6",               // fialová
+      ocr:          "FFF9C4",                  // žlutá
+      other:        "FFF9C4",                  // žlutá
+    };
+    const weekendColor = "FFF8F8";             // víkend – světle růžová
+
+    rowData.forEach(({dow, effectiveType}, i) => {
+      const excelRow = dataStartRow + i; // 0-based row index
+      const cols = 13; // počet sloupců A–M
+      let bgColor = xlColors[effectiveType] || null;
+      if(dow >= 5 && !bgColor) bgColor = weekendColor; // So/Ne bez jiného typu
+      if(!bgColor) return; // bílá – nic nedělej
+
+      for(let c = 0; c < cols; c++){
+        const cellAddr = XLSX.utils.encode_cell({r: excelRow, c});
+        if(!ws[cellAddr]) ws[cellAddr] = {t:"s", v:""};
+        if(!ws[cellAddr].s) ws[cellAddr].s = {};
+        ws[cellAddr].s.fill = { fgColor: { rgb: bgColor }, patternType: "solid" };
+      }
+    });
+
+    // Záhlaví tabulky (řádek 3) – tmavé pozadí
+    for(let c = 0; c < 13; c++){
+      const cellAddr = XLSX.utils.encode_cell({r: 3, c});
+      if(!ws[cellAddr]) ws[cellAddr] = {t:"s", v:""};
+      if(!ws[cellAddr].s) ws[cellAddr].s = {};
+      ws[cellAddr].s.fill = { fgColor: { rgb: "1A1A2E" }, patternType: "solid" };
+      ws[cellAddr].s.font = { color: { rgb: "FFFFFF" }, bold: true };
+    }
+
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, `${MONTHS[month]} ${year}`);
     XLSX.writeFile(wb, `Vykaz_${employee.firstName}_${employee.lastName}_${MONTHS[month]}_${year}.xlsx`);
@@ -1873,12 +1914,16 @@ function TimesheetView({employee, year, month, holidays, stores, sched, employee
     const pageH = 297;
     doc.setFont("helvetica","normal"); doc.setFontSize(8);
     doc.setTextColor(100,100,100);
-    doc.text("Podpis zamestnance:", pageW - marginL - 70, pageH - 14);
+    // "Podpis zamestnance: " + čára hned za textem
+    const podpisLabel = "Podpis zamestnance: ";
+    const podpisLabelW = doc.getTextWidth(podpisLabel);
+    const podpisX = pageW - marginL - 80;
+    doc.text(podpisLabel, podpisX, pageH - 14);
     doc.setDrawColor(80,80,80);
-    doc.line(pageW - marginL - 55, pageH - 14, pageW - marginL, pageH - 14);
+    doc.line(podpisX + podpisLabelW + 1, pageH - 14, pageW - marginL, pageH - 14);
     doc.setFontSize(7);
     doc.setTextColor(160,160,160);
-    doc.text(cz(`${employee.firstName} ${employee.lastName}`), pageW - marginL - 55, pageH - 10);
+    doc.text(cz(`${employee.firstName} ${employee.lastName}`), podpisX + podpisLabelW + 1, pageH - 10);
 
     doc.save(`Vykaz_${employee.firstName}_${employee.lastName}_${MONTHS[month]}_${year}.pdf`);
   };
