@@ -1236,9 +1236,97 @@ function SettingsView({holidays,setHolidays,actions,setActions,stores,setStores,
 }
 
 // ─── EMPLOYEES VIEW ──────────────────────────────────────────
+function LoginModal({emp, onClose}){
+  const [appUser, setAppUser] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [loginVal, setLoginVal] = useState("");
+  const [pwd1, setPwd1] = useState("");
+  const [pwd2, setPwd2] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [msg, setMsg] = useState(null);
+
+  useEffect(()=>{
+    (async()=>{
+      const {data} = await supabase.from("app_users").select("login,role,store_ids").eq("emp_id", emp.id).single();
+      setAppUser(data||null);
+      setLoginVal(data?.login || (emp.lastName||emp.firstName||"").toLowerCase().replace(/\s+/g,""));
+      setLoading(false);
+    })();
+  },[emp.id]);
+
+  const roleOpts = [{value:"zamestnanec",label:"Prodavač"},{value:"vedouci",label:"Vedoucí"},{value:"admin",label:"Admin"}];
+  const [role, setRole] = useState(appUser?.role||"zamestnanec");
+  useEffect(()=>{ if(appUser) setRole(appUser.role); },[appUser]);
+
+  const handleSave = async()=>{
+    if(!loginVal.trim()){setMsg({err:true,text:"Zadejte přihlašovací jméno."});return;}
+    if(pwd1 && pwd1!==pwd2){setMsg({err:true,text:"Hesla se neshodují."});return;}
+    if(pwd1 && pwd1.length<4){setMsg({err:true,text:"Heslo musí mít alespoň 4 znaky."});return;}
+    setSaving(true); setMsg(null);
+    const storeIds = [emp.mainStore,...(emp.extraStores||[])];
+    const oldLogin = appUser?.login||null;
+    // Upsert přihlašovacích údajů
+    const hash = pwd1 ? await sha256hex(pwd1) : null;
+    const upsertData = {
+      emp_id: emp.id, login: loginVal.trim().toLowerCase(),
+      role, name: (emp.firstName+" "+emp.lastName).trim(),
+      store_ids: storeIds,
+    };
+    if(hash) upsertData.password_hash = hash;
+    // Pokud existuje starý záznam a login se mění, smaž starý
+    if(oldLogin && oldLogin !== upsertData.login){
+      await supabase.from("app_users").delete().eq("login", oldLogin);
+    }
+    if(!hash && !appUser){
+      setMsg({err:true,text:"Nový účet musí mít heslo."});setSaving(false);return;
+    }
+    let error;
+    if(!hash){
+      // Jen update loginu/role bez změny hesla
+      ({error} = await supabase.from("app_users").update({login:upsertData.login,role,name:upsertData.name,store_ids:storeIds}).eq("emp_id",emp.id));
+    } else {
+      ({error} = await supabase.from("app_users").upsert(upsertData, {onConflict:"emp_id"}));
+    }
+    setSaving(false);
+    if(error){ setMsg({err:true,text:"Chyba: "+error.message}); }
+    else { setMsg({err:false,text:"Uloženo ✓"}); setPwd1(""); setPwd2(""); setAppUser(u=>({...u,...upsertData})); }
+  };
+
+  return <div style={{display:"flex",flexDirection:"column",gap:14}}>
+    {loading
+      ? <div style={{textAlign:"center",padding:20,color:"#aaa"}}>Načítám...</div>
+      : <>
+        <div style={{padding:"10px 14px",background:appUser?"#e8f5e9":"#fff8e1",borderRadius:8,fontSize:13,color:appUser?"#2e7d32":"#e65100",fontWeight:600}}>
+          {appUser ? `✅ Účet existuje — login: ${appUser.login}` : "⚠️ Zaměstnanec zatím nemá přihlašovací účet"}
+        </div>
+        <FInput label="Přihlašovací jméno" value={loginVal} onChange={setLoginVal} placeholder="např. novak"/>
+        <div>
+          <FLabel>Role</FLabel>
+          <select value={role} onChange={e=>setRole(e.target.value)}
+            style={{padding:"7px 10px",borderRadius:7,border:`1.5px solid ${C.border}`,fontSize:14,background:"#fff",width:"100%",boxSizing:"border-box"}}>
+            {roleOpts.map(o=><option key={o.value} value={o.value}>{o.label}</option>)}
+          </select>
+        </div>
+        <div style={{padding:"12px 14px",background:"#f8f9ff",borderRadius:8,display:"flex",flexDirection:"column",gap:10}}>
+          <FLabel>{appUser?"Změna hesla (ponech prázdné pro beze změny)":"Heslo *"}</FLabel>
+          <input type="password" value={pwd1} onChange={e=>setPwd1(e.target.value)} placeholder="Nové heslo"
+            style={{padding:"7px 10px",borderRadius:7,border:`1.5px solid ${C.border}`,fontSize:14,width:"100%",boxSizing:"border-box"}}/>
+          <input type="password" value={pwd2} onChange={e=>setPwd2(e.target.value)} placeholder="Zopakujte heslo"
+            style={{padding:"7px 10px",borderRadius:7,border:`1.5px solid ${C.border}`,fontSize:14,width:"100%",boxSizing:"border-box"}}/>
+        </div>
+        {msg&&<div style={{padding:"8px 12px",borderRadius:7,background:msg.err?"#ffebee":"#e8f5e9",color:msg.err?"#c62828":"#2e7d32",fontSize:13,fontWeight:600}}>{msg.text}</div>}
+        <div style={{display:"flex",gap:8,marginTop:4}}>
+          <Btn onClick={handleSave} disabled={saving} style={{flex:1}}>{saving?"Ukládám...":"Uložit"}</Btn>
+          <Btn variant="secondary" onClick={onClose} style={{flex:1}}>Zavřít</Btn>
+        </div>
+      </>}
+  </div>;
+}
+
 function EmployeesView({employees,setEmployees,stores}){
   const [editEmp,setEditEmp]=useState(null);
   const [showNew,setShowNew]=useState(false);
+  const [loginEmp,setLoginEmp]=useState(null);
   const newEmpTemplate={firstName:"",lastName:"",mainStore:1,extraStores:[],role:"",contractHoursDay:8,contractHoursWeek:40,vacHours:160,kdpStart:0,active:true,customTimes:{}};
 
   return <div>
@@ -1275,7 +1363,10 @@ function EmployeesView({employees,setEmployees,stores}){
               </td>
               <td style={{padding:"8px 10px",borderBottom:`1px solid ${C.border}`}}>{emp.vacHours}h/rok</td>
               <td style={{padding:"8px 10px",borderBottom:`1px solid ${C.border}`}}><Badge color={emp.active?"#e8f5e9":"#ffebee"} textColor={emp.active?"#2e7d32":"#c62828"}>{emp.active?"Aktivní":"Neaktivní"}</Badge></td>
-              <td style={{padding:"8px 10px",borderBottom:`1px solid ${C.border}`}}><Btn small variant="secondary" onClick={()=>setEditEmp(emp)}>Upravit</Btn></td>
+              <td style={{padding:"8px 10px",borderBottom:`1px solid ${C.border}`,whiteSpace:"nowrap"}}>
+                <Btn small variant="secondary" onClick={()=>setEditEmp(emp)} style={{marginRight:6}}>Upravit</Btn>
+                <Btn small variant="ghost" onClick={()=>setLoginEmp(emp)}>🔑 Přihlášení</Btn>
+              </td>
             </tr>;
           })}</tbody>
         </table>
@@ -1285,6 +1376,9 @@ function EmployeesView({employees,setEmployees,stores}){
       {editEmp&&<EmployeeForm initial={editEmp} stores={stores}
         onSave={f=>{setEmployees(p=>p.map(e=>e.id===editEmp.id?{...e,...f}:e));setEditEmp(null);}}
         onClose={()=>setEditEmp(null)}/>}
+    </Modal>
+    <Modal open={!!loginEmp} onClose={()=>setLoginEmp(null)} title={`Přihlašovací údaje – ${loginEmp?.firstName} ${loginEmp?.lastName}`} width={480}>
+      {loginEmp&&<LoginModal emp={loginEmp} onClose={()=>setLoginEmp(null)}/>}
     </Modal>
     <Modal open={showNew} onClose={()=>setShowNew(false)} title="Přidat zaměstnance" width={600}>
       <EmployeeForm initial={newEmpTemplate} stores={stores}
@@ -2105,38 +2199,50 @@ function SummaryTable({storeId, employees, year, month, sched, holidays, stores,
 
 // ─── MAIN APP ────────────────────────────────────────────────
 // ─── UŽIVATELÉ / PŘIHLÁŠENÍ ──────────────────────────────────
-const USERS = [
-  {login:"jankovský", pwd:"Admin2026",  role:"admin",       name:"Jankovský",  storeIds:[1,2,3]},
-  {login:"vones",     pwd:"Vedouci1",   role:"vedouci",     name:"Voneš",      storeIds:[1]},
-  {login:"mika",      pwd:"Vedouci1",   role:"vedouci",     name:"Míka",       storeIds:[2]},
-  {login:"martinec",  pwd:"Vedouci1",   role:"vedouci",     name:"Martinec",   storeIds:[3]},
-  {login:"susta",     pwd:"Smena123",   role:"zamestnanec", name:"Šusta",      storeIds:[1,2]},
-  {login:"molacek",   pwd:"Smena123",   role:"zamestnanec", name:"Moláček",    storeIds:[1]},
-  {login:"stanek",    pwd:"Smena123",   role:"zamestnanec", name:"Staněk",     storeIds:[1]},
-  {login:"kominkova", pwd:"Smena123",   role:"zamestnanec", name:"Komínková",  storeIds:[1]},
-  {login:"pribova",   pwd:"Smena123",   role:"zamestnanec", name:"Přibová",    storeIds:[1]},
-  {login:"havelka",   pwd:"Smena123",   role:"zamestnanec", name:"Havelka",    storeIds:[1]},
-  {login:"kriz",      pwd:"Smena123",   role:"zamestnanec", name:"Kříž",       storeIds:[1,2]},
-  {login:"stefanova", pwd:"Smena123",   role:"zamestnanec", name:"Štefanová",  storeIds:[2]},
-  {login:"michalek",  pwd:"Smena123",   role:"zamestnanec", name:"Michálek",   storeIds:[2]},
-  {login:"bimon",     pwd:"Smena123",   role:"zamestnanec", name:"Bímon",      storeIds:[3]},
-  {login:"sustrova",  pwd:"Smena123",   role:"zamestnanec", name:"Šustrová",   storeIds:[1]},
-];
-
 async function sha256hex(str){
   const buf=await crypto.subtle.digest("SHA-256",new TextEncoder().encode(str));
   return Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,"0")).join("");
 }
 
-async function verifyLogin(login,password){
-  const user=USERS.find(u=>u.login===login.toLowerCase().trim());
-  if(!user) return null;
-  const inputHash=await sha256hex(password);
-  // Zkus uložené heslo (po změně), jinak výchozí
-  const storedHash=localStorage.getItem("sf_pwd_"+user.login);
-  const defHash=await sha256hex(user.pwd);
-  const expected=storedHash||defHash;
-  return inputHash===expected?user:null;
+// Přihlášení z Supabase tabulky app_users
+async function verifyLogin(login, password){
+  const loginNorm = login.toLowerCase().trim();
+  const inputHash = await sha256hex(password);
+  const {data, error} = await supabase
+    .from("app_users")
+    .select("login,password_hash,role,name,store_ids,emp_id")
+    .eq("login", loginNorm)
+    .single();
+  if(error || !data) return null;
+  if(data.password_hash !== inputHash) return null;
+  return {
+    login: data.login,
+    role:  data.role,
+    name:  data.name,
+    storeIds: data.store_ids || [],
+    empId: data.emp_id,
+  };
+}
+
+// Uložení nového hesla do DB (volá vedoucí)
+async function saveUserPassword(login, newPassword){
+  const hash = await sha256hex(newPassword);
+  const {error} = await supabase
+    .from("app_users")
+    .update({password_hash: hash})
+    .eq("login", login);
+  return !error;
+}
+
+// Uložení loginu do DB
+async function saveUserLogin(oldLogin, newLogin, empId, role, name, storeIds){
+  const {error} = await supabase
+    .from("app_users")
+    .upsert({login: newLogin, emp_id: empId, role, name, store_ids: storeIds}, {onConflict:"login"});
+  if(!error && oldLogin !== newLogin){
+    await supabase.from("app_users").delete().eq("login", oldLogin);
+  }
+  return !error;
 }
 
 function LoginScreen({onLogin}){
