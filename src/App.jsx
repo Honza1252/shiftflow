@@ -2311,6 +2311,7 @@ function MainApp({currentUser, handleLogout}){
   const [dbReady,setDbReady]=useState(false);
   const [dbError,setDbError]=useState(null);
   const [saving,setSaving]=useState(false);
+  const [showResetConfirm,setShowResetConfirm]=useState(false);
 
   // Debounce timery pro úspory volání DB
   const saveTimers=useRef({});
@@ -2620,6 +2621,34 @@ function MainApp({currentUser, handleLogout}){
     });
   };
 
+  // Reset rozvrhu – smaže všechny ruční úpravy pro danou prodejnu a měsíc
+  const onResetMonth=useCallback(async()=>{
+    const dim=getDim(year,month);
+    const storeEmps=employees.filter(e=>e.active&&e.mainStore===storeId);
+    const empIds=storeEmps.map(e=>e.id);
+    // Smaž z DB – všechny záznamy pro zaměstnance prodejny v daném měsíci
+    const dateFrom=fmtDate(year,month,1);
+    const dateTo=fmtDate(year,month,dim);
+    await supabase.from("schedule")
+      .delete()
+      .in("emp_id", empIds)
+      .gte("date", dateFrom)
+      .lte("date", dateTo);
+    // Smaž z lokálního state
+    setSched(prev=>{
+      const next={...prev};
+      for(const emp of storeEmps){
+        for(let d=1;d<=dim;d++){
+          const ds=fmtDate(year,month,d);
+          const k=schedKey(emp.id,ds,employees);
+          delete next[k];
+        }
+      }
+      return next;
+    });
+    setShowResetConfirm(false);
+  },[year,month,storeId,employees]);
+
   const mOpts=MONTHS.map((m,i)=>({value:i,label:m})).filter(o=>!(year===APP_START.year&&o.value<APP_START.month));
   const curYear=new Date().getFullYear();
   const yOpts=Array.from({length:curYear+2-APP_START.year+1},(_,i)=>APP_START.year+i).map(y=>({value:y,label:String(y)}));
@@ -2680,6 +2709,7 @@ function MainApp({currentUser, handleLogout}){
             <button onClick={nextM} style={{padding:"8px 14px",border:"none",background:"none",cursor:"pointer",fontSize:18,color:"#555",lineHeight:1}}>›</button>
           </div>
           <div style={{marginLeft:"auto",display:"flex",gap:8}}>
+            {isVedouci&&<Btn small variant="danger" onClick={()=>setShowResetConfirm(true)}>🔄 Reset měsíce</Btn>}
             <Btn small variant="secondary">Export Excel</Btn>
             <Btn small variant="secondary">Export PDF</Btn>
           </div>
@@ -2748,6 +2778,22 @@ function MainApp({currentUser, handleLogout}){
         current={editCell.cur} viewStoreId={storeId} stores={stores} employees={employees} patterns={patterns}
         onSave={onCellSave} onClose={()=>setEditCell(null)} onRangeApply={onRangeApply} onRangeDelete={onRangeDelete}/>
     </Modal>}
+
+    <Modal open={showResetConfirm} onClose={()=>setShowResetConfirm(false)} title="Reset rozvrhu" width={440}>
+      <div style={{display:"flex",flexDirection:"column",gap:20}}>
+        <div style={{fontSize:15,color:"#333",lineHeight:1.6}}>
+          Opravdu chcete resetovat rozvrh <strong>{stores.find(s=>s.id===storeId)?.name}</strong> pro{" "}
+          <strong>{MONTHS[month]} {year}</strong>?
+        </div>
+        <div style={{padding:"10px 14px",background:"#fff8e1",borderRadius:8,fontSize:13,color:"#e65100",fontWeight:600}}>
+          ⚠️ Všechny ruční úpravy tohoto měsíce budou smazány. Vzor zůstane nedotčen.
+        </div>
+        <div style={{display:"flex",gap:10}}>
+          <Btn variant="danger" onClick={onResetMonth} style={{flex:1}}>✅ Ano, resetovat</Btn>
+          <Btn variant="secondary" onClick={()=>setShowResetConfirm(false)} style={{flex:1}}>Zrušit</Btn>
+        </div>
+      </div>
+    </Modal>
   </div>;
 }
 
