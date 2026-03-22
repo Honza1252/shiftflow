@@ -1281,11 +1281,14 @@ function LoginModal({emp, onClose}){
       setMsg({err:true,text:"Nový účet musí mít heslo."});setSaving(false);return;
     }
     let error;
-    if(!hash){
-      // Jen update loginu/role bez změny hesla
-      ({error} = await supabase.from("app_users").update({login:upsertData.login,role,name:upsertData.name,store_ids:storeIds}).eq("emp_id",emp.id));
+    if(appUser){
+      // Existující účet – update
+      const updateData = {login:upsertData.login, role, name:upsertData.name, store_ids:storeIds};
+      if(hash) updateData.password_hash = hash;
+      ({error} = await supabase.from("app_users").update(updateData).eq("emp_id", emp.id));
     } else {
-      ({error} = await supabase.from("app_users").upsert(upsertData, {onConflict:"emp_id"}));
+      // Nový účet – insert
+      ({error} = await supabase.from("app_users").insert({...upsertData, password_hash: hash}));
     }
     setSaving(false);
     if(error){ setMsg({err:true,text:"Chyba: "+error.message}); }
