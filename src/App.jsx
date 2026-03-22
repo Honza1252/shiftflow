@@ -1,4 +1,56 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
+import { createClient } from "@supabase/supabase-js";
+
+// ─── SUPABASE ────────────────────────────────────────────────
+const SUPA_URL  = "https://xwmnkaioxnxhzbbldzch.supabase.co";
+const SUPA_KEY  = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inh3bW5rYWlveG54aHpiYmxkemNoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQxNjY3NjgsImV4cCI6MjA4OTc0Mjc2OH0.mmNWCDeQnvA5p_xI3gm6x3Twc5P78mY0_8zC9fm1nLg";
+const supabase  = createClient(SUPA_URL, SUPA_KEY);
+
+// ─── DB HELPERS ──────────────────────────────────────────────
+// Převod snake_case řádku z DB → camelCase objekt pro app
+function dbToStore(r){
+  return {
+    id: r.id, name: r.name, hours: r.hours||"",
+    breakRules: r.break_rules||[],
+    defaultTimes: r.default_times||{},
+  };
+}
+function dbToEmp(r){
+  return {
+    id: r.id,
+    firstName: r.first_name, lastName: r.last_name||"",
+    mainStore: r.main_store,
+    extraStores: r.extra_stores||[],
+    role: r.role||"",
+    contractHoursDay: r.contract_hours_day,
+    contractHoursWeek: r.contract_hours_week,
+    vacHours: r.vac_hours,
+    kdpStart: r.kdp_start||0,
+    active: r.active,
+    customTimes: r.custom_times||{},
+  };
+}
+function empToDB(e){
+  return {
+    id: e.id,
+    first_name: e.firstName, last_name: e.lastName||"",
+    main_store: e.mainStore,
+    extra_stores: e.extraStores||[],
+    role: e.role||"",
+    contract_hours_day: e.contractHoursDay,
+    contract_hours_week: e.contractHoursWeek,
+    vac_hours: e.vacHours,
+    kdp_start: e.kdpStart||0,
+    active: e.active,
+    custom_times: e.customTimes||{},
+  };
+}
+function dbToHoliday(r){
+  return { date: r.date, name: r.name, open: r.open, storeHours: r.store_hours||{} };
+}
+function holidayToDB(h){
+  return { date: h.date, name: h.name, open: h.open, store_hours: h.storeHours||{} };
+}
 
 // ─── KONFIGURACE ─────────────────────────────────────────────
 const APP_START = {year:2026, month:3}; // duben 2026 (month 0-indexed) – začátek systému
@@ -2107,31 +2159,228 @@ function LoginScreen({onLogin}){
 }
 
 function MainApp({currentUser, handleLogout}){
-  // ─── HELPERS ─────────────────────────────────────────────────
-  const lsGet=(key,fb)=>{try{const v=localStorage.getItem(key);return v?JSON.parse(v):fb;}catch{return fb;}};
-  const lsSet=(key,val)=>{try{localStorage.setItem(key,JSON.stringify(val));}catch{}};
-
   const [tab,setTab]=useState("schedule");
-  const [storeId,setStoreId]=useState(()=>{const u=lsGet("sf_user",null);return u?.storeIds?.[0]??1;});
-  const [year,setYear]=useState(()=>lsGet("sf_year",2026));
-  const [month,setMonth]=useState(()=>lsGet("sf_month",3));
-  const [employees,setEmployees]=useState(()=>lsGet("sf_employees",INIT_EMPS));
-  const [stores,setStores]=useState(()=>lsGet("sf_stores",INIT_STORES));
-  const [sched,setSched]=useState(()=>lsGet("sf_sched",{}));
-  const [holidays,setHolidays]=useState(()=>lsGet("sf_holidays",DEFAULT_HOLIDAYS));
-  const [actions,setActions]=useState(()=>lsGet("sf_actions",[]));
-  const [patterns,setPatterns]=useState(()=>lsGet("sf_patterns",makeDefaultPatterns()));
-  const [editCell,setEditCell]=useState(null);
-  const [tsEmp,setTsEmp]=useState(null);
+  const [storeId,setStoreId]=useState(currentUser?.storeIds?.[0]??1);
+  const [year,setYear]=useState(2026);
+  const [month,setMonth]=useState(3);
 
-  useEffect(()=>lsSet("sf_year",year),[year]);
-  useEffect(()=>lsSet("sf_month",month),[month]);
-  useEffect(()=>lsSet("sf_employees",employees),[employees]);
-  useEffect(()=>lsSet("sf_stores",stores),[stores]);
-  useEffect(()=>lsSet("sf_sched",sched),[sched]);
-  useEffect(()=>lsSet("sf_holidays",holidays),[holidays]);
-  useEffect(()=>lsSet("sf_actions",actions),[actions]);
-  useEffect(()=>lsSet("sf_patterns",patterns),[patterns]);
+  // ─── DATA STATE ──────────────────────────────────────────────
+  const [employees,setEmployees]=useState(INIT_EMPS);
+  const [stores,setStores]=useState(INIT_STORES);
+  const [sched,setSched]=useState({});
+  const [holidays,setHolidays]=useState(DEFAULT_HOLIDAYS);
+  const [actions,setActions]=useState([]);
+  const [patterns,setPatterns]=useState(makeDefaultPatterns());
+  const [timesheetData,setTimesheetData]=useState({});
+  const [dbReady,setDbReady]=useState(false);
+  const [dbError,setDbError]=useState(null);
+  const [saving,setSaving]=useState(false);
+
+  // Debounce timery pro úspory volání DB
+  const saveTimers=useRef({});
+
+  // ─── INITIAL LOAD ────────────────────────────────────────────
+  useEffect(()=>{
+    (async()=>{
+      try {
+        // Paralelní načtení všech tabulek
+        const [
+          {data:storesD,  error:e1},
+          {data:empsD,    error:e2},
+          {data:holsD,    error:e3},
+          {data:actsD,    error:e4},
+          {data:patsD,    error:e5},
+          {data:schedD,   error:e6},
+          {data:tsD,      error:e7},
+        ] = await Promise.all([
+          supabase.from("stores").select("*").order("id"),
+          supabase.from("employees").select("*").order("id"),
+          supabase.from("holidays").select("*").order("date"),
+          supabase.from("actions").select("*").order("id"),
+          supabase.from("patterns").select("*"),
+          supabase.from("schedule").select("*"),
+          supabase.from("timesheets").select("*"),
+        ]);
+        if(e1||e2||e3) throw new Error((e1||e2||e3).message);
+
+        // Prodejny
+        if(storesD?.length) setStores(storesD.map(dbToStore));
+
+        // Zaměstnanci
+        if(empsD?.length) setEmployees(empsD.map(dbToEmp));
+
+        // Svátky
+        if(holsD?.length) setHolidays(holsD.map(dbToHoliday));
+
+        // Akce
+        if(actsD?.length) setActions(actsD.map(r=>({
+          id:r.id, name:r.name, month:r.month,
+          from:r.from_date, to:r.to_date,
+        })));
+
+        // Vzory
+        if(patsD?.length){
+          const pats=makeDefaultPatterns();
+          for(const r of patsD){
+            if(!pats[r.store_id]) pats[r.store_id]={odd:[],even:[],flat:[]};
+            const wt=r.week_type;
+            while(pats[r.store_id][wt].length<=r.emp_index)
+              pats[r.store_id][wt].push(Array(7).fill(null));
+            pats[r.store_id][wt][r.emp_index]=r.row_data;
+          }
+          setPatterns(pats);
+        }
+
+        // Rozvrh – převod na {key: segs[]}
+        if(schedD?.length){
+          const s={};
+          for(const r of schedD){
+            // Klíč: mainStore-empId-date (stejný formát jako schedKey)
+            const emp=empsD?.find(e=>e.id===r.emp_id);
+            const ms=emp?.main_store||1;
+            s[`${ms}-${r.emp_id}-${r.date}`]=r.segments;
+          }
+          setSched(s);
+        }
+
+        // Výkazy – převod do {empId-year-month: {day: {arrival,...}}}
+        if(tsD?.length){
+          const td={};
+          for(const r of tsD){
+            const k=`${r.emp_id}-${r.year}-${r.month}`;
+            if(!td[k]) td[k]={};
+            td[k][r.day]={
+              arrival:r.arrival||"", departure:r.departure||"",
+              breakFrom:r.break_from||"", breakTo:r.break_to||"",
+              type:r.day_type||"",
+              admin:r.admin||"", roz1:r.roz1||"", roz2:r.roz2||"",
+            };
+          }
+          setTimesheetData(td);
+        }
+
+        setDbReady(true);
+      } catch(err){
+        console.error("DB load error:", err);
+        setDbError(err.message);
+        setDbReady(true); // pokračuj s výchozími daty
+      }
+    })();
+  },[]);
+
+  // ─── SAVE HELPERS ────────────────────────────────────────────
+  const dbSaveEmployees=useCallback(async(emps)=>{
+    const rows=emps.map(empToDB);
+    await supabase.from("employees").upsert(rows,{onConflict:"id"});
+  },[]);
+
+  const dbSaveStores=useCallback(async(sts)=>{
+    for(const s of sts){
+      await supabase.from("stores").update({
+        name:s.name, hours:s.hours,
+        break_rules:s.breakRules,
+        default_times:s.defaultTimes,
+      }).eq("id",s.id);
+    }
+  },[]);
+
+  const dbSaveHolidays=useCallback(async(hols)=>{
+    await supabase.from("holidays").delete().neq("id",0);
+    if(hols.length) await supabase.from("holidays").insert(hols.map(holidayToDB));
+  },[]);
+
+  const dbSaveActions=useCallback(async(acts)=>{
+    await supabase.from("actions").delete().neq("id",0);
+    if(acts.length) await supabase.from("actions").insert(acts.map(a=>({
+      name:a.name, month:a.month,
+      from_date:a.from, to_date:a.to,
+    })));
+  },[]);
+
+  const dbSavePatterns=useCallback(async(pats)=>{
+    const rows=[];
+    for(const [storeIdStr,pat] of Object.entries(pats)){
+      const sid=Number(storeIdStr);
+      for(const wt of ["odd","even","flat"]){
+        const arr=pat[wt]||[];
+        arr.forEach((row,idx)=>{
+          if(row) rows.push({store_id:sid,week_type:wt,emp_index:idx,row_data:row});
+        });
+      }
+    }
+    await supabase.from("patterns").delete().neq("id",0);
+    if(rows.length) await supabase.from("patterns").insert(rows);
+  },[]);
+
+  const dbSaveSchedCell=useCallback(async(key,segs,empList)=>{
+    // key = "mainStore-empId-date"
+    const parts=key.split("-");
+    const empId=Number(parts[1]);
+    const date=`${parts[2]}-${parts[3]}-${parts[4]}`;
+    if(!segs||segs.length===0){
+      await supabase.from("schedule").delete().eq("emp_id",empId).eq("date",date);
+    } else {
+      await supabase.from("schedule").upsert({emp_id:empId,date,segments:segs},{onConflict:"emp_id,date"});
+    }
+  },[]);
+
+  const dbSaveTimesheetRow=useCallback(async(empId,y,m,day,rowData)=>{
+    const {arrival,departure,breakFrom,breakTo,type,admin,roz1,roz2}=rowData;
+    await supabase.from("timesheets").upsert({
+      emp_id:empId, year:y, month:m, day,
+      arrival:arrival||null, departure:departure||null,
+      break_from:breakFrom||null, break_to:breakTo||null,
+      day_type:type||null,
+      admin:admin||null, roz1:roz1||null, roz2:roz2||null,
+    },{onConflict:"emp_id,year,month,day"});
+  },[]);
+
+  // Debounced save – sloučí rychlé změny do 1 DB volání
+  const debounceSave=(key,fn,delay=800)=>{
+    if(saveTimers.current[key]) clearTimeout(saveTimers.current[key]);
+    saveTimers.current[key]=setTimeout(fn,delay);
+  };
+
+  // ─── SETTERY S AUTO-SAVE ─────────────────────────────────────
+  const setEmployeesDB=useCallback((updater)=>{
+    setEmployees(prev=>{
+      const next=typeof updater==="function"?updater(prev):updater;
+      debounceSave("employees",()=>dbSaveEmployees(next));
+      return next;
+    });
+  },[dbSaveEmployees]);
+
+  const setStoresDB=useCallback((updater)=>{
+    setStores(prev=>{
+      const next=typeof updater==="function"?updater(prev):updater;
+      debounceSave("stores",()=>dbSaveStores(next));
+      return next;
+    });
+  },[dbSaveStores]);
+
+  const setHolidaysDB=useCallback((updater)=>{
+    setHolidays(prev=>{
+      const next=typeof updater==="function"?updater(prev):updater;
+      debounceSave("holidays",()=>dbSaveHolidays(next));
+      return next;
+    });
+  },[dbSaveHolidays]);
+
+  const setActionsDB=useCallback((updater)=>{
+    setActions(prev=>{
+      const next=typeof updater==="function"?updater(prev):updater;
+      debounceSave("actions",()=>dbSaveActions(next));
+      return next;
+    });
+  },[dbSaveActions]);
+
+  const setPatternsDB=useCallback((updater)=>{
+    setPatterns(prev=>{
+      const next=typeof updater==="function"?updater(prev):updater;
+      debounceSave("patterns",()=>dbSavePatterns(next),1200);
+      return next;
+    });
+  },[dbSavePatterns]);
 
   // Načti SheetJS + jsPDF z CDN
   useEffect(()=>{
@@ -2151,9 +2400,9 @@ function MainApp({currentUser, handleLogout}){
       document.head.appendChild(s);
     }
   },[]);
-  // Výkaz – perzistentní data: klíč = "empId-year-month", hodnota = {1:{arrival,departure,...}, 2:...}
-  const [timesheetData,setTimesheetData]=useState(()=>lsGet("sf_timesheetData",{}));
-  useEffect(()=>lsSet("sf_timesheetData",timesheetData),[timesheetData]);
+
+  const [editCell,setEditCell]=useState(null);
+  const [tsEmp,setTsEmp]=useState(null);
 
   const canEdit=currentUser.role==="admin"||currentUser.role==="vedouci";
 
@@ -2161,13 +2410,17 @@ function MainApp({currentUser, handleLogout}){
   const updTimesheetRow=(empId,y,m,day,field,value)=>{
     const k=tsKey(empId,y,m);
     setTimesheetData(prev=>{
-      const month=prev[k]||{};
-      return {...prev,[k]:{...month,[day]:{...(month[day]||{}), [field]:value}}};
+      const mdata=prev[k]||{};
+      const newRow={...(mdata[day]||{}),[field]:value};
+      const next={...prev,[k]:{...mdata,[day]:newRow}};
+      // Uložit do DB (debounced)
+      debounceSave(`ts-${empId}-${y}-${m}-${day}`,()=>dbSaveTimesheetRow(empId,y,m,day,newRow),600);
+      return next;
     });
   };
   const getTimesheetRows=(empId,y,m)=>{
     const k=tsKey(empId,y,m);
-    const dim=getDim(y,m-1); // m je 0-indexed
+    const dim=getDim(y,m-1);
     const stored=timesheetData[k]||{};
     const rows={};
     for(let d=1;d<=dim;d++) rows[d]={arrival:"",departure:"",breakFrom:"",breakTo:"",type:"",...(stored[d]||{})};
@@ -2184,7 +2437,13 @@ function MainApp({currentUser, handleLogout}){
     const k=schedKey(emp.id,ds,employees);
     setEditCell({emp,date,ds,k,cur:sched[k]||null});
   };
-  const onCellSave=segs=>{setSched(p=>({...p,[editCell.k]:segs.length?segs:undefined}));setEditCell(null);};
+  const onCellSave=segs=>{
+    const k=editCell.k;
+    const newSegs=segs.length?segs:undefined;
+    setSched(p=>({...p,[k]:newSegs}));
+    dbSaveSchedCell(k,newSegs,employees);
+    setEditCell(null);
+  };
   const onRangeApply=(type,fromStr,toStr,emp)=>{
     const from=parseDate(fromStr), to=parseDate(toStr);
     const updates={};
@@ -2195,11 +2454,9 @@ function MainApp({currentUser, handleLogout}){
       const ds=fmtDate(d.getFullYear(),d.getMonth(),d.getDate());
       const patCell=getPatCell(patterns,emp.mainStore,empIdx,d);
       if(!patCell){
-        // Volno ze vzoru – zapište vizuální marker bez hodin
         updates[schedKey(emp.id,ds,employees)]=[{type,hours:0}];
         continue;
       }
-      // Hodiny ze vzoru pro daný den (čistý čas směny po přestávce)
       const isObj=typeof patCell==="object";
       const patShift=isObj?(patCell.shift||"work"):(patCell||"work");
       const patLoc=isObj?(patCell.loc||emp.mainStore):emp.mainStore;
@@ -2209,6 +2466,8 @@ function MainApp({currentUser, handleLogout}){
       updates[schedKey(emp.id,ds,employees)]=[{type,hours:hoursThisDay}];
     }
     setSched(p=>({...p,...updates}));
+    // Uložit do DB
+    Object.entries(updates).forEach(([k,segs])=>dbSaveSchedCell(k,segs,employees));
   };
 
   const onRangeDelete=(fromStr,toStr,emp)=>{
@@ -2217,7 +2476,9 @@ function MainApp({currentUser, handleLogout}){
       const next={...p};
       for(let d=new Date(from);d<=to;d.setDate(d.getDate()+1)){
         const ds=fmtDate(d.getFullYear(),d.getMonth(),d.getDate());
-        delete next[schedKey(emp.id,ds,employees)];
+        const k=schedKey(emp.id,ds,employees);
+        delete next[k];
+        dbSaveSchedCell(k,null,employees);
       }
       return next;
     });
@@ -2234,7 +2495,22 @@ function MainApp({currentUser, handleLogout}){
     ...(isVedouci?[{key:"employees",label:"👥 Zaměstnanci"},{key:"settings",label:"⚙️ Nastavení"}]:[]),
   ];
 
+
+  if(!dbReady) return(
+    <div style={{minHeight:"100vh",background:"#1a1a2e",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:16}}>
+      <div style={{fontSize:36}}>🏪</div>
+      <div style={{color:"#fff",fontSize:18,fontWeight:700}}>ShiftFlow</div>
+      <div style={{color:"rgba(255,255,255,0.5)",fontSize:13}}>Načítám data z databáze…</div>
+      <div style={{width:180,height:3,background:"rgba(255,255,255,0.1)",borderRadius:2,overflow:"hidden"}}>
+        <div style={{height:"100%",background:"#4f8ef7",borderRadius:2,animation:"sfpulse 1.2s ease-in-out infinite"}}/>
+      </div>
+      <style>{`@keyframes sfpulse{0%,100%{width:30%}50%{width:80%}}`}</style>
+    </div>
+  );
   return <div style={{fontFamily:"'Segoe UI',system-ui,sans-serif",background:C.bg,minHeight:"100vh"}}>
+    {dbError&&<div style={{background:"#fff3cd",borderBottom:"1px solid #ffc107",padding:"6px 20px",fontSize:12,color:"#856404",display:"flex",gap:8,alignItems:"center"}}>
+      ⚠️ Nepodařilo se načíst data z databáze – zobrazuji výchozí data. ({dbError})
+    </div>}
     <div style={{background:C.topbar,boxShadow:"0 2px 12px rgba(0,0,0,0.18)"}}>
       <div style={{display:"flex",alignItems:"center",padding:"0 20px",gap:16}}>
         <div style={{color:"#fff",fontSize:16,fontWeight:800,padding:"14px 0",whiteSpace:"nowrap"}}>🏪 ShiftFlow</div>
@@ -2318,15 +2594,15 @@ function MainApp({currentUser, handleLogout}){
 
       {tab==="employees"&&<div style={{background:"#fff",borderRadius:10,padding:"24px",boxShadow:"0 1px 4px rgba(0,0,0,0.05)"}}>
         {isVedouci
-          ? <EmployeesView employees={employees} setEmployees={setEmployees} stores={stores}/>
+          ? <EmployeesView employees={employees} setEmployees={setEmployeesDB} stores={stores}/>
           : <div style={{textAlign:"center",padding:"60px 0",color:"#bbb",fontSize:16}}>🔒 Přístup pouze pro vedoucí</div>}
       </div>}
 
       {tab==="settings"&&<div style={{background:"#fff",borderRadius:10,padding:"24px",boxShadow:"0 1px 4px rgba(0,0,0,0.05)"}}>
         {isVedouci
           ? <><h2 style={{margin:"0 0 20px 0",fontSize:20,fontWeight:800,color:C.topbar}}>Nastavení</h2>
-              <SettingsView holidays={holidays} setHolidays={setHolidays} actions={actions} setActions={setActions}
-                stores={stores} setStores={setStores} employees={employees} patterns={patterns} setPatterns={setPatterns}/></>
+              <SettingsView holidays={holidays} setHolidays={setHolidaysDB} actions={actions} setActions={setActionsDB}
+                stores={stores} setStores={setStoresDB} employees={employees} patterns={patterns} setPatterns={setPatternsDB}/></>
           : <div style={{textAlign:"center",padding:"60px 0",color:"#bbb",fontSize:16}}>🔒 Přístup pouze pro vedoucí</div>}
       </div>}
     </div>
