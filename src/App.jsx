@@ -22,127 +22,6 @@ const STORE_SHORT = {1:"ST", 2:"BL", 3:"PE"};
 const DOW_LBL = ["Po","Út","St","Čt","Pá","So","Ne"];
 const MONTHS = ["Leden","Únor","Březen","Duben","Květen","Červen","Červenec","Srpen","Září","Říjen","Listopad","Prosinec"];
 
-// ─── UŽIVATELÉ / PŘIHLÁŠENÍ ──────────────────────────────────
-// Hesla jsou hashována pomocí SHA-256 (hex). Nikdy se neukládá plaintext.
-// Ke změně hesla: nahraďte hash níže. Online kalkulátor: https://emn178.github.io/online-tools/sha256.html
-// Výchozí hesla: jankovský="Admin2026", vedouci="Vedouci1", zamestnanec="Smena123"
-const USERS = [
-  { login:"jankovský",  hash:"6e4f9b2e7a1d3c8f5b0e2a9d4c7f1b6e8a3d0c5f2b9e7a4d1c8f3b0e6a2d9c5f", role:"admin",    name:"Jankovský",  storeIds:[1,2,3] },
-  { login:"vones",      hash:"a3f8b2c1d4e9f0a7b5c3d8e2f1a6b0c9d4e7f2a5b8c1d3e6f9a0b4c7d2e5f8a1b3", role:"vedouci",  name:"Voneš",      storeIds:[1] },
-  { login:"mika",       hash:"b7c4d1e8f5a2b9c6d3e0f7a4b1c8d5e2f9a6b3c0d7e4f1a8b5c2d9e6f3a0b7c4d1", role:"vedouci",  name:"Míka",       storeIds:[2] },
-  { login:"martinec",   hash:"c1d8e5f2a9b6c3d0e7f4a1b8c5d2e9f6a3b0c7d4e1f8a5b2c9d6e3f0a7b4c1d8e5", role:"vedouci",  name:"Martinec",   storeIds:[3] },
-  { login:"susta",      hash:"d5e2f9a6b3c0d7e4f1a8b5c2d9e6f3a0b7c4d1e8f5a2b9c6d3e0f7a4b1c8d5e2f9", role:"zamestnanec", name:"Šusta",   storeIds:[1,2] },
-  { login:"molacek",    hash:"e9f6a3b0c7d4e1f8a5b2c9d6e3f0a7b4c1d8e5f2a9b6c3d0e7f4a1b8c5d2e9f6a3", role:"zamestnanec", name:"Moláček", storeIds:[1] },
-  { login:"stanek",     hash:"f3a0b7c4d1e8f5a2b9c6d3e0f7a4b1c8d5e2f9a6b3c0d7e4f1a8b5c2d9e6f3a0b7", role:"zamestnanec", name:"Staněk",  storeIds:[1] },
-  { login:"kominkova",  hash:"a7b4c1d8e5f2a9b6c3d0e7f4a1b8c5d2e9f6a3b0c7d4e1f8a5b2c9d6e3f0a7b4c1", role:"zamestnanec", name:"Komínková", storeIds:[1] },
-  { login:"pribova",    hash:"b1c8d5e2f9a6b3c0d7e4f1a8b5c2d9e6f3a0b7c4d1e8f5a2b9c6d3e0f7a4b1c8d5", role:"zamestnanec", name:"Přibová", storeIds:[1] },
-  { login:"havelka",    hash:"c5d2e9f6a3b0c7d4e1f8a5b2c9d6e3f0a7b4c1d8e5f2a9b6c3d0e7f4a1b8c5d2e9", role:"zamestnanec", name:"Havelka", storeIds:[1] },
-  { login:"kriz",       hash:"d9e6f3a0b7c4d1e8f5a2b9c6d3e0f7a4b1c8d5e2f9a6b3c0d7e4f1a8b5c2d9e6f3", role:"zamestnanec", name:"Kříž",    storeIds:[1,2] },
-  { login:"stefanova",  hash:"e3f0a7b4c1d8e5f2a9b6c3d0e7f4a1b8c5d2e9f6a3b0c7d4e1f8a5b2c9d6e3f0a7", role:"zamestnanec", name:"Štefanová", storeIds:[2] },
-  { login:"michalek",   hash:"f7a4b1c8d5e2f9a6b3c0d7e4f1a8b5c2d9e6f3a0b7c4d1e8f5a2b9c6d3e0f7a4b1", role:"zamestnanec", name:"Michálek",  storeIds:[2] },
-  { login:"bimon",      hash:"a1b8c5d2e9f6a3b0c7d4e1f8a5b2c9d6e3f0a7b4c1d8e5f2a9b6c3d0e7f4a1b8c5", role:"zamestnanec", name:"Bímon",   storeIds:[3] },
-  { login:"sustrova",   hash:"b5c2d9e6f3a0b7c4d1e8f5a2b9c6d3e0f7a4b1c8d5e2f9a6b3c0d7e4f1a8b5c2d9", role:"zamestnanec", name:"Šustrová",storeIds:[1] },
-];
-
-// Skutečné SHA-256 hashe pro výchozí hesla
-// Heslo "Admin2026"     → spočítá prohlížeč při přihlášení
-// Heslo "Vedouci1"      → spočítá prohlížeč při přihlášení
-// Heslo "Smena123"      → spočítá prohlížeč při přihlášení
-// Poznámka: výše uvedené hashe jsou PLACEHOLDERS – přihlašování používá skutečný SHA-256 z Web Crypto API
-
-// Výchozí hesla (plaintext pouze tady v kódu, odstraňte po nasazení):
-const DEFAULT_PASSWORDS = {
-  "jankovský": "Admin2026",
-  "vones":     "Vedouci1",
-  "mika":      "Vedouci1",
-  "martinec":  "Vedouci1",
-  // ostatní zaměstnanci:
-  "_default":  "Smena123",
-};
-
-async function sha256(str) {
-  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(str));
-  return Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,"0")).join("");
-}
-
-// Ověří přihlášení – vrátí user objekt nebo null
-async function verifyLogin(login, password) {
-  const user = USERS.find(u => u.login === login.toLowerCase().trim());
-  if (!user) return null;
-  const inputHash = await sha256(password);
-  // Při prvním přihlášení: porovnej s DEFAULT_PASSWORDS (bootstrap)
-  const defPwd = DEFAULT_PASSWORDS[login] ?? DEFAULT_PASSWORDS["_default"];
-  const defHash = await sha256(defPwd);
-  // Uloženый hash (po změně hesla) nebo výchozí
-  const storedHash = localStorage.getItem(`sf_pwd_${login}`) ?? defHash;
-  if (inputHash === storedHash) return user;
-  return null;
-}
-
-// ─── LOGIN SCREEN ─────────────────────────────────────────────
-function LoginScreen({ onLogin }) {
-  const [login, setLogin]       = useState("");
-  const [password, setPassword] = useState("");
-  const [error, setError]       = useState("");
-  const [loading, setLoading]   = useState(false);
-
-  const handleSubmit = async () => {
-    if (!login || !password) { setError("Vyplňte přihlašovací jméno a heslo."); return; }
-    setLoading(true); setError("");
-    const user = await verifyLogin(login, password);
-    setLoading(false);
-    if (user) { onLogin(user); }
-    else { setError("Nesprávné jméno nebo heslo."); }
-  };
-
-  return (
-    <div style={{minHeight:"100vh",background:"#1a1a2e",display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
-      <div style={{background:"#fff",borderRadius:16,padding:40,width:"100%",maxWidth:400,boxShadow:"0 32px 80px rgba(0,0,0,0.4)"}}>
-        <div style={{textAlign:"center",marginBottom:32}}>
-          <div style={{fontSize:36,marginBottom:8}}>🏪</div>
-          <div style={{fontSize:24,fontWeight:900,color:"#1a1a2e",letterSpacing:"-0.5px"}}>ShiftFlow</div>
-          <div style={{fontSize:13,color:"#aaa",marginTop:4}}>ELEKTRO Jankovský s.r.o.</div>
-        </div>
-        <div style={{display:"flex",flexDirection:"column",gap:14}}>
-          <div>
-            <label style={{fontSize:11,fontWeight:700,color:"#888",display:"block",marginBottom:5,textTransform:"uppercase",letterSpacing:"0.06em"}}>Přihlašovací jméno</label>
-            <input
-              value={login} onChange={e=>setLogin(e.target.value)}
-              onKeyDown={e=>e.key==="Enter"&&handleSubmit()}
-              placeholder="např. jankovský"
-              autoFocus
-              style={{width:"100%",padding:"11px 13px",borderRadius:8,border:"1.5px solid #E8E8F0",fontSize:15,boxSizing:"border-box",outline:"none",transition:"border 0.15s"}}
-              onFocus={e=>e.target.style.borderColor="#4f8ef7"}
-              onBlur={e=>e.target.style.borderColor="#E8E8F0"}
-            />
-          </div>
-          <div>
-            <label style={{fontSize:11,fontWeight:700,color:"#888",display:"block",marginBottom:5,textTransform:"uppercase",letterSpacing:"0.06em"}}>Heslo</label>
-            <input
-              type="password" value={password} onChange={e=>setPassword(e.target.value)}
-              onKeyDown={e=>e.key==="Enter"&&handleSubmit()}
-              placeholder="••••••••"
-              style={{width:"100%",padding:"11px 13px",borderRadius:8,border:"1.5px solid #E8E8F0",fontSize:15,boxSizing:"border-box",outline:"none",transition:"border 0.15s"}}
-              onFocus={e=>e.target.style.borderColor="#4f8ef7"}
-              onBlur={e=>e.target.style.borderColor="#E8E8F0"}
-            />
-          </div>
-          {error && <div style={{background:"#ffebee",color:"#c62828",padding:"9px 13px",borderRadius:7,fontSize:13,fontWeight:600}}>⚠️ {error}</div>}
-          <button
-            onClick={handleSubmit} disabled={loading}
-            style={{background:"#1a1a2e",color:"#fff",border:"none",borderRadius:9,padding:"13px",fontSize:15,fontWeight:700,cursor:loading?"not-allowed":"pointer",opacity:loading?0.7:1,marginTop:4,transition:"opacity 0.15s"}}
-          >
-            {loading ? "Ověřuji..." : "Přihlásit se →"}
-          </button>
-        </div>
-        <div style={{marginTop:24,fontSize:11,color:"#ccc",textAlign:"center",lineHeight:1.6}}>
-          Zapomenuté heslo? Kontaktujte Jankovského.
-        </div>
-      </div>
-    </div>
-  );
-}
-
 const HALF_HOURS = [];
 for(let h=0;h<24;h++) for(let m=0;m<60;m+=30)
   HALF_HOURS.push(`${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")}`);
@@ -2146,47 +2025,113 @@ function SummaryTable({storeId, employees, year, month, sched, holidays, stores,
 }
 
 // ─── MAIN APP ────────────────────────────────────────────────
-export default function App(){
-  // ─── AUTH ─────────────────────────────────────────────────
-  const [currentUser, setCurrentUser] = useState(()=>{
-    try { const u=localStorage.getItem("sf_user"); return u?JSON.parse(u):null; } catch { return null; }
-  });
+// ─── UŽIVATELÉ / PŘIHLÁŠENÍ ──────────────────────────────────
+const USERS = [
+  {login:"jankovský", pwd:"Admin2026",  role:"admin",       name:"Jankovský",  storeIds:[1,2,3]},
+  {login:"vones",     pwd:"Vedouci1",   role:"vedouci",     name:"Voneš",      storeIds:[1]},
+  {login:"mika",      pwd:"Vedouci1",   role:"vedouci",     name:"Míka",       storeIds:[2]},
+  {login:"martinec",  pwd:"Vedouci1",   role:"vedouci",     name:"Martinec",   storeIds:[3]},
+  {login:"susta",     pwd:"Smena123",   role:"zamestnanec", name:"Šusta",      storeIds:[1,2]},
+  {login:"molacek",   pwd:"Smena123",   role:"zamestnanec", name:"Moláček",    storeIds:[1]},
+  {login:"stanek",    pwd:"Smena123",   role:"zamestnanec", name:"Staněk",     storeIds:[1]},
+  {login:"kominkova", pwd:"Smena123",   role:"zamestnanec", name:"Komínková",  storeIds:[1]},
+  {login:"pribova",   pwd:"Smena123",   role:"zamestnanec", name:"Přibová",    storeIds:[1]},
+  {login:"havelka",   pwd:"Smena123",   role:"zamestnanec", name:"Havelka",    storeIds:[1]},
+  {login:"kriz",      pwd:"Smena123",   role:"zamestnanec", name:"Kříž",       storeIds:[1,2]},
+  {login:"stefanova", pwd:"Smena123",   role:"zamestnanec", name:"Štefanová",  storeIds:[2]},
+  {login:"michalek",  pwd:"Smena123",   role:"zamestnanec", name:"Michálek",   storeIds:[2]},
+  {login:"bimon",     pwd:"Smena123",   role:"zamestnanec", name:"Bímon",      storeIds:[3]},
+  {login:"sustrova",  pwd:"Smena123",   role:"zamestnanec", name:"Šustrová",   storeIds:[1]},
+];
 
-  const handleLogin = (user) => {
-    localStorage.setItem("sf_user", JSON.stringify(user));
-    setCurrentUser(user);
+async function sha256hex(str){
+  const buf=await crypto.subtle.digest("SHA-256",new TextEncoder().encode(str));
+  return Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,"0")).join("");
+}
+
+async function verifyLogin(login,password){
+  const user=USERS.find(u=>u.login===login.toLowerCase().trim());
+  if(!user) return null;
+  const inputHash=await sha256hex(password);
+  // Zkus uložené heslo (po změně), jinak výchozí
+  const storedHash=localStorage.getItem("sf_pwd_"+user.login);
+  const defHash=await sha256hex(user.pwd);
+  const expected=storedHash||defHash;
+  return inputHash===expected?user:null;
+}
+
+function LoginScreen({onLogin}){
+  const [login,setLogin]=useState("");
+  const [password,setPassword]=useState("");
+  const [error,setError]=useState("");
+  const [loading,setLoading]=useState(false);
+  const handle=async()=>{
+    if(!login||!password){setError("Vyplňte jméno a heslo.");return;}
+    setLoading(true);setError("");
+    const user=await verifyLogin(login,password);
+    setLoading(false);
+    if(user) onLogin(user);
+    else setError("Nesprávné jméno nebo heslo.");
   };
-  const handleLogout = () => {
-    localStorage.removeItem("sf_user");
-    setCurrentUser(null);
-  };
+  return(
+    <div style={{minHeight:"100vh",background:"#1a1a2e",display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
+      <div style={{background:"#fff",borderRadius:16,padding:40,width:"100%",maxWidth:400,boxShadow:"0 32px 80px rgba(0,0,0,0.4)"}}>
+        <div style={{textAlign:"center",marginBottom:32}}>
+          <div style={{fontSize:36,marginBottom:8}}>🏪</div>
+          <div style={{fontSize:24,fontWeight:900,color:"#1a1a2e"}}>ShiftFlow</div>
+          <div style={{fontSize:13,color:"#aaa",marginTop:4}}>ELEKTRO Jankovský s.r.o.</div>
+        </div>
+        <div style={{display:"flex",flexDirection:"column",gap:14}}>
+          <div>
+            <label style={{fontSize:11,fontWeight:700,color:"#888",display:"block",marginBottom:5,textTransform:"uppercase",letterSpacing:"0.06em"}}>Přihlašovací jméno</label>
+            <input value={login} onChange={e=>setLogin(e.target.value)} onKeyDown={e=>e.key==="Enter"&&handle()}
+              placeholder="např. jankovský" autoFocus
+              style={{width:"100%",padding:"11px 13px",borderRadius:8,border:"1.5px solid #E8E8F0",fontSize:15,boxSizing:"border-box",outline:"none"}}/>
+          </div>
+          <div>
+            <label style={{fontSize:11,fontWeight:700,color:"#888",display:"block",marginBottom:5,textTransform:"uppercase",letterSpacing:"0.06em"}}>Heslo</label>
+            <input type="password" value={password} onChange={e=>setPassword(e.target.value)} onKeyDown={e=>e.key==="Enter"&&handle()}
+              placeholder="••••••••"
+              style={{width:"100%",padding:"11px 13px",borderRadius:8,border:"1.5px solid #E8E8F0",fontSize:15,boxSizing:"border-box",outline:"none"}}/>
+          </div>
+          {error&&<div style={{background:"#ffebee",color:"#c62828",padding:"9px 13px",borderRadius:7,fontSize:13,fontWeight:600}}>⚠️ {error}</div>}
+          <button onClick={handle} disabled={loading}
+            style={{background:"#1a1a2e",color:"#fff",border:"none",borderRadius:9,padding:"13px",fontSize:15,fontWeight:700,cursor:loading?"not-allowed":"pointer",opacity:loading?0.7:1,marginTop:4}}>
+            {loading?"Ověřuji...":"Přihlásit se →"}
+          </button>
+        </div>
+        <div style={{marginTop:24,fontSize:11,color:"#ccc",textAlign:"center"}}>Zapomenuté heslo? Kontaktujte Jankovského.</div>
+      </div>
+    </div>
+  );
+}
 
-  if (!currentUser) return <LoginScreen onLogin={handleLogin} />;
-
-  // Práva: admin + vedouci mohou editovat; zamestnanec jen čte
-  const canEdit = currentUser.role === "admin" || currentUser.role === "vedouci";
+function MainApp({currentUser, handleLogout}){
+  // ─── HELPERS ─────────────────────────────────────────────────
+  const lsGet=(key,fb)=>{try{const v=localStorage.getItem(key);return v?JSON.parse(v):fb;}catch{return fb;}};
+  const lsSet=(key,val)=>{try{localStorage.setItem(key,JSON.stringify(val));}catch{}};
 
   const [tab,setTab]=useState("schedule");
-  const [storeId,setStoreId]=useState(()=>currentUser.storeIds?.[0]??1);
-  const [year,setYear]=useState(()=>{ try{const v=localStorage.getItem("sf_year");return v?JSON.parse(v):2026;}catch{return 2026;} });
-  const [month,setMonth]=useState(()=>{ try{const v=localStorage.getItem("sf_month");return v?JSON.parse(v):3;}catch{return 3;} });
-  const [employees,setEmployees]=useState(()=>{ try{const v=localStorage.getItem("sf_employees");return v?JSON.parse(v):INIT_EMPS;}catch{return INIT_EMPS;} });
-  const [stores,setStores]=useState(()=>{ try{const v=localStorage.getItem("sf_stores");return v?JSON.parse(v):INIT_STORES;}catch{return INIT_STORES;} });
-  const [sched,setSched]=useState(()=>{ try{const v=localStorage.getItem("sf_sched");return v?JSON.parse(v):{};}catch{return {};} });
-  const [holidays,setHolidays]=useState(()=>{ try{const v=localStorage.getItem("sf_holidays");return v?JSON.parse(v):DEFAULT_HOLIDAYS;}catch{return DEFAULT_HOLIDAYS;} });
-  const [actions,setActions]=useState(()=>{ try{const v=localStorage.getItem("sf_actions");return v?JSON.parse(v):[];}catch{return [];} });
-  const [patterns,setPatterns]=useState(()=>{ try{const v=localStorage.getItem("sf_patterns");return v?JSON.parse(v):makeDefaultPatterns();}catch{return makeDefaultPatterns();} });
+  const [storeId,setStoreId]=useState(()=>{const u=lsGet("sf_user",null);return u?.storeIds?.[0]??1;});
+  const [year,setYear]=useState(()=>lsGet("sf_year",2026));
+  const [month,setMonth]=useState(()=>lsGet("sf_month",3));
+  const [employees,setEmployees]=useState(()=>lsGet("sf_employees",INIT_EMPS));
+  const [stores,setStores]=useState(()=>lsGet("sf_stores",INIT_STORES));
+  const [sched,setSched]=useState(()=>lsGet("sf_sched",{}));
+  const [holidays,setHolidays]=useState(()=>lsGet("sf_holidays",DEFAULT_HOLIDAYS));
+  const [actions,setActions]=useState(()=>lsGet("sf_actions",[]));
+  const [patterns,setPatterns]=useState(()=>lsGet("sf_patterns",makeDefaultPatterns()));
   const [editCell,setEditCell]=useState(null);
   const [tsEmp,setTsEmp]=useState(null);
 
-  useEffect(()=>{ try{localStorage.setItem("sf_year",JSON.stringify(year));}catch{} },[year]);
-  useEffect(()=>{ try{localStorage.setItem("sf_month",JSON.stringify(month));}catch{} },[month]);
-  useEffect(()=>{ try{localStorage.setItem("sf_employees",JSON.stringify(employees));}catch{} },[employees]);
-  useEffect(()=>{ try{localStorage.setItem("sf_stores",JSON.stringify(stores));}catch{} },[stores]);
-  useEffect(()=>{ try{localStorage.setItem("sf_sched",JSON.stringify(sched));}catch{} },[sched]);
-  useEffect(()=>{ try{localStorage.setItem("sf_holidays",JSON.stringify(holidays));}catch{} },[holidays]);
-  useEffect(()=>{ try{localStorage.setItem("sf_actions",JSON.stringify(actions));}catch{} },[actions]);
-  useEffect(()=>{ try{localStorage.setItem("sf_patterns",JSON.stringify(patterns));}catch{} },[patterns]);
+  useEffect(()=>lsSet("sf_year",year),[year]);
+  useEffect(()=>lsSet("sf_month",month),[month]);
+  useEffect(()=>lsSet("sf_employees",employees),[employees]);
+  useEffect(()=>lsSet("sf_stores",stores),[stores]);
+  useEffect(()=>lsSet("sf_sched",sched),[sched]);
+  useEffect(()=>lsSet("sf_holidays",holidays),[holidays]);
+  useEffect(()=>lsSet("sf_actions",actions),[actions]);
+  useEffect(()=>lsSet("sf_patterns",patterns),[patterns]);
 
   // Načti SheetJS + jsPDF z CDN
   useEffect(()=>{
@@ -2207,8 +2152,11 @@ export default function App(){
     }
   },[]);
   // Výkaz – perzistentní data: klíč = "empId-year-month", hodnota = {1:{arrival,departure,...}, 2:...}
-  const [timesheetData,setTimesheetData]=useState(()=>{ try{const v=localStorage.getItem("sf_timesheetData");return v?JSON.parse(v):{};}catch{return {};} });
-  useEffect(()=>{ try{localStorage.setItem("sf_timesheetData",JSON.stringify(timesheetData));}catch{} },[timesheetData]);
+  const [timesheetData,setTimesheetData]=useState(()=>lsGet("sf_timesheetData",{}));
+  useEffect(()=>lsSet("sf_timesheetData",timesheetData),[timesheetData]);
+
+  const canEdit=currentUser.role==="admin"||currentUser.role==="vedouci";
+
   const tsKey=(empId,y,m)=>`${empId}-${y}-${m}`;
   const updTimesheetRow=(empId,y,m,day,field,value)=>{
     const k=tsKey(empId,y,m);
@@ -2293,7 +2241,7 @@ export default function App(){
           <span style={{background:"rgba(255,255,255,0.15)",color:"rgba(255,255,255,0.9)",padding:"2px 8px",borderRadius:4,fontSize:11,fontWeight:700}}>
             {currentUser.role==="admin"?"Admin":currentUser.role==="vedouci"?"Vedoucí":"Zaměstnanec"}
           </span>
-          <button onClick={handleLogout} title="Odhlásit se" style={{background:"rgba(255,255,255,0.08)",border:"1px solid rgba(255,255,255,0.15)",color:"rgba(255,255,255,0.6)",borderRadius:5,padding:"3px 9px",fontSize:11,cursor:"pointer",fontWeight:600}}>Odhlásit</button>
+          <button onClick={handleLogout} style={{background:"rgba(255,255,255,0.08)",border:"1px solid rgba(255,255,255,0.2)",color:"rgba(255,255,255,0.7)",borderRadius:5,padding:"3px 9px",fontSize:11,cursor:"pointer",fontWeight:600}}>Odhlásit</button>
         </div>
       </div>
       <div style={{display:"flex",padding:"0 20px",borderTop:"1px solid rgba(255,255,255,0.08)"}}>
@@ -2380,4 +2328,21 @@ export default function App(){
         onSave={onCellSave} onClose={()=>setEditCell(null)} onRangeApply={onRangeApply} onRangeDelete={onRangeDelete}/>
     </Modal>}
   </div>;
+}
+
+// ─── WRAPPER – řídí přihlášení BEZ hook problémů ─────────────
+export default function App(){
+  const [currentUser,setCurrentUser]=useState(()=>{
+    try{const v=localStorage.getItem("sf_user");return v?JSON.parse(v):null;}catch{return null;}
+  });
+  const handleLogin=(user)=>{
+    localStorage.setItem("sf_user",JSON.stringify(user));
+    setCurrentUser(user);
+  };
+  const handleLogout=()=>{
+    localStorage.removeItem("sf_user");
+    setCurrentUser(null);
+  };
+  if(!currentUser) return <LoginScreen onLogin={handleLogin}/>;
+  return <MainApp currentUser={currentUser} handleLogout={handleLogout}/>;
 }
