@@ -1419,7 +1419,7 @@ function EmployeesView({employees,setEmployees,stores}){
 }
 
 // ─── TIMESHEET ───────────────────────────────────────────────
-function TimesheetView({employee, year, month, holidays, stores, sched, employees, patterns, rows, onRowChange, timesheetData, onKdpPaidChange, canEditKdp=true}){
+function TimesheetView({employee, year, month, holidays, stores, sched, employees, patterns, rows, onRowChange, timesheetData, onKdpPaidChange, canEditKdp=true, tsStatus="draft", onSubmit, onApprove, onReturn, isVedouci=false}){
   const dim = getDim(year, month);
   const brRules = getBreakRules(employee.mainStore, stores);
   const fund = getWorkingDays(year, month, holidays) * empContractDay(employee);
@@ -2186,8 +2186,26 @@ function TimesheetView({employee, year, month, holidays, stores, sched, employee
       </div>
     </div>
 
-    <div style={{marginTop:12,display:"flex",gap:8}}>
-      <Btn onClick={()=>alert("Funkce bude dostupná po napojení na server.")}>Odeslat ke schválení</Btn>
+    {/* Status výkazu + akční tlačítka */}
+    <div style={{marginTop:12,display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+      {/* Stavový štítek */}
+      {tsStatus==="submitted"&&<span style={{padding:"6px 14px",borderRadius:20,background:"#fff8e1",color:"#f57f17",fontWeight:700,fontSize:13,border:"1.5px solid #ffe082"}}>🟡 Čeká na schválení</span>}
+      {tsStatus==="approved"&&<span style={{padding:"6px 14px",borderRadius:20,background:"#e8f5e9",color:"#2e7d32",fontWeight:700,fontSize:13,border:"1.5px solid #a5d6a7"}}>✅ Schváleno</span>}
+      {tsStatus==="returned"&&<span style={{padding:"6px 14px",borderRadius:20,background:"#ffebee",color:"#c62828",fontWeight:700,fontSize:13,border:"1.5px solid #ffcdd2"}}>🔴 Vráceno k opravě</span>}
+      {(tsStatus==="draft"||!tsStatus)&&<span style={{padding:"6px 14px",borderRadius:20,background:"#f5f5f5",color:"#888",fontWeight:600,fontSize:13,border:"1.5px solid #e0e0e0"}}>✏️ Rozpracováno</span>}
+
+      {/* Tlačítka pro zaměstnance */}
+      {!isVedouci&&(tsStatus==="draft"||!tsStatus||tsStatus==="returned")&&
+        <Btn onClick={onSubmit}>📤 Odeslat ke schválení</Btn>}
+
+      {/* Tlačítka pro vedoucího */}
+      {isVedouci&&tsStatus==="submitted"&&<>
+        <Btn onClick={onApprove} style={{background:"#2e7d32",color:"#fff",border:"none"}}>✅ Schválit</Btn>
+        <Btn variant="danger" onClick={onReturn}>🔴 Vrátit k opravě</Btn>
+      </>}
+      {isVedouci&&tsStatus==="approved"&&
+        <Btn variant="secondary" onClick={onReturn}>↩️ Zrušit schválení</Btn>}
+
       <Btn variant="secondary" onClick={exportPdf}>🖨️ Export PDF</Btn>
       <Btn variant="secondary" onClick={exportExcel}>📊 Export Excel</Btn>
     </div>
@@ -2544,7 +2562,7 @@ function MainApp({currentUser, handleLogout}){
           setSched(s);
         }
 
-        // Výkazy – převod do {empId-year-month: {day: {arrival,...}}}
+        // Výkazy – převod do {empId-year-month: {day: {arrival,...}, _status, kdpPaid}}
         if(tsD?.length){
           const td={};
           for(const r of tsD){
@@ -2556,6 +2574,8 @@ function MainApp({currentUser, handleLogout}){
               type:r.day_type||"",
               admin:r.admin||"", roz1:r.roz1||"", roz2:r.roz2||"",
             };
+            // Status výkazu – uložen na den=0 jako metadata
+            if(r.status && r.status!=="draft") td[k]._status = r.status;
           }
           setTimesheetData(td);
         }
@@ -2634,6 +2654,21 @@ function MainApp({currentUser, handleLogout}){
       day_type:type||null,
       admin:admin||null, roz1:roz1||null, roz2:roz2||null,
     },{onConflict:"emp_id,year,month,day"});
+  },[]);
+
+  // Uložení statusu výkazu – aktualizuje všechny řádky daného emp/year/month
+  const dbSaveTimesheetStatus=useCallback(async(empId,y,m,status)=>{
+    await supabase.from("timesheets")
+      .update({status})
+      .eq("emp_id",empId).eq("year",y).eq("month",m);
+    // Pokud výkaz ještě nemá žádné řádky, vlož alespoň jeden pro uložení statusu
+    const {data} = await supabase.from("timesheets")
+      .select("id").eq("emp_id",empId).eq("year",y).eq("month",m).limit(1);
+    if(!data?.length){
+      await supabase.from("timesheets").insert({
+        emp_id:empId, year:y, month:m, day:1, status
+      });
+    }
   },[]);
 
   // Debounced save – sloučí rychlé změny do 1 DB volání
@@ -2936,15 +2971,60 @@ function MainApp({currentUser, handleLogout}){
           <FSel label="Rok" value={year} onChange={v=>setYear(Number(v))} options={yOpts} style={{minWidth:90}}/>
           {isVedouci&&tsEmp&&<Btn small variant="danger" onClick={()=>setShowResetTsConfirm(true)}>🔄 Reset výkazu</Btn>}
         </div>
-        {tsEmp
-          ?<TimesheetView employee={employees.find(e=>e.id===tsEmp)} year={year} month={month} holidays={holidays} stores={stores} sched={sched} employees={employees} patterns={patterns}
-            rows={getTimesheetRows(tsEmp,year,month+1)} onRowChange={(day,field,value)=>updTimesheetRow(tsEmp,year,month+1,day,field,value)}
+
+        {/* Přehled čekajících výkazů pro vedoucího */}
+        {isVedouci&&(()=>{
+          const pending = employees.filter(e=>e.active&&e.mainStore===storeId).filter(e=>{
+            const k=tsKey(e.id,year,month+1);
+            return timesheetData[k]?._status==="submitted";
+          });
+          if(!pending.length) return null;
+          return <div style={{marginBottom:16,padding:"12px 16px",background:"#fff8e1",borderRadius:10,border:"1.5px solid #ffe082"}}>
+            <div style={{fontWeight:700,color:"#f57f17",marginBottom:8,fontSize:13}}>🟡 Výkazy čekající na schválení ({pending.length})</div>
+            <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+              {pending.map(e=><button key={e.id} onClick={()=>setTsEmp(e.id)}
+                style={{padding:"4px 12px",borderRadius:20,background:"#fff",border:"1.5px solid #ffb300",color:"#e65100",fontWeight:600,fontSize:12,cursor:"pointer"}}>
+                {e.firstName} {e.lastName}
+              </button>)}
+            </div>
+          </div>;
+        })()}
+
+        {tsEmp?(()=>{
+          const k = tsKey(tsEmp,year,month+1);
+          const tsStatus = timesheetData[k]?._status || "draft";
+          const isLocked = tsStatus==="submitted"||tsStatus==="approved";
+          const handleSubmit = async()=>{
+            if(!window.confirm(`Opravdu odeslat výkaz ${MONTHS[month]} ${year} ke schválení? Po odeslání nebude možné výkaz upravovat.`)) return;
+            await dbSaveTimesheetStatus(tsEmp,year,month+1,"submitted");
+            setTimesheetData(prev=>({...prev,[k]:{...(prev[k]||{}),_status:"submitted"}}));
+          };
+          const handleApprove = async()=>{
+            await dbSaveTimesheetStatus(tsEmp,year,month+1,"approved");
+            setTimesheetData(prev=>({...prev,[k]:{...(prev[k]||{}),_status:"approved"}}));
+          };
+          const handleReturn = async()=>{
+            const reason = window.prompt("Důvod vrácení (nepovinné):");
+            await dbSaveTimesheetStatus(tsEmp,year,month+1,"returned");
+            setTimesheetData(prev=>({...prev,[k]:{...(prev[k]||{}),_status:"returned"}}));
+          };
+          return <TimesheetView
+            employee={employees.find(e=>e.id===tsEmp)} year={year} month={month}
+            holidays={holidays} stores={stores} sched={sched} employees={employees} patterns={patterns}
+            rows={getTimesheetRows(tsEmp,year,month+1)}
+            onRowChange={isLocked?null:(day,field,value)=>updTimesheetRow(tsEmp,year,month+1,day,field,value)}
             timesheetData={timesheetData}
             canEditKdp={isVedouci}
-            onKdpPaidChange={v=>{
-              const k=tsKey(tsEmp,year,month+1);
-              setTimesheetData(prev=>({...prev,[k]:{...(prev[k]||{}),kdpPaid:v}}));
-            }}/>
+            tsStatus={tsStatus}
+            isVedouci={isVedouci}
+            onSubmit={handleSubmit}
+            onApprove={handleApprove}
+            onReturn={handleReturn}
+            onKdpPaidChange={isLocked&&!isVedouci?null:v=>{
+              const k2=tsKey(tsEmp,year,month+1);
+              setTimesheetData(prev=>({...prev,[k2]:{...(prev[k2]||{}),kdpPaid:v}}));
+            }}/>;
+        })()
           :<div style={{textAlign:"center",padding:"60px 0",color:"#ccc",fontSize:16}}>Vyberte zaměstnance</div>}
       </div>}
 
