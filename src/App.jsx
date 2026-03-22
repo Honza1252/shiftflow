@@ -3039,22 +3039,17 @@ function MainApp({currentUser, handleLogout}){
 
     // === ROZDĚL NA TÝDNY (každý týden Po–Ne) ===
     // Zjisti týdny v měsíci - od prvního Po před/na 1. do posledního Ne po/na dim.
+    // Generuj týdny přesně jako web – od pondělí týdne 1. dne do neděle týdne posl. dne
     const weeks=[];
-    // Najdi kde začíná první týden (může obsahovat dny z minulého měsíce jako šedé)
-    const firstDow=getDow(year,month,1); // 0=Po,6=Ne
-    // Začni od pondělí týdne obsahujícího 1. den
-    // firstDow=0 znamená 1. je Po, firstDow=1 znamená 1. je Út atd.
-    let calStart = 1-firstDow; // může být 0 nebo záporné (dny z min. měsíce)
-    while(calStart+6 <= dim || calStart <= dim) {
+    const firstDow=getDow(year,month,1); // 0=Po..6=Ne
+    let calStart=1-firstDow; // pondělí prvního týdne (může být záporné = min. měsíc)
+    while(true){
       const wDays=[];
-      for(let i=0;i<7;i++){
-        const d=calStart+i;
-        wDays.push(d); // d může být <=0 (min. měsíc) nebo >dim (příští měsíc)
-      }
+      for(let i=0;i<7;i++) wDays.push(calStart+i);
       weeks.push(wDays);
       calStart+=7;
-      if(calStart>dim && wDays.every(d=>d>dim)) break;
-      if(calStart>dim+7) break;
+      // Pokračuj dokud tento týden ještě obsahuje dny v měsíci
+      if(calStart>dim+1) break;
     }
 
     // === LAYOUT ===
@@ -3121,7 +3116,8 @@ function MainApp({currentUser, handleLogout}){
         }
         doc.rect(x, curY, dayW, hdrH, "F");
         doc.setFont("helvetica","bold"); doc.setFontSize(6); doc.setTextColor(255,255,255);
-        doc.text(DOW_LBL[dow>=0?dow:di], x+dayW/2, curY+4.5, {align:"center"});
+        const DOW_PDF=["Po","Ut","St","Ct","Pa","So","Ne"];
+        doc.text(DOW_PDF[dow>=0?dow:di]||"", x+dayW/2, curY+4.5, {align:"center"});
         if(inMonth){
           doc.setFontSize(7.5);
           doc.text(`${d}${hol?"!":"."}`, x+dayW/2, curY+10, {align:"center"});
