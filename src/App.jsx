@@ -1290,11 +1290,15 @@ function EmployeesView({employees,setEmployees,stores}){
       <EmployeeForm initial={newEmpTemplate} stores={stores}
         onSave={async f=>{
           // Ulož do DB nejdřív – Supabase přidělí správné ID
-          const row=empToDB({...f,id:undefined});
+          const row=empToDB({...f});
           delete row.id;
           const {data,error}=await supabase.from("employees").insert(row).select().single();
-          if(data) setEmployees(p=>[...p,dbToEmp(data)]);
-          else { console.error("Chyba při přidávání zaměstnance:",error); setEmployees(p=>[...p,{...f,id:Date.now()}]); }
+          if(data){
+            setEmployees(p=>[...p,dbToEmp(data)]);
+          } else {
+            console.error("Chyba při přidávání zaměstnance:",error);
+            alert("Nepodařilo se přidat zaměstnance: "+error?.message);
+          }
           setShowNew(false);
         }}
         onClose={()=>setShowNew(false)}/>
