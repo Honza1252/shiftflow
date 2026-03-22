@@ -63,7 +63,7 @@ const C = {
 const TYPE_META = {
   work:        { label:"Práce",           color:C.work,        text:"#1a1a2e" },
   dayOff:      { label:"Volno",           color:C.dayOff,      text:"#2e7d32" },
-  vacation:    { label:"Dovolená",        color:C.vacation,    text:"#1565c0" },
+  vacation:    { label:"Dovolena",        color:C.vacation,    text:"#1565c0" },
   sick:        { label:"Nemoc",           color:C.sick,        text:"#616161" },
   obstacle:    { label:"Překážka",        color:C.obstacle,    text:"#e65100" },
   holidayOpen: { label:"Svátek otevřeno", color:C.holidayOpen, text:"#33691e" },
@@ -831,7 +831,7 @@ function CellEditor({emp, date, year, month, current, viewStoreId, stores, emplo
         {isShared&&<div style={{fontSize:12,color:"#e65100",fontWeight:600,padding:"6px 10px",background:"#fff8f0",borderRadius:6}}>
           ⚠️ Propíše se automaticky do všech prodejen zaměstnance.
         </div>}
-        <FSel label="Typ" value={rangeType} onChange={setRangeType} options={[{value:"vacation",label:"Dovolená"},{value:"sick",label:"Nemoc"}]}/>
+        <FSel label="Typ" value={rangeType} onChange={setRangeType} options={[{value:"vacation",label:"Dovolena"},{value:"sick",label:"Nemoc"}]}/>
         <div style={{display:"flex",gap:8}}>
           <FInput label="Od" type="date" value={rangeFrom} onChange={setRangeFrom} style={{flex:1}}/>
           <FInput label="Do" type="date" value={rangeTo}   onChange={setRangeTo}   style={{flex:1}}/>
@@ -1433,7 +1433,7 @@ function TimesheetView({employee, year, month, holidays, stores, sched, employee
 
   const typeOpts = [
     {value:"work",          label:"Pracovní den"},
-    {value:"vacation",      label:"Dovolená"},
+    {value:"vacation",      label:"Dovolena"},
     {value:"work+vacation", label:"Práce + Dovolená"},
     {value:"sick",          label:"Nemoc"},
     {value:"holidayOpen",   label:"Svátek otevřeno"},
@@ -1672,15 +1672,15 @@ function TimesheetView({employee, year, month, holidays, stores, sched, employee
     wsData.push([]);
     wsData.push(["SOUHRN"]);
     wsData.push(["Fond hodin", `${fund}h`]);
-    wsData.push(["Odpracováno", fmtHx(totWorked)]);
-    wsData.push(["Dovolená", fmtHx(totVac)]);
+    wsData.push(["Odpracovano", fmtHx(totWorked)]);
+    wsData.push(["Dovolena", fmtHx(totVac)]);
     wsData.push(["Nemoc", fmtHx(totSick)]);
     wsData.push(["Svátek zavřeno", fmtHx(totHolClose)]);
     wsData.push(["Svátek otevřeno", fmtHx(totHolOpen)]);
-    wsData.push(["Víkendy", fmtHx(soH+neH)]);
+    wsData.push(["Vikendy", fmtHx(soH+neH)]);
     wsData.push(["Celkem hod.", fmtHx(totAll)]);
     wsData.push(["Přesčas / minus", (overtime>=0?"+":"")+fmtHx(Math.abs(overtime))]);
-    wsData.push(["Admin práce", totAdmin>0?`${totAdmin}h`:"—"]);
+    wsData.push(["Admin prace", totAdmin>0?`${totAdmin}h`:"—"]);
     wsData.push(["Rozvoz 1", totRoz1>0?`${totRoz1}×`:"—"]);
     wsData.push(["Rozvoz 2", totRoz2>0?`${totRoz2}×`:"—"]);
     wsData.push(["Stravenky", tix>0?`${tix} ks`:"—"]);
@@ -1698,6 +1698,14 @@ function TimesheetView({employee, year, month, holidays, stores, sched, employee
 
   // ── Export PDF – A4 na výšku, jedna stránka ──
   const exportPdf = () => {
+    // Převod české diakritiky na ASCII (jsPDF helvetica nepodporuje Unicode)
+    const cz = (s) => String(s)
+      .replace(/[áÁ]/g,"a").replace(/[éÉ]/g,"e").replace(/[íÍ]/g,"i")
+      .replace(/[óÓ]/g,"o").replace(/[úÚůŮ]/g,"u").replace(/[ýÝ]/g,"y")
+      .replace(/[čČ]/g,"c").replace(/[ďĎ]/g,"d").replace(/[ěĚ]/g,"e")
+      .replace(/[ňŇ]/g,"n").replace(/[řŘ]/g,"r").replace(/[šŠ]/g,"s")
+      .replace(/[ťŤ]/g,"t").replace(/[žŽ]/g,"z").replace(/[ľĽ]/g,"l")
+      .replace(/[ôÔ]/g,"o").replace(/[ä]/g,"a").replace(/[ö]/g,"o");
     const jsPDFLib = window.jspdf?.jsPDF || window.jsPDF;
     if(!jsPDFLib){ alert("PDF export se načítá, zkuste za chvíli."); return; }
     // A4 portrait: 210 x 297 mm, použitelná šířka ~182 mm (margin 14 mm)
@@ -1710,31 +1718,31 @@ function TimesheetView({employee, year, month, holidays, stores, sched, employee
     // ── Záhlaví ──
     doc.setFont("helvetica","bold");
     doc.setFontSize(13);
-    doc.text(`Výkaz práce – ${employee.firstName} ${employee.lastName}`, marginL, 14);
+    doc.text(cz(`Výkaz práce – ${employee.firstName} ${employee.lastName}`), marginL, 14);
     doc.setFont("helvetica","normal");
     doc.setFontSize(8);
-    doc.text(`${MONTHS[month]} ${year}  |  Fond: ${fund}h  |  Prodejna: ${storeName}  |  Role: ${employee.role}`, marginL, 20);
+    doc.text(cz(`${MONTHS[month]} ${year}  |  Fond: ${fund}h  |  Prodejna: ${storeName}  |  Role: ${employee.role}`), marginL, 20);
     // Oddělovací linka
     doc.setDrawColor(200,200,210);
     doc.line(marginL, 22, pageW - marginL, 22);
 
     // ── Zkrácené popisky typů dne ──
     const typeLabelShort = {
-      work:         "Práce",
+      work:         "Prace",
       dayOff:       "Volno",
-      vacation:     "Dovolená",
+      vacation:     "Dovolena",
       sick:         "Nemoc",
-      obstacle:     "Překážka",
-      holidayOpen:  "Sv.otevř.",
-      holidayClose: "Sv.zavř.",
-      "work+vacation": "Práce+DOV",
-      ocr:          "OČR",
-      other:        "Jiné",
+      obstacle:     "Prekazka",
+      holidayOpen:  "Sv.otevreno",
+      holidayClose: "Sv.zavreno",
+      "work+vacation": "Prace+DOV",
+      ocr:          "OCR",
+      other:        "Jine",
     };
 
     // ── Tabulka dnů ──
     const fmtHx = h => h===0?"—":(h%1===0?`${h}h`:`${h.toFixed(1)}h`);
-    const head = [["Den","Datum","Rozvrh","Příchod","Odchod","Př.od","Př.do","Odprac.","DOV","Adm.","R1","R2","Typ dne"]];
+    const head = [["Den","Datum","Rozvrh","Prichod","Odchod","Pr.od","Pr.do","Odprac.","DOV","Adm.","R1","R2","Typ dne"]];
     const body = rowData.map(({d,dow,row,worked,effectiveType,schedDay,vacH,schedVacH})=>{
       const schedLbl = schedDay?.from?`${schedDay.from}–${schedDay.to}`:(schedDay?.type==="vacation"?"DOV":schedDay?.type==="sick"?"NEM":"—");
       const dovH = (effectiveType==="work+vacation"||effectiveType==="vacation"||effectiveType==="sick")
@@ -1799,22 +1807,22 @@ function TimesheetView({employee, year, month, holidays, stores, sched, employee
     // Nadpis sekce
     doc.setFont("helvetica","bold"); doc.setFontSize(8.5);
     doc.setTextColor(26,26,46);
-    doc.text("Souhrn měsíce", marginL, sy);
+    doc.text("Souhrn mesice", marginL, sy);
 
     const tiles1 = [
       { label:"Fond hodin",    val:fmtHx(fund),                        bg:[227,242,253], tc:[21,101,192] },
-      { label:"Odpracováno",   val:fmtHx(totWorked),                   bg:[232,245,233], tc:[46,125,50]  },
-      { label:"Dovolená",      val:fmtHx(totVac),                      bg:[232,234,246], tc:[57,73,171]  },
+      { label:"Odpracovano",   val:fmtHx(totWorked),                   bg:[232,245,233], tc:[46,125,50]  },
+      { label:"Dovolena",      val:fmtHx(totVac),                      bg:[232,234,246], tc:[57,73,171]  },
       { label:"Nemoc",         val:fmtHx(totSick),                     bg:[245,245,245], tc:[97,97,97]   },
-      { label:"Sv.zavřeno",    val:fmtHx(totHolClose),                 bg:[255,235,238], tc:[198,40,40]  },
-      { label:"Sv.otevřeno",   val:fmtHx(totHolOpen),                  bg:[241,248,233], tc:[51,105,30]  },
+      { label:"Sv.zavreno",    val:fmtHx(totHolClose),                 bg:[255,235,238], tc:[198,40,40]  },
+      { label:"Sv.otevreno",   val:fmtHx(totHolOpen),                  bg:[241,248,233], tc:[51,105,30]  },
     ];
     const tiles2 = [
-      { label:"Víkendy",       val:fmtHx(soH+neH),                     bg:[252,228,236], tc:[194,24,91]  },
-      { label:"OČR + Jiné",    val:fmtHx(totOcr+totOther),             bg:[255,243,224], tc:[230,81,0]   },
+      { label:"Vikendy",       val:fmtHx(soH+neH),                     bg:[252,228,236], tc:[194,24,91]  },
+      { label:"OCR + Jine",    val:fmtHx(totOcr+totOther),             bg:[255,243,224], tc:[230,81,0]   },
       { label:"Celkem hod.",   val:fmtHx(totAll),                      bg:[237,231,246], tc:[69,39,160]  },
-      { label:"Přesčas/minus", val:(overtime>=0?"+":"")+fmtHx(Math.abs(overtime)), bg:overtime>=0?[232,245,233]:[255,235,238], tc:overtime>=0?[46,125,50]:[198,40,40] },
-      { label:"Admin práce",   val:totAdmin>0?fmtHx(totAdmin):"—",     bg:[241,248,241], tc:[46,125,50]  },
+      { label:"Presc./minus", val:(overtime>=0?"+":"")+fmtHx(Math.abs(overtime)), bg:overtime>=0?[232,245,233]:[255,235,238], tc:overtime>=0?[46,125,50]:[198,40,40] },
+      { label:"Admin prace",   val:totAdmin>0?fmtHx(totAdmin):"—",     bg:[241,248,241], tc:[46,125,50]  },
       { label:"Stravenky",     val:tix>0?`${tix} ks`:"—",              bg:[249,251,231], tc:[130,119,23] },
     ];
 
@@ -1827,10 +1835,10 @@ function TimesheetView({employee, year, month, holidays, stores, sched, employee
         // Label
         doc.setFont("helvetica","normal"); doc.setFontSize(5.5);
         doc.setTextColor(...t.tc);
-        doc.text(t.label.toUpperCase(), tx+tileW/2, startY+4.5, {align:"center"});
+        doc.text(cz(t.label).toUpperCase(), tx+tileW/2, startY+4.5, {align:"center"});
         // Hodnota
         doc.setFont("helvetica","bold"); doc.setFontSize(9);
-        doc.text(t.val, tx+tileW/2, startY+10, {align:"center"});
+        doc.text(cz(t.val), tx+tileW/2, startY+10, {align:"center"});
       });
     };
 
@@ -1841,13 +1849,13 @@ function TimesheetView({employee, year, month, holidays, stores, sched, employee
     const ky = sy + 1 + (tileH+tileGap)*2 + 6;
     doc.setFont("helvetica","bold"); doc.setFontSize(8.5);
     doc.setTextColor(26,26,46);
-    doc.text("KDP – Konto přesčasových hodin", marginL, ky);
+    doc.text(cz("KDP – Konto presc. hodin"), marginL, ky);
 
     const kdpTiles = [
-      { label:"KDP vstup (z min. měsíce)", val:fmtHsign(kdpVstup),   bg:[232,234,246], tc:[57,73,171]  },
-      { label:"Přesčas tento měsíc",       val:fmtHsign(overtime),   bg:overtime>=0?[232,245,233]:[255,235,238], tc:overtime>=0?[46,125,50]:[198,40,40] },
+      { label:"KDP vstup (z min. mes.)", val:fmtHsign(kdpVstup),   bg:[232,234,246], tc:[57,73,171]  },
+      { label:"Presc. tento mesic",       val:fmtHsign(overtime),   bg:overtime>=0?[232,245,233]:[255,235,238], tc:overtime>=0?[46,125,50]:[198,40,40] },
       { label:"KDP proplaceno",            val:kdpPaidThis>0?`${kdpPaidThis}h`:"— (nic)", bg:[255,243,224], tc:[230,81,0] },
-      { label:"KDP výstup (příští měsíc)", val:fmtHsign(kdpVystup),  bg:kdpVystup>=0?[227,242,253]:[255,235,238], tc:kdpVystup>=0?[21,101,192]:[198,40,40] },
+      { label:"KDP vystup (pristi mes.)", val:fmtHsign(kdpVystup),  bg:kdpVystup>=0?[227,242,253]:[255,235,238], tc:kdpVystup>=0?[21,101,192]:[198,40,40] },
     ];
     const kdpTileW = (usableW - 3*tileGap) / 4;
     kdpTiles.forEach((t, i)=>{
@@ -1856,21 +1864,21 @@ function TimesheetView({employee, year, month, holidays, stores, sched, employee
       doc.roundedRect(tx, ky+2, kdpTileW, tileH+2, 1, 1, "F");
       doc.setFont("helvetica","normal"); doc.setFontSize(5.5);
       doc.setTextColor(...t.tc);
-      doc.text(t.label.toUpperCase(), tx+kdpTileW/2, ky+6, {align:"center"});
+      doc.text(cz(t.label).toUpperCase(), tx+kdpTileW/2, ky+6, {align:"center"});
       doc.setFont("helvetica","bold"); doc.setFontSize(10);
-      doc.text(t.val, tx+kdpTileW/2, ky+12, {align:"center"});
+      doc.text(cz(t.val), tx+kdpTileW/2, ky+12, {align:"center"});
     });
 
     // ── Podpis – pravý dolní roh ──
     const pageH = 297;
     doc.setFont("helvetica","normal"); doc.setFontSize(8);
     doc.setTextColor(100,100,100);
-    doc.text("Podpis zaměstnance:", pageW - marginL - 70, pageH - 14);
+    doc.text("Podpis zamestnance:", pageW - marginL - 70, pageH - 14);
     doc.setDrawColor(80,80,80);
     doc.line(pageW - marginL - 55, pageH - 14, pageW - marginL, pageH - 14);
     doc.setFontSize(7);
     doc.setTextColor(160,160,160);
-    doc.text(`${employee.firstName} ${employee.lastName}`, pageW - marginL - 55, pageH - 10);
+    doc.text(cz(`${employee.firstName} ${employee.lastName}`), pageW - marginL - 55, pageH - 10);
 
     doc.save(`Vykaz_${employee.firstName}_${employee.lastName}_${MONTHS[month]}_${year}.pdf`);
   };
@@ -2041,16 +2049,16 @@ function TimesheetView({employee, year, month, holidays, stores, sched, employee
       <div style={{padding:"12px 14px",display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(110px,1fr))",gap:8}}>
         {[
           {label:"Fond hodin",         val:fund,             color:"#e3f2fd",tc:"#1565c0"},
-          {label:"Odpracováno",        val:totWorked,        color:"#e8f5e9",tc:"#2e7d32"},
-          {label:"Dovolená",           val:totVac,           color:"#e8eaf6",tc:"#3949ab"},
+          {label:"Odpracovano",        val:totWorked,        color:"#e8f5e9",tc:"#2e7d32"},
+          {label:"Dovolena",           val:totVac,           color:"#e8eaf6",tc:"#3949ab"},
           {label:"Nemoc",              val:totSick,          color:"#f5f5f5",tc:"#616161"},
           {label:"Svátek zavřeno",     val:totHolClose,      color:"#ffebee",tc:"#c62828"},
           {label:"Svátek otevřeno",    val:totHolOpen,       color:"#f1f8e9",tc:"#33691e"},
-          {label:"Víkendy",             val:soH+neH,          color:"#fce4ec",tc:"#c2185b"},
-          {label:"OČR + Jiné",         val:totOcr+totOther,  color:"#fff3e0",tc:"#e65100"},
+          {label:"Vikendy",             val:soH+neH,          color:"#fce4ec",tc:"#c2185b"},
+          {label:"OCR + Jine",         val:totOcr+totOther,  color:"#fff3e0",tc:"#e65100"},
           {label:"Celkem hod.",         val:totAll,           color:"#ede7f6",tc:"#4527a0"},
           {label:"Přesčas / minus",    val:overtime,         color:overtime>=0?"#e8f5e9":"#ffebee",tc:overtime>=0?"#2e7d32":"#c62828",sign:true},
-          {label:"Admin práce",        val:totAdmin,         color:"#f1f8f1",tc:"#2e7d32",unit:"h"},
+          {label:"Admin prace",        val:totAdmin,         color:"#f1f8f1",tc:"#2e7d32",unit:"h"},
           {label:"Rozvoz 1",           val:totRoz1,          color:"#fffde7",tc:"#f57f17",unit:"×"},
           {label:"Rozvoz 2",           val:totRoz2,          color:"#fff8e1",tc:"#e65100",unit:"×"},
           {label:"Stravenky",          val:tix,              color:"#f9fbe7",tc:"#827717",unit:"ks"},
