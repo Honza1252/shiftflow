@@ -1288,7 +1288,15 @@ function EmployeesView({employees,setEmployees,stores}){
     </Modal>
     <Modal open={showNew} onClose={()=>setShowNew(false)} title="Přidat zaměstnance" width={600}>
       <EmployeeForm initial={newEmpTemplate} stores={stores}
-        onSave={f=>{setEmployees(p=>[...p,{...f,id:Date.now()}]);setShowNew(false);}}
+        onSave={async f=>{
+          // Ulož do DB nejdřív – Supabase přidělí správné ID
+          const row=empToDB({...f,id:undefined});
+          delete row.id;
+          const {data,error}=await supabase.from("employees").insert(row).select().single();
+          if(data) setEmployees(p=>[...p,dbToEmp(data)]);
+          else { console.error("Chyba při přidávání zaměstnance:",error); setEmployees(p=>[...p,{...f,id:Date.now()}]); }
+          setShowNew(false);
+        }}
         onClose={()=>setShowNew(false)}/>
     </Modal>
   </div>;
