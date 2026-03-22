@@ -1767,7 +1767,7 @@ function TimesheetView({employee, year, month, holidays, stores, sched, employee
       .replace(/[ťŤ]/g,"t").replace(/[žŽ]/g,"z").replace(/[ľĽ]/g,"l")
       .replace(/[ôÔ]/g,"o").replace(/[ä]/g,"a").replace(/[ö]/g,"o");
     const jsPDFLib = window.jspdf?.jsPDF || window.jsPDF;
-    if(!jsPDFLib){ alert("PDF export se načítá, zkuste za chvíli."); return; }
+    if(!jsPDFLib || !jsPDFLib.prototype?.autoTable){ alert("PDF export se načítá, počkejte chvíli a zkuste znovu."); return; }
     // A4 portrait: 210 x 297 mm, použitelná šířka ~182 mm (margin 14 mm)
     const doc = new jsPDFLib({ orientation:"portrait", unit:"mm", format:"a4" });
     const storeName = stores.find(s=>s.id===employee.mainStore)?.name||"";
@@ -2731,28 +2731,38 @@ function MainApp({currentUser, handleLogout}){
     });
   },[dbSavePatterns]);
 
-  // Načti SheetJS + jsPDF + ExcelJS z CDN
+  // Načti SheetJS + jsPDF + ExcelJS z CDN – správné pořadí (autotable až po jsPDF)
   useEffect(()=>{
-    if(!window.XLSX){
-      const s=document.createElement("script");
-      s.src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js";
+    const loadScript = (src, check, onLoad) => {
+      if(check()) { onLoad && onLoad(); return; }
+      const s = document.createElement("script");
+      s.src = src;
+      if(onLoad) s.onload = onLoad;
       document.head.appendChild(s);
-    }
-    if(!window.jspdf){
-      const s=document.createElement("script");
-      s.src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js";
-      document.head.appendChild(s);
-    }
-    if(!window.jspdfAutotable){
-      const s=document.createElement("script");
-      s.src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js";
-      document.head.appendChild(s);
-    }
-    if(!window.ExcelJS){
-      const s=document.createElement("script");
-      s.src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.3.0/exceljs.min.js";
-      document.head.appendChild(s);
-    }
+    };
+    // XLSX
+    loadScript(
+      "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js",
+      ()=>!!window.XLSX
+    );
+    // jsPDF – a teprve po načtení nahraje autotable
+    loadScript(
+      "https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js",
+      ()=>!!window.jspdf,
+      ()=>{
+        // autotable se načte až po jsPDF
+        loadScript(
+          "https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js",
+          ()=>!!(window.jspdf?.jsPDF?.prototype?.autoTable),
+          ()=>{ window.jspdfAutotable = true; }
+        );
+      }
+    );
+    // ExcelJS
+    loadScript(
+      "https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.3.0/exceljs.min.js",
+      ()=>!!window.ExcelJS
+    );
   },[]);
 
   const [editCell,setEditCell]=useState(null);
@@ -2986,6 +2996,7 @@ ${d}.`);
   const exportSchedPdf = () => {
     const jsPDFLib=window.jspdf?.jsPDF||window.jsPDF;
     if(!jsPDFLib){ alert("PDF export se načítá, zkuste za chvíli."); return; }
+    if(!jsPDFLib.prototype?.autoTable){ alert("PDF plugin se stále načítá, počkejte chvíli a zkuste znovu."); return; }
     const storeName=stores.find(s=>s.id===storeId)?.name||"";
     const dim=getDim(year,month);
     const mainEmps=employees.filter(e=>e.active&&e.mainStore===storeId);
