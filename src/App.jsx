@@ -2312,6 +2312,7 @@ function MainApp({currentUser, handleLogout}){
   const [dbError,setDbError]=useState(null);
   const [saving,setSaving]=useState(false);
   const [showResetConfirm,setShowResetConfirm]=useState(false);
+  const [showResetTsConfirm,setShowResetTsConfirm]=useState(false);
 
   // Debounce timery pro úspory volání DB
   const saveTimers=useRef({});
@@ -2649,6 +2650,25 @@ function MainApp({currentUser, handleLogout}){
     setShowResetConfirm(false);
   },[year,month,storeId,employees]);
 
+  // Reset výkazu – smaže záznamy timesheets pro daného zaměstnance a měsíc
+  const onResetTimesheet=useCallback(async()=>{
+    if(!tsEmp) return;
+    const m=month+1; // timesheets používají month 1-12
+    await supabase.from("timesheets")
+      .delete()
+      .eq("emp_id", tsEmp)
+      .eq("year", year)
+      .eq("month", m);
+    // Smaž z lokálního state
+    const k=tsKey(tsEmp, year, m);
+    setTimesheetData(prev=>{
+      const next={...prev};
+      delete next[k];
+      return next;
+    });
+    setShowResetTsConfirm(false);
+  },[tsEmp,year,month]);
+
   const mOpts=MONTHS.map((m,i)=>({value:i,label:m})).filter(o=>!(year===APP_START.year&&o.value<APP_START.month));
   const curYear=new Date().getFullYear();
   const yOpts=Array.from({length:curYear+2-APP_START.year+1},(_,i)=>APP_START.year+i).map(y=>({value:y,label:String(y)}));
@@ -2746,6 +2766,7 @@ function MainApp({currentUser, handleLogout}){
           <FSel label="Zaměstnanec" value={tsEmp||""} onChange={v=>setTsEmp(v?Number(v):null)} options={eOpts} style={{minWidth:220}}/>
           <FSel label="Měsíc" value={month} onChange={v=>setMonth(Number(v))} options={mOpts} style={{minWidth:130}}/>
           <FSel label="Rok" value={year} onChange={v=>setYear(Number(v))} options={yOpts} style={{minWidth:90}}/>
+          {isVedouci&&tsEmp&&<Btn small variant="danger" onClick={()=>setShowResetTsConfirm(true)}>🔄 Reset výkazu</Btn>}
         </div>
         {tsEmp
           ?<TimesheetView employee={employees.find(e=>e.id===tsEmp)} year={year} month={month} holidays={holidays} stores={stores} sched={sched} employees={employees} patterns={patterns}
@@ -2791,6 +2812,22 @@ function MainApp({currentUser, handleLogout}){
         <div style={{display:"flex",gap:10}}>
           <Btn variant="danger" onClick={onResetMonth} style={{flex:1}}>✅ Ano, resetovat</Btn>
           <Btn variant="secondary" onClick={()=>setShowResetConfirm(false)} style={{flex:1}}>Zrušit</Btn>
+        </div>
+      </div>
+    </Modal>
+
+    <Modal open={showResetTsConfirm} onClose={()=>setShowResetTsConfirm(false)} title="Reset výkazu" width={440}>
+      <div style={{display:"flex",flexDirection:"column",gap:20}}>
+        <div style={{fontSize:15,color:"#333",lineHeight:1.6}}>
+          Opravdu chcete resetovat výkaz zaměstnance <strong>{employees.find(e=>e.id===tsEmp)?.firstName} {employees.find(e=>e.id===tsEmp)?.lastName}</strong> pro{" "}
+          <strong>{MONTHS[month]} {year}</strong>?
+        </div>
+        <div style={{padding:"10px 14px",background:"#fff8e1",borderRadius:8,fontSize:13,color:"#e65100",fontWeight:600}}>
+          ⚠️ Všechny zadané příchody, odchody a přestávky za tento měsíc budou smazány.
+        </div>
+        <div style={{display:"flex",gap:10}}>
+          <Btn variant="danger" onClick={onResetTimesheet} style={{flex:1}}>✅ Ano, resetovat</Btn>
+          <Btn variant="secondary" onClick={()=>setShowResetTsConfirm(false)} style={{flex:1}}>Zrušit</Btn>
         </div>
       </div>
     </Modal>
