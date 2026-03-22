@@ -1239,7 +1239,7 @@ function SettingsView({holidays,setHolidays,actions,setActions,stores,setStores,
 function EmployeesView({employees,setEmployees,stores}){
   const [editEmp,setEditEmp]=useState(null);
   const [showNew,setShowNew]=useState(false);
-  const newEmpTemplate={firstName:"",lastName:"",mainStore:1,extraStores:[],role:"",contract:8,vacHours:160,kdpStart:0,active:true,customTimes:{}};
+  const newEmpTemplate={firstName:"",lastName:"",mainStore:1,extraStores:[],role:"",contractHoursDay:8,contractHoursWeek:40,vacHours:160,kdpStart:0,active:true,customTimes:{}};
 
   return <div>
     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
@@ -1289,17 +1289,32 @@ function EmployeesView({employees,setEmployees,stores}){
     <Modal open={showNew} onClose={()=>setShowNew(false)} title="Přidat zaměstnance" width={600}>
       <EmployeeForm initial={newEmpTemplate} stores={stores}
         onSave={async f=>{
-          // Ulož do DB nejdřív – Supabase přidělí správné ID
-          const row=empToDB({...f});
-          delete row.id;
-          const {data,error}=await supabase.from("employees").insert(row).select().single();
-          if(data){
-            setEmployees(p=>[...p,dbToEmp(data)]);
+          // Sestav DB radek BEZ id – Supabase (serial/sequence) prideli id automaticky
+          const rowData = {
+            first_name: f.firstName, last_name: f.lastName||"",
+            main_store: f.mainStore,
+            extra_stores: f.extraStores||[],
+            role: f.role||"",
+            contract_hours_day: f.contractHoursDay,
+            contract_hours_week: f.contractHoursWeek,
+            vac_hours: f.vacHours,
+            kdp_start: f.kdpStart||0,
+            active: f.active,
+            custom_times: f.customTimes||{},
+          };
+          // Zadne id = Supabase priradi automaticky (bez chyby duplicate key)
+          const {data, error} = await supabase
+            .from("employees")
+            .insert(rowData)
+            .select()
+            .single();
+          if (data) {
+            setEmployees(p => [...p, dbToEmp(data)]);
+            setShowNew(false);
           } else {
-            console.error("Chyba při přidávání zaměstnance:",error);
-            alert("Nepodařilo se přidat zaměstnance: "+error?.message);
+            console.error("Chyba pri pridavani zamestnance:", error);
+            alert("Nepodarilo se pridat zamestnance: " + (error?.message || "Neznama chyba"));
           }
-          setShowNew(false);
         }}
         onClose={()=>setShowNew(false)}/>
     </Modal>
