@@ -2756,7 +2756,14 @@ function MainApp({currentUser, handleLogout}){
   },[]);
 
   const [editCell,setEditCell]=useState(null);
-  const [tsEmp,setTsEmp]=useState(null);
+  const [tsEmp,setTsEmp]=useState(()=>{
+    // Prodavač vidí pouze svůj výkaz – auto-select při načtení
+    if(currentUser.role==="zamestnanec"){
+      // empId je uloženo v currentUser (z app_users.emp_id)
+      if(currentUser.empId) return currentUser.empId;
+    }
+    return null;
+  });
 
   const canEdit=currentUser.role==="admin"||currentUser.role==="vedouci";
 
@@ -2885,11 +2892,195 @@ function MainApp({currentUser, handleLogout}){
     setShowResetTsConfirm(false);
   },[tsEmp,year,month]);
 
+  // ── Export rozvrhu do Excelu ──
+  const exportSchedExcel = async () => {
+    if(!window.ExcelJS){ alert("Excel export se načítá, zkuste za chvíli."); return; }
+    const storeName = stores.find(s=>s.id===storeId)?.name||"";
+    const dim = getDim(year,month);
+    const mainEmps = employees.filter(e=>e.active&&e.mainStore===storeId);
+    const wb = new window.ExcelJS.Workbook();
+    const ws = wb.addWorksheet(`${MONTHS[month]} ${year}`);
+
+    // Záhlaví
+    const r1 = ws.addRow([`Rozvrh – ${storeName} – ${MONTHS[month]} ${year}`]);
+    r1.getCell(1).font={bold:true,size:13};
+    ws.mergeCells(1,1,1,dim+2);
+
+    // Řádek s dny (záhlaví sloupců)
+    const dayLabels = ["Zaměstnanec","Role"];
+    for(let d=1;d<=dim;d++){
+      const dow=getDow(year,month,d);
+      dayLabels.push(`${DOW_LBL[dow]}
+${d}.`);
+    }
+    const hdrRow = ws.addRow(dayLabels);
+    hdrRow.eachCell(cell=>{
+      cell.fill={type:"pattern",pattern:"solid",fgColor:{argb:"FF1A1A2E"}};
+      cell.font={bold:true,color:{argb:"FFFFFFFF"},size:8};
+      cell.alignment={horizontal:"center",vertical:"middle",wrapText:true};
+    });
+    hdrRow.height=28;
+    // Šířky
+    ws.getColumn(1).width=16;
+    ws.getColumn(2).width=14;
+    for(let d=1;d<=dim;d++) ws.getColumn(d+2).width=7;
+
+    // Řádky zaměstnanců
+    mainEmps.forEach((emp,ei)=>{
+      const empIdx=mainEmps.findIndex(e=>e.id===emp.id);
+      const cells=[`${emp.firstName} ${emp.lastName}`, emp.role];
+      for(let d=1;d<=dim;d++){
+        const date=new Date(year,month,d);
+        const dow=getDow(year,month,d);
+        const ds=fmtDate(year,month,d);
+        const hol=holidays.find(h=>h.date===ds);
+        const cell=getSchedCell(sched,emp.id,ds,employees);
+        let label="";
+        if(cell?.length){
+          const ws2=cell.filter(s=>s.type==="work");
+          if(ws2.length) label=ws2.map(s=>s.from&&s.to?`${s.from.replace(":00","")}-${s.to.replace(":00","")}`:"Pr").join("/");
+          else{const ab=cell[0]; label=TYPE_SHORT[ab.type]||ab.type||"V";}
+        } else {
+          const pc=getPatCell(patterns,storeId,empIdx,date);
+          if(!pc) label=dow>=5?"":"V";
+          else if(pc==="work"||typeof pc==="object"){
+            const st=typeof pc==="object"?pc.shift||"work":pc;
+            const lId=typeof pc==="object"?(pc.loc||storeId):storeId;
+            const[fr,to]=getEmpShiftTimes(emp,lId,st,dow,stores,typeof pc==="object"?pc:null,hol);
+            label=fr&&to?`${fr.replace(":00","")}-${to.replace(":00","")}`:"Pr";
+          } else label=pc==="vacation"?"DOV":pc==="sick"?"NEM":"V";
+        }
+        if(hol&&!hol.open&&label!="DOV"&&label!="NEM") label="SZ";
+        cells.push(label);
+      }
+      const row=ws.addRow(cells);
+      row.eachCell((cell,cn)=>{
+        if(cn>2){
+          const dow2=getDow(year,month,cn-2);
+          const v=cell.value||"";
+          let argb=null;
+          if(dow2>=5) argb="FFFFF8F8";
+          if(v==="DOV") argb="FFE3F2FD";
+          if(v==="NEM") argb="FFF5F5F5";
+          if(v==="V") argb="FFE8F5E9";
+          if(v==="SZ") argb="FFFFEBEE";
+          if(argb) cell.fill={type:"pattern",pattern:"solid",fgColor:{argb}};
+        }
+        cell.alignment={horizontal:"center",vertical:"middle",wrapText:true};
+        cell.font={size:7};
+      });
+      row.getCell(1).font={size:9,bold:true};
+      row.getCell(2).font={size:8};
+      row.height=14;
+    });
+
+    const buf=await wb.xlsx.writeBuffer();
+    const blob=new Blob([buf],{type:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"});
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement("a");
+    a.href=url; a.download=`Rozvrh_${storeName}_${MONTHS[month]}_${year}.xlsx`; a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  // ── Export rozvrhu do PDF ──
+  const exportSchedPdf = () => {
+    const jsPDFLib=window.jspdf?.jsPDF||window.jsPDF;
+    if(!jsPDFLib){ alert("PDF export se načítá, zkuste za chvíli."); return; }
+    const storeName=stores.find(s=>s.id===storeId)?.name||"";
+    const dim=getDim(year,month);
+    const mainEmps=employees.filter(e=>e.active&&e.mainStore===storeId);
+    const doc=new jsPDFLib({orientation:"landscape",unit:"mm",format:"a4"});
+    const pageW=297; const marginL=8;
+
+    doc.setFont("helvetica","bold"); doc.setFontSize(12);
+    doc.text(cz(`Rozvrh – ${storeName} – ${MONTHS[month]} ${year}`),marginL,11);
+    doc.setFont("helvetica","normal"); doc.setFontSize(7);
+    doc.text(cz(`${getWorkingDays(year,month,holidays)} pracovnich dni · fond ${getWorkingDays(year,month,holidays)*8}h`),marginL,17);
+
+    // Záhlaví tabulky
+    const head=[["Zamestnanec","Role",...Array.from({length:dim},(_,i)=>{
+      const d=i+1; const dow=getDow(year,month,d);
+      return `${DOW_LBL[dow]}
+${d}.`;
+    })]];
+
+    // Data
+    const body=mainEmps.map((emp,ei)=>{
+      const empIdx=mainEmps.findIndex(e=>e.id===emp.id);
+      const row=[cz(`${emp.firstName} ${emp.lastName}`),cz(emp.role)];
+      for(let d=1;d<=dim;d++){
+        const date=new Date(year,month,d);
+        const dow=getDow(year,month,d);
+        const ds=fmtDate(year,month,d);
+        const hol=holidays.find(h=>h.date===ds);
+        const cell=getSchedCell(sched,emp.id,ds,employees);
+        let label="";
+        if(cell?.length){
+          const ws2=cell.filter(s=>s.type==="work");
+          if(ws2.length) label=ws2.map(s=>s.from&&s.to?shiftLabel(s.from,s.to):"Pr").join("/");
+          else{const ab=cell[0];label=TYPE_SHORT[ab.type]||"V";}
+        } else {
+          const pc=getPatCell(patterns,storeId,empIdx,date);
+          if(!pc) label=dow>=5?"":"V";
+          else if(pc==="work"||typeof pc==="object"){
+            const st=typeof pc==="object"?pc.shift||"work":pc;
+            const lId=typeof pc==="object"?(pc.loc||storeId):storeId;
+            const[fr,to]=getEmpShiftTimes(emp,lId,st,dow,stores,typeof pc==="object"?pc:null,hol);
+            label=fr&&to?shiftLabel(fr,to):"Pr";
+          } else label=pc==="vacation"?"DOV":pc==="sick"?"NEM":"V";
+        }
+        if(hol&&!hol.open&&label!="DOV"&&label!="NEM") label="SZ";
+        row.push(label);
+      }
+      return row;
+    });
+
+    // Šířky sloupců
+    const nameW=22; const roleW=18; const dayW=Math.max(6,Math.floor((pageW-marginL*2-nameW-roleW)/dim));
+    const colStyles={0:{cellWidth:nameW},1:{cellWidth:roleW}};
+    for(let i=0;i<dim;i++) colStyles[i+2]={cellWidth:dayW,halign:"center"};
+
+    doc.autoTable({
+      head,body,
+      startY:20,
+      margin:{left:marginL,right:marginL},
+      styles:{fontSize:6,cellPadding:1,font:"helvetica",overflow:"ellipsize"},
+      headStyles:{fillColor:[26,26,46],textColor:255,fontStyle:"bold",fontSize:6,cellPadding:1.5,halign:"center"},
+      columnStyles:colStyles,
+      didParseCell:(data)=>{
+        if(data.section==="body"&&data.column.index>=2){
+          const d=data.column.index-1;
+          const dow=getDow(year,month,d);
+          const v=data.cell.text[0]||"";
+          if(dow>=5) data.cell.styles.fillColor=[255,248,248];
+          if(v==="DOV") data.cell.styles.fillColor=[227,242,253];
+          if(v==="NEM") data.cell.styles.fillColor=[245,245,245];
+          if(v==="V")   data.cell.styles.fillColor=[232,245,233];
+          if(v==="SZ")  data.cell.styles.fillColor=[255,235,238];
+        }
+      },
+    });
+
+    doc.save(cz(`Rozvrh_${storeName}_${MONTHS[month]}_${year}.pdf`));
+  };
+
   const mOpts=MONTHS.map((m,i)=>({value:i,label:m})).filter(o=>!(year===APP_START.year&&o.value<APP_START.month));
   const curYear=new Date().getFullYear();
   const yOpts=Array.from({length:curYear+2-APP_START.year+1},(_,i)=>APP_START.year+i).map(y=>({value:y,label:String(y)}));
-  const eOpts=[{value:"",label:"— vyberte zaměstnance —"},...employees.filter(e=>e.active).map(e=>({value:e.id,label:`${e.firstName} ${e.lastName}`}))];
   const isVedouci = currentUser.role==="admin"||currentUser.role==="vedouci";
+  const isZamestnanec = currentUser.role==="zamestnanec";
+
+  // Filtruj zaměstnance pro výkaz dle role
+  const tsEmpList = (() => {
+    if(currentUser.role==="admin") return employees.filter(e=>e.active);
+    if(currentUser.role==="vedouci") return employees.filter(e=>e.active && e.mainStore===storeId);
+    // Prodavač – jen sám sebe
+    const me = employees.find(e=>e.id===currentUser.empId || 
+      (e.firstName+" "+e.lastName).trim().toLowerCase()===currentUser.name?.toLowerCase() ||
+      e.firstName.toLowerCase()===currentUser.name?.toLowerCase().split(" ")[0]);
+    return me ? [me] : [];
+  })();
+  const eOpts=[{value:"",label:"— vyberte zaměstnance —"},...tsEmpList.map(e=>({value:e.id,label:`${e.firstName} ${e.lastName}`}))];
   const tabs=[
     {key:"schedule",  label:"📅 Rozvrh"},
     {key:"timesheet", label:"📋 Výkaz"},
@@ -2946,8 +3137,8 @@ function MainApp({currentUser, handleLogout}){
           </div>
           <div style={{marginLeft:"auto",display:"flex",gap:8}}>
             {isVedouci&&<Btn small variant="danger" onClick={()=>setShowResetConfirm(true)}>🔄 Reset měsíce</Btn>}
-            <Btn small variant="secondary">Export Excel</Btn>
-            <Btn small variant="secondary">Export PDF</Btn>
+            <Btn small variant="secondary" onClick={exportSchedExcel}>📊 Export Excel</Btn>
+            <Btn small variant="secondary" onClick={exportSchedPdf}>🖨️ Export PDF</Btn>
           </div>
         </div>
         <div style={{background:"#fff",borderRadius:10,padding:"10px 18px",marginBottom:14,display:"flex",alignItems:"center",gap:12,flexWrap:"wrap",boxShadow:"0 1px 4px rgba(0,0,0,0.05)"}}>
@@ -2979,7 +3170,11 @@ function MainApp({currentUser, handleLogout}){
 
       {tab==="timesheet"&&<div style={{background:"#fff",borderRadius:10,padding:"24px",boxShadow:"0 1px 4px rgba(0,0,0,0.05)"}}>
         <div style={{display:"flex",gap:12,alignItems:"flex-end",marginBottom:20,flexWrap:"wrap"}}>
-          <FSel label="Zaměstnanec" value={tsEmp||""} onChange={v=>setTsEmp(v?Number(v):null)} options={eOpts} style={{minWidth:220}}/>
+          {/* Prodavač vidí jen sebe – bez selectu */}
+          {!isZamestnanec&&<FSel label="Zaměstnanec" value={tsEmp||""} onChange={v=>setTsEmp(v?Number(v):null)} options={eOpts} style={{minWidth:220}}/>}
+          {isZamestnanec&&tsEmp&&<div style={{padding:"7px 14px",background:"#f8f9ff",borderRadius:8,border:`1.5px solid ${C.border}`,fontSize:14,fontWeight:600,color:C.topbar}}>
+            👤 {tsEmpList[0]?.firstName} {tsEmpList[0]?.lastName}
+          </div>}
           <FSel label="Měsíc" value={month} onChange={v=>setMonth(Number(v))} options={mOpts} style={{minWidth:130}}/>
           <FSel label="Rok" value={year} onChange={v=>setYear(Number(v))} options={yOpts} style={{minWidth:90}}/>
           {isVedouci&&tsEmp&&<Btn small variant="danger" onClick={()=>setShowResetTsConfirm(true)}>🔄 Reset výkazu</Btn>}
