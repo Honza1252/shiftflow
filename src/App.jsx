@@ -3089,8 +3089,8 @@ function MainApp({currentUser, handleLogout}){
       doc.setFont("helvetica","normal"); doc.setFontSize(6.5); doc.setTextColor(130,130,160);
       doc.text(`Tyden ${isoW}`, mL+nameW+2, curY+4.5);
       doc.setFont("helvetica","bold");
-      doc.setTextColor(wType==="odd"?[30,100,180]:[50,160,80]);
-      doc.text(`  ${" ".repeat(10)}${wLabel}`, mL+nameW+2, curY+4.5);
+      if(wType==="odd") doc.setTextColor(30,100,180); else doc.setTextColor(50,160,80);
+      doc.text(`  ${wLabel}`, mL+nameW+18, curY+4.5);
       curY+=weekLabelH;
 
       // Záhlaví: sloupec jméno
