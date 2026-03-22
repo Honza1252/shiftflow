@@ -1632,109 +1632,128 @@ function TimesheetView({employee, year, month, holidays, stores, sched, employee
   const kdpPaidThis = Number(timesheetData?.[tsKeyThis]?.kdpPaid || 0);
   const kdpVystup = kdpVstup + overtime - kdpPaidThis;
 
-  // ── Export Excel ──
-  const exportExcel = () => {
-    const XLSX = window.XLSX;
-    if(!XLSX){ alert("Excel export se načítá, zkuste za chvíli."); return; }
-    const fmtT = v => v||"";
+  // ── Export Excel s barvami (ExcelJS) ──
+  const exportExcel = async () => {
+    if(!window.ExcelJS){ alert("Excel export se načítá, zkuste za chvíli."); return; }
     const fmtHx = h => h>0?(h%1===0?`${h}h`:`${h.toFixed(1)}h`):"";
+    const storeName = stores.find(s=>s.id===employee.mainStore)?.name||"";
 
-    // Hlavička
-    const wsData = [
-      [`Výkaz práce – ${employee.firstName} ${employee.lastName}`, "", "", "", "", "", "", "", "", "", "", "", ""],
-      [`${MONTHS[month]} ${year}  |  Fond: ${fund}h  |  Prodejna: ${stores.find(s=>s.id===employee.mainStore)?.name}`],
-      [],
-      ["Den","Datum","Rozvrh","Příchod","Odchod","Přest.od","Přest.do","Odprac.","DOV h","Admin","Roz.1","Roz.2","Typ dne"],
+    const wb = new window.ExcelJS.Workbook();
+    const ws = wb.addWorksheet(`${MONTHS[month]} ${year}`);
+
+    // Šířky sloupců
+    ws.columns = [
+      {width:6},{width:10},{width:14},{width:9},{width:9},
+      {width:9},{width:9},{width:9},{width:8},{width:8},
+      {width:7},{width:7},{width:16},
     ];
 
-    rowData.forEach(({d,dow,row,worked,breakMin,effectiveType,schedDay,vacH,schedVacH})=>{
-      const schedLbl = schedDay?.from ? `${schedDay.from}–${schedDay.to}` : (schedDay?.type==="vacation"?"DOV":schedDay?.type==="sick"?"NEM":"");
+    // Řádek 1 – název
+    const r1 = ws.addRow([`Výkaz práce – ${employee.firstName} ${employee.lastName}`]);
+    r1.getCell(1).font = {bold:true, size:13};
+    ws.mergeCells(1,1,1,13);
+
+    // Řádek 2 – info
+    ws.addRow([`${MONTHS[month]} ${year}  |  Fond: ${fund}h  |  Prodejna: ${storeName}  |  Role: ${employee.role}`]);
+    ws.mergeCells(2,1,2,13);
+
+    // Řádek 3 – prázdný
+    ws.addRow([]);
+
+    // Řádek 4 – záhlaví tabulky
+    const hdrRow = ws.addRow(["Den","Datum","Rozvrh","Příchod","Odchod","Přest.od","Přest.do","Odprac.","DOV h","Admin","Roz.1","Roz.2","Typ dne"]);
+    hdrRow.eachCell(cell=>{
+      cell.fill = {type:"pattern", pattern:"solid", fgColor:{argb:"FF1A1A2E"}};
+      cell.font = {bold:true, color:{argb:"FFFFFFFF"}, size:9};
+      cell.alignment = {horizontal:"center", vertical:"middle"};
+      cell.border = {bottom:{style:"thin", color:{argb:"FF444466"}}};
+    });
+    hdrRow.height = 16;
+
+    // Barvy řádků dle typu dne
+    const xlColors = {
+      work:            null,
+      dayOff:          "FFE8F5E9",
+      vacation:        "FFE3F2FD",
+      sick:            "FFF5F5F5",
+      obstacle:        "FFFFF3E0",
+      holidayOpen:     "FFF1F8E9",
+      holidayClose:    "FFFFEBEE",
+      "work+vacation": "FFEDE7F6",
+      ocr:             "FFFFF9C4",
+      other:           "FFFFF9C4",
+    };
+    const weekendArgb = "FFFFF8F8";
+
+    // Datové řádky
+    rowData.forEach(({d,dow,row,worked,effectiveType,schedDay,vacH,schedVacH})=>{
+      const schedLbl = schedDay?.from?`${schedDay.from}–${schedDay.to}`:(schedDay?.type==="vacation"?"DOV":schedDay?.type==="sick"?"NEM":"");
       const dovH = (effectiveType==="work+vacation"||effectiveType==="vacation"||effectiveType==="sick")
         ? (effectiveType==="work+vacation"?vacH:schedVacH)||0 : 0;
-      wsData.push([
+      const dataRow = ws.addRow([
         DOW_LBL[dow],
         `${d}.${month+1}.${year}`,
         schedLbl,
-        fmtT(row.arrival),
-        fmtT(row.departure),
-        fmtT(row.breakFrom),
-        fmtT(row.breakTo),
-        worked>0?(worked%1===0?`${worked}h`:`${worked.toFixed(1)}h`):"",
-        dovH>0?(dovH%1===0?`${dovH}h`:`${dovH.toFixed(1)}h`):"",
+        row.arrival||"", row.departure||"",
+        row.breakFrom||"", row.breakTo||"",
+        worked>0?fmtHx(worked):"",
+        dovH>0?fmtHx(dovH):"",
         row.admin?`${row.admin}h`:"",
         row.roz1?`${row.roz1}×`:"",
         row.roz2?`${row.roz2}×`:"",
         TYPE_META[effectiveType]?.label||effectiveType,
       ]);
+      // Barva pozadí
+      let argb = xlColors[effectiveType] || null;
+      if(!argb && dow>=5) argb = weekendArgb;
+      if(argb){
+        dataRow.eachCell({includeEmpty:true}, cell=>{
+          cell.fill = {type:"pattern", pattern:"solid", fgColor:{argb}};
+        });
+      }
+      // So/Ne – tučné písmo
+      if(dow>=5) dataRow.getCell(1).font = {bold:true, color:{argb:"FFCC2222"}};
+      dataRow.height = 14;
     });
 
     // Prázdný řádek + souhrn
-    wsData.push([]);
-    wsData.push(["SOUHRN"]);
-    wsData.push(["Fond hodin", `${fund}h`]);
-    wsData.push(["Odpracovano", fmtHx(totWorked)]);
-    wsData.push(["Dovolena", fmtHx(totVac)]);
-    wsData.push(["Nemoc", fmtHx(totSick)]);
-    wsData.push(["Svátek zavřeno", fmtHx(totHolClose)]);
-    wsData.push(["Svátek otevřeno", fmtHx(totHolOpen)]);
-    wsData.push(["Vikendy", fmtHx(soH+neH)]);
-    wsData.push(["Celkem hod.", fmtHx(totAll)]);
-    wsData.push(["Přesčas / minus", (overtime>=0?"+":"")+fmtHx(Math.abs(overtime))]);
-    wsData.push(["Admin prace", totAdmin>0?`${totAdmin}h`:"—"]);
-    wsData.push(["Rozvoz 1", totRoz1>0?`${totRoz1}×`:"—"]);
-    wsData.push(["Rozvoz 2", totRoz2>0?`${totRoz2}×`:"—"]);
-    wsData.push(["Stravenky", tix>0?`${tix} ks`:"—"]);
-    wsData.push([]);
-    wsData.push(["KDP vstup", fmtHsign(kdpVstup)]);
-    wsData.push(["KDP proplaceno", kdpPaidThis>0?`${kdpPaidThis}h`:"—"]);
-    wsData.push(["KDP výstup", fmtHsign(kdpVystup)]);
+    ws.addRow([]);
+    const sHdr = ws.addRow(["SOUHRN"]);
+    sHdr.getCell(1).font = {bold:true, size:10};
 
-    const ws = XLSX.utils.aoa_to_sheet(wsData);
-    ws["!cols"] = [6,8,12,8,8,8,8,8,7,7,6,6,16].map(w=>({wch:w}));
-
-    // Barevné řádky – header řádky dat začínají na indexu 4 (0-based)
-    const dataStartRow = 4; // řádky 0-3 jsou hlavička
-    const xlColors = {
-      work:         null,                      // bílá – výchozí
-      dayOff:       "E8F5E9",                  // zelená
-      vacation:     "E3F2FD",                  // modrá
-      sick:         "F5F5F5",                  // šedá
-      obstacle:     "FFF3E0",                  // oranžová
-      holidayOpen:  "F1F8E9",                  // světle zelená
-      holidayClose: "FFEBEE",                  // červená
-      "work+vacation": "EDE7F6",               // fialová
-      ocr:          "FFF9C4",                  // žlutá
-      other:        "FFF9C4",                  // žlutá
-    };
-    const weekendColor = "FFF8F8";             // víkend – světle růžová
-
-    rowData.forEach(({dow, effectiveType}, i) => {
-      const excelRow = dataStartRow + i; // 0-based row index
-      const cols = 13; // počet sloupců A–M
-      let bgColor = xlColors[effectiveType] || null;
-      if(dow >= 5 && !bgColor) bgColor = weekendColor; // So/Ne bez jiného typu
-      if(!bgColor) return; // bílá – nic nedělej
-
-      for(let c = 0; c < cols; c++){
-        const cellAddr = XLSX.utils.encode_cell({r: excelRow, c});
-        if(!ws[cellAddr]) ws[cellAddr] = {t:"s", v:""};
-        if(!ws[cellAddr].s) ws[cellAddr].s = {};
-        ws[cellAddr].s.fill = { fgColor: { rgb: bgColor }, patternType: "solid" };
-      }
+    const sumRows = [
+      ["Fond hodin", `${fund}h`],
+      ["Odpracováno", fmtHx(totWorked)],
+      ["Dovolená", fmtHx(totVac)],
+      ["Nemoc", fmtHx(totSick)],
+      ["Svátek zavřeno", fmtHx(totHolClose)],
+      ["Svátek otevřeno", fmtHx(totHolOpen)],
+      ["Víkendy", fmtHx(soH+neH)],
+      ["Celkem hod.", fmtHx(totAll)],
+      ["Přesčas / minus", (overtime>=0?"+":"")+fmtHx(Math.abs(overtime))],
+      ["Admin práce", totAdmin>0?`${totAdmin}h`:"—"],
+      ["Rozvoz 1", totRoz1>0?`${totRoz1}×`:"—"],
+      ["Rozvoz 2", totRoz2>0?`${totRoz2}×`:"—"],
+      ["Stravenky", tix>0?`${tix} ks`:"—"],
+      [],
+      ["KDP vstup", fmtHsign(kdpVstup)],
+      ["KDP proplaceno", kdpPaidThis>0?`${kdpPaidThis}h`:"—"],
+      ["KDP výstup", fmtHsign(kdpVystup)],
+    ];
+    sumRows.forEach(r=>{
+      const row = ws.addRow(r);
+      if(r.length>0) row.getCell(1).font = {bold:true};
     });
 
-    // Záhlaví tabulky (řádek 3) – tmavé pozadí
-    for(let c = 0; c < 13; c++){
-      const cellAddr = XLSX.utils.encode_cell({r: 3, c});
-      if(!ws[cellAddr]) ws[cellAddr] = {t:"s", v:""};
-      if(!ws[cellAddr].s) ws[cellAddr].s = {};
-      ws[cellAddr].s.fill = { fgColor: { rgb: "1A1A2E" }, patternType: "solid" };
-      ws[cellAddr].s.font = { color: { rgb: "FFFFFF" }, bold: true };
-    }
-
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, `${MONTHS[month]} ${year}`);
-    XLSX.writeFile(wb, `Vykaz_${employee.firstName}_${employee.lastName}_${MONTHS[month]}_${year}.xlsx`);
+    // Ulož soubor
+    const buf = await wb.xlsx.writeBuffer();
+    const blob = new Blob([buf], {type:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `Vykaz_${employee.firstName}_${employee.lastName}_${MONTHS[month]}_${year}.xlsx`;
+    a.click();
+    URL.revokeObjectURL(url);
   };
 
   // ── Export PDF – A4 na výšku, jedna stránka ──
@@ -2664,7 +2683,7 @@ function MainApp({currentUser, handleLogout}){
     });
   },[dbSavePatterns]);
 
-  // Načti SheetJS + jsPDF z CDN
+  // Načti SheetJS + jsPDF + ExcelJS z CDN
   useEffect(()=>{
     if(!window.XLSX){
       const s=document.createElement("script");
@@ -2679,6 +2698,11 @@ function MainApp({currentUser, handleLogout}){
     if(!window.jspdfAutotable){
       const s=document.createElement("script");
       s.src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js";
+      document.head.appendChild(s);
+    }
+    if(!window.ExcelJS){
+      const s=document.createElement("script");
+      s.src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.3.0/exceljs.min.js";
       document.head.appendChild(s);
     }
   },[]);
