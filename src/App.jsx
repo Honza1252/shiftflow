@@ -1,5 +1,9 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { createClient } from "@supabase/supabase-js";
+import jsPDF from "jspdf";
+import autoTable from "jspdf-autotable";
+import * as XLSX from "xlsx";
+import ExcelJS from "exceljs";
 
 // ─── SUPABASE ────────────────────────────────────────────────
 const SUPA_URL  = "https://xwmnkaioxnxhzbbldzch.supabase.co";
@@ -1634,11 +1638,11 @@ function TimesheetView({employee, year, month, holidays, stores, sched, employee
 
   // ── Export Excel s barvami (ExcelJS) ──
   const exportExcel = async () => {
-    if(!window.ExcelJS){ alert("Excel export se načítá, zkuste za chvíli."); return; }
+    if(!ExcelJS){ alert("Excel export se načítá, zkuste za chvíli."); return; }
     const fmtHx = h => h>0?(h%1===0?`${h}h`:`${h.toFixed(1)}h`):"";
     const storeName = stores.find(s=>s.id===employee.mainStore)?.name||"";
 
-    const wb = new window.ExcelJS.Workbook();
+    const wb = new ExcelJS.Workbook();
     const ws = wb.addWorksheet(`${MONTHS[month]} ${year}`);
 
     // Šířky sloupců
@@ -1766,9 +1770,7 @@ function TimesheetView({employee, year, month, holidays, stores, sched, employee
       .replace(/[ňŇ]/g,"n").replace(/[řŘ]/g,"r").replace(/[šŠ]/g,"s")
       .replace(/[ťŤ]/g,"t").replace(/[žŽ]/g,"z").replace(/[ľĽ]/g,"l")
       .replace(/[ôÔ]/g,"o").replace(/[ä]/g,"a").replace(/[ö]/g,"o");
-    const jsPDFLib = window.jspdf?.jsPDF || window.jsPDF;
-    if(!jsPDFLib){ alert("PDF export se nacita, zkuste za chvili."); return; }
-    if(!jsPDFLib.prototype?.autoTable){ alert("PDF plugin neni dostupny, obnovte stranku."); return; }
+    const jsPDFLib = jsPDF;
     // A4 portrait: 210 x 297 mm, použitelná šířka ~182 mm (margin 14 mm)
     const doc = new jsPDFLib({ orientation:"portrait", unit:"mm", format:"a4" });
     const storeName = stores.find(s=>s.id===employee.mainStore)?.name||"";
@@ -1823,7 +1825,7 @@ function TimesheetView({employee, year, month, holidays, stores, sched, employee
       ];
     });
 
-    doc.autoTable({
+    autoTable(doc, {
       head, body,
       startY: 25,
       margin:{ left: marginL, right: marginL },
@@ -1859,7 +1861,7 @@ function TimesheetView({employee, year, month, holidays, stores, sched, employee
     });
 
     // ── Souhrn měsíce – barevné dlaždice jako na webu ──
-    const sy = doc.lastAutoTable.finalY + 5;
+    const sy = (doc.lastAutoTable?.finalY || 150) + 5;
     const tileH   = 12;   // výška dlaždice
     const tileGap = 2;    // mezera
     const cols1   = 6;    // počet dlaždic v řadě 1
@@ -2874,11 +2876,11 @@ function MainApp({currentUser, handleLogout}){
 
   // ── Export rozvrhu do Excelu ──
   const exportSchedExcel = async () => {
-    if(!window.ExcelJS){ alert("Excel export se načítá, zkuste za chvíli."); return; }
+    if(!ExcelJS){ alert("Excel export se načítá, zkuste za chvíli."); return; }
     const storeName = stores.find(s=>s.id===storeId)?.name||"";
     const dim = getDim(year,month);
     const mainEmps = employees.filter(e=>e.active&&e.mainStore===storeId);
-    const wb = new window.ExcelJS.Workbook();
+    const wb = new ExcelJS.Workbook();
     const ws = wb.addWorksheet(`${MONTHS[month]} ${year}`);
 
     // Záhlaví
@@ -2964,8 +2966,7 @@ ${d}.`);
 
   // ── Export rozvrhu do PDF ──
   const exportSchedPdf = () => {
-    const jsPDFLib=window.jspdf?.jsPDF||window.jsPDF;
-    if(!jsPDFLib){ alert("PDF export se nacita, zkuste za chvili."); return; }
+    const jsPDFLib=jsPDF;
     const storeName=stores.find(s=>s.id===storeId)?.name||"";
     const dim=getDim(year,month);
     const mainEmps=employees.filter(e=>e.active&&e.mainStore===storeId);
