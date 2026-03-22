@@ -56,7 +56,7 @@ function holidayToDB(h){
 }
 
 // ─── KONFIGURACE ─────────────────────────────────────────────
-const APP_START = {year:2026, month:3}; // duben 2026 (month 0-indexed) – začátek systému
+const APP_START = {year:2026, month:2}; // brezen 2026 (month 0-indexed) – začátek systému
 const C = {
   work:"#ffffff", dayOff:"#E8F5E9", vacation:"#E3F2FD", sick:"#F5F5F5",
   obstacle:"#FFF3E0", holidayOpen:"#F1F8E9", holidayClose:"#FFEBEE",
@@ -2878,84 +2878,246 @@ function MainApp({currentUser, handleLogout}){
 
   // ── Export rozvrhu do Excelu ──
   const exportSchedExcel = async () => {
-    if(!ExcelJS){ alert("Excel export se načítá, zkuste za chvíli."); return; }
     const storeName = stores.find(s=>s.id===storeId)?.name||"";
     const dim = getDim(year,month);
     const mainEmps = employees.filter(e=>e.active&&e.mainStore===storeId);
     const wb = new ExcelJS.Workbook();
     const ws = wb.addWorksheet(`${MONTHS[month]} ${year}`);
 
-    // Záhlaví
-    const r1 = ws.addRow([`Rozvrh – ${storeName} – ${MONTHS[month]} ${year}`]);
-    r1.getCell(1).font={bold:true,size:13};
-    ws.mergeCells(1,1,1,dim+2);
+    // Barvy bunek – argb
+    const cellArgb=(label,dow)=>{
+      if(label==="DOV") return "FFE3F2FD";
+      if(label==="NEM") return "FFF5F5F5";
+      if(label==="SZ")  return "FFFFEBEE";
+      if(label==="SO")  return "FFF1F8E9";
+      if(label==="V")   return "FFE8F5E9";
+      if(dow>=5)        return "FFFFF8F8";
+      return null;
+    };
+    const cellFont=(label,dow)=>{
+      if(label==="DOV") return {color:{argb:"FF1565C0"},bold:true};
+      if(label==="NEM") return {color:{argb:"FF616161"}};
+      if(label==="SZ")  return {color:{argb:"FFC62828"},bold:true};
+      if(label==="SO")  return {color:{argb:"FF33691E"},bold:true};
+      if(label==="V")   return {color:{argb:"FF2E7D32"}};
+      if(dow>=5)        return {color:{argb:"FFB71C1C"},bold:true};
+      if(label&&label.includes("-")) return {bold:true};
+      return {};
+    };
 
-    // Řádek s dny (záhlaví sloupců)
-    const dayLabels = ["Zaměstnanec","Role"];
-    for(let d=1;d<=dim;d++){
-      const dow=getDow(year,month,d);
-      dayLabels.push(`${DOW_LBL[dow]}\n${d}.`);
+    // Zahlavi listu
+    ws.getColumn(1).width=22; // Jmeno+role
+    ws.getColumn(2).width=14; // Role
+    for(let i=3;i<=9;i++) ws.getColumn(i).width=9; // 7 dni
+
+    // Nadpis
+    const titleRow=ws.addRow([`Rozvrh – ${storeName} – ${MONTHS[month]} ${year}`]);
+    titleRow.getCell(1).font={bold:true,size:13,color:{argb:"FF1A1A2E"}};
+    ws.mergeCells(1,1,1,9);
+    titleRow.height=18;
+
+    const wd=getWorkingDays(year,month,holidays);
+    const subRow=ws.addRow([`${wd} pracovnich dni  |  fond ${wd*8}h`]);
+    subRow.getCell(1).font={size:9,color:{argb:"FF888888"}};
+    ws.mergeCells(2,1,2,9);
+    subRow.height=13;
+    ws.addRow([]); // prazdny radek
+
+    // Generuj tydny
+    const weeks=[];
+    const firstDow=getDow(year,month,1);
+    let calStart=1-firstDow;
+    while(true){
+      const wDays=[];
+      for(let i=0;i<7;i++) wDays.push(calStart+i);
+      if(wDays.some(d=>d>=1&&d<=dim)) weeks.push(wDays);
+      calStart+=7;
+      if(calStart>dim+1) break;
     }
-    const hdrRow = ws.addRow(dayLabels);
-    hdrRow.eachCell(cell=>{
-      cell.fill={type:"pattern",pattern:"solid",fgColor:{argb:"FF1A1A2E"}};
-      cell.font={bold:true,color:{argb:"FFFFFFFF"},size:8};
-      cell.alignment={horizontal:"center",vertical:"middle",wrapText:true};
-    });
-    hdrRow.height=28;
-    // Šířky
-    ws.getColumn(1).width=16;
-    ws.getColumn(2).width=14;
-    for(let d=1;d<=dim;d++) ws.getColumn(d+2).width=7;
 
-    // Řádky zaměstnanců
-    mainEmps.forEach((emp,ei)=>{
-      const empIdx=mainEmps.findIndex(e=>e.id===emp.id);
-      const cells=[`${emp.firstName} ${emp.lastName}`, emp.role];
-      for(let d=1;d<=dim;d++){
-        const date=new Date(year,month,d);
+    // Kresli kazdy tyden
+    weeks.forEach((wDays,wi)=>{
+      // Tyden label
+      const firstInMonth=wDays.find(d=>d>=1&&d<=dim)||1;
+      const firstDate=new Date(year,month,Math.max(1,firstInMonth));
+      const wType=storeId===2?"flat":getWeekType(firstDate);
+      const wLabel=wType==="odd"?"Lichy (T1)":wType==="even"?"Sudy (T2)":"Vzor";
+      const isoW=getIsoWeek(firstDate);
+      const wlRow=ws.addRow([`Tyden ${isoW}  ${wLabel}`]);
+      wlRow.getCell(1).font={size:9,bold:true,color:{argb:wType==="odd"?"FF1565C0":"FF2E7D32"}};
+      ws.mergeCells(wlRow.number,1,wlRow.number,9);
+      wlRow.height=13;
+
+      // Zahlavi dnu: Jmeno | Role | Po | Ut | St | Ct | Pa | So | Ne
+      const hdrCells=["Jmeno","Role",...wDays.map(d=>{
+        const inMonth=d>=1&&d<=dim;
+        if(!inMonth) return "—";
         const dow=getDow(year,month,d);
         const ds=fmtDate(year,month,d);
         const hol=holidays.find(h=>h.date===ds);
-        const cell=getSchedCell(sched,emp.id,ds,employees);
-        let label="";
-        if(cell?.length){
-          const ws2=cell.filter(s=>s.type==="work");
-          if(ws2.length) label=ws2.map(s=>s.from&&s.to?`${s.from.replace(":00","")}-${s.to.replace(":00","")}`:"Pr").join("/");
-          else{const ab=cell[0]; label=TYPE_SHORT[ab.type]||ab.type||"V";}
-        } else {
-          const pc=getPatCell(patterns,storeId,empIdx,date);
-          if(!pc) label=dow>=5?"":"V";
-          else if(pc==="work"||typeof pc==="object"){
-            const st=typeof pc==="object"?pc.shift||"work":pc;
-            const lId=typeof pc==="object"?(pc.loc||storeId):storeId;
-            const[fr,to]=getEmpShiftTimes(emp,lId,st,dow,stores,typeof pc==="object"?pc:null,hol);
-            label=fr&&to?`${fr.replace(":00","")}-${to.replace(":00","")}`:"Pr";
-          } else label=pc==="vacation"?"DOV":pc==="sick"?"NEM":"V";
-        }
-        if(hol&&!hol.open&&label!="DOV"&&label!="NEM") label="SZ";
-        cells.push(label);
-      }
-      const row=ws.addRow(cells);
-      row.eachCell((cell,cn)=>{
-        if(cn>2){
-          const dow2=getDow(year,month,cn-2);
-          const v=cell.value||"";
-          let argb=null;
-          if(dow2>=5) argb="FFFFF8F8";
-          if(v==="DOV") argb="FFE3F2FD";
-          if(v==="NEM") argb="FFF5F5F5";
-          if(v==="V") argb="FFE8F5E9";
-          if(v==="SZ") argb="FFFFEBEE";
-          if(argb) cell.fill={type:"pattern",pattern:"solid",fgColor:{argb}};
-        }
+        return `${DOW_LBL[dow]}
+${d}${hol?"!":"."}`;
+      })];
+      const hRow=ws.addRow(hdrCells);
+      hRow.height=24;
+      hRow.eachCell((cell,cn)=>{
+        const inMonth=cn>2&&wDays[cn-3]>=1&&wDays[cn-3]<=dim;
+        const d=cn>2?wDays[cn-3]:null;
+        const dow=inMonth?getDow(year,month,d):null;
+        const ds=inMonth?fmtDate(year,month,d):null;
+        const hol=inMonth?holidays.find(h=>h.date===ds):null;
+        let bg="FF1A1A2E";
+        if(cn>2&&!inMonth) bg="FF3A3A4A";
+        else if(hol&&!hol.open) bg="FF8C1E1E";
+        else if(dow>=5) bg="FF4A2A34";
+        cell.fill={type:"pattern",pattern:"solid",fgColor:{argb:bg}};
+        cell.font={bold:true,color:{argb:"FFFFFFFF"},size:8};
         cell.alignment={horizontal:"center",vertical:"middle",wrapText:true};
-        cell.font={size:7};
+        cell.border={bottom:{style:"thin",color:{argb:"FF444466"}}};
       });
-      row.getCell(1).font={size:9,bold:true};
-      row.getCell(2).font={size:8};
-      row.height=14;
+
+      // Radky zamestnancu
+      mainEmps.forEach((emp,ri)=>{
+        const empIdx=mainEmps.findIndex(e=>e.id===emp.id);
+        const rowCells=[`${emp.firstName} ${emp.lastName}`,emp.role];
+        const rowColors=[];
+        const rowFonts=[];
+        for(let di=0;di<7;di++){
+          const d=wDays[di];
+          const inMonth=d>=1&&d<=dim;
+          if(!inMonth){ rowCells.push(""); rowColors.push("FFF8F8FA"); rowFonts.push({}); continue; }
+          const date=new Date(year,month,d);
+          const dow=getDow(year,month,d);
+          const ds=fmtDate(year,month,d);
+          const hol=holidays.find(h=>h.date===ds);
+          const cell=getSchedCell(sched,emp.id,ds,employees);
+          let label="";
+          if(cell?.length){
+            const ws2=cell.filter(s=>s.type==="work");
+            if(ws2.length) label=ws2.map(s=>s.from&&s.to?`${s.from.replace(":00","")}-${s.to.replace(":00","")}`:"Pr").join("/");
+            else{const ab=cell[0];label=TYPE_SHORT[ab.type]||ab.type||"V";}
+          } else {
+            const pc=getPatCell(patterns,storeId,empIdx,date);
+            if(!pc) label=dow>=5?"":"V";
+            else if(pc==="work"||typeof pc==="object"){
+              const st=typeof pc==="object"?pc.shift||"work":pc;
+              const lId=typeof pc==="object"?(pc.loc||storeId):storeId;
+              const[fr,to]=getEmpShiftTimes(emp,lId,st,dow,stores,typeof pc==="object"?pc:null,hol);
+              label=fr&&to?`${fr.replace(":00","")}-${to.replace(":00","")}`:"Pr";
+            } else label=pc==="vacation"?"DOV":pc==="sick"?"NEM":"V";
+          }
+          if(hol&&!hol.open&&!["DOV","NEM"].includes(label)) label="SZ";
+          if(hol&&hol.open&&!label) label="SO";
+          rowCells.push(label);
+          rowColors.push(cellArgb(label,dow)||( ri%2===0?"FFFFFFFF":"FFF8F9FC"));
+          rowFonts.push(cellFont(label,dow));
+        }
+        const dRow=ws.addRow(rowCells);
+        dRow.height=15;
+        dRow.eachCell((cell,cn)=>{
+          const altBg=ri%2===0?"FFFFFFFF":"FFF8F9FC";
+          if(cn===1){
+            cell.font={bold:true,size:9,color:{argb:"FF1A1A2E"}};
+            cell.fill={type:"pattern",pattern:"solid",fgColor:{argb:altBg}};
+          } else if(cn===2){
+            cell.font={size:8,color:{argb:"FF888888"}};
+            cell.fill={type:"pattern",pattern:"solid",fgColor:{argb:altBg}};
+          } else {
+            const argb=rowColors[cn-3];
+            cell.fill={type:"pattern",pattern:"solid",fgColor:{argb:argb||altBg}};
+            const f=rowFonts[cn-3]||{};
+            cell.font={size:8,...f};
+          }
+          cell.alignment={horizontal:cn<=2?"left":"center",vertical:"middle"};
+          cell.border={bottom:{style:"hair",color:{argb:"FFD8DAE8"}}};
+        });
+      });
+      // Prazdny radek mezi tydny
+      if(wi<weeks.length-1) ws.addRow([]).height=5;
     });
+
+    // ── SOUHRN MESICE ──
+    ws.addRow([]);
+    const sumTitleRow=ws.addRow(["SOUHRN MESICE"]);
+    sumTitleRow.getCell(1).font={bold:true,size:11,color:{argb:"FF1A1A2E"}};
+    ws.mergeCells(sumTitleRow.number,1,sumTitleRow.number,9);
+    sumTitleRow.height=16;
+
+    // Zahlavi souhrnu
+    const sumHdrs=["Zamestnanec","Fond","Naplanováno","Presc.","KDP","Dov.nárok","Dov.cerpano","Dov.zbývá"];
+    const sumHRow=ws.addRow(sumHdrs);
+    sumHRow.height=14;
+    sumHRow.eachCell(cell=>{
+      cell.fill={type:"pattern",pattern:"solid",fgColor:{argb:"FF1A1A2E"}};
+      cell.font={bold:true,color:{argb:"FFFFFFFF"},size:8};
+      cell.alignment={horizontal:"center",vertical:"middle"};
+    });
+    sumHRow.getCell(1).alignment={horizontal:"left",vertical:"middle"};
+
+    const fmtH2=h=>h===0?"0h":(h%1===0?`${h}h`:`${h.toFixed(1)}h`);
+    const fmtHs=v=>v===null?"—":(v>=0?"+":"")+fmtH2(v||0);
+    const wd2=getWorkingDays(year,month,holidays);
+
+    mainEmps.forEach((emp,ri)=>{
+      const empIdx=mainEmps.findIndex(e=>e.id===emp.id);
+      let planned=0; let vacUsed=0;
+      for(let d=1;d<=dim;d++){
+        const dow=getDow(year,month,d);
+        const ds=fmtDate(year,month,d);
+        const cell=getSchedCell(sched,emp.id,ds,employees);
+        if(cell?.length){
+          const ws2=cell.filter(s=>s.type==="work"&&s.from&&s.to);
+          const vac=cell.find(s=>s.type==="vacation"||s.type==="sick");
+          const oth=cell.find(s=>s.type!=="work"&&s.type!=="vacation"&&s.type!=="sick");
+          if(ws2.length){ planned+=calcSplitWorked(ws2,emp.mainStore,stores); if(vac) planned+=(vac.hours||0); }
+          else if(vac||oth) planned+=((vac||oth).hours||0);
+          for(const seg of cell) if(seg.type==="vacation") vacUsed+=(seg.hours||0);
+        } else {
+          const hol=holidays.find(h=>h.date===ds);
+          const pc=getPatCell(patterns,storeId,empIdx,new Date(year,month,d));
+          if(pc){ const st=typeof pc==="object"?pc.shift||"work":pc; const lId=typeof pc==="object"?(pc.loc||storeId):storeId; const[fr,to]=getEmpShiftTimes(emp,lId,st,dow,stores,typeof pc==="object"?pc:null,hol); if(fr&&to) planned+=calcWorked(fr,to,getBreakRules(lId,stores)); }
+        }
+      }
+      const fund2=wd2*empContractDay(emp);
+      const ot=planned-fund2;
+      const kdp=calcKdpCumulative(emp,year,month,sched,holidays,stores,patterns,employees,timesheetData);
+      const vacLeft=emp.vacHours-vacUsed;
+      const altBg=ri%2===0?"FFFFFFFF":"FFF8F9FC";
+      const sRow=ws.addRow([
+        `${emp.firstName} ${emp.lastName}`,
+        fmtH2(fund2), fmtH2(planned),
+        (ot>=0?"+":"")+fmtH2(ot),
+        fmtHs(kdp),
+        fmtH2(emp.vacHours), fmtH2(vacUsed), fmtH2(vacLeft),
+      ]);
+      sRow.height=13;
+      sRow.eachCell((cell,cn)=>{
+        cell.fill={type:"pattern",pattern:"solid",fgColor:{argb:altBg}};
+        cell.alignment={horizontal:cn===1?"left":"center",vertical:"middle"};
+        cell.border={bottom:{style:"hair",color:{argb:"FFD8DAE8"}}};
+        const otColor=ot>0?"FF2E7D32":ot<0?"FFC62828":"FF888888";
+        const kdpColor=kdp>0?"FF1565C0":kdp<0?"FFC62828":"FF888888";
+        const vacColor=vacLeft>0?"FF2E7D32":"FFC62828";
+        if(cn===1) cell.font={bold:true,size:9};
+        else if(cn===2) cell.font={size:8,color:{argb:"FF555577"}};
+        else if(cn===3) cell.font={size:8,bold:true};
+        else if(cn===4) cell.font={size:8,bold:true,color:{argb:otColor}};
+        else if(cn===5) cell.font={size:8,bold:true,color:{argb:kdpColor}};
+        else if(cn===6) cell.font={size:8,color:{argb:"FF555577"}};
+        else if(cn===7) cell.font={size:8,color:{argb:"FF1565C0"}};
+        else if(cn===8) cell.font={size:8,bold:true,color:{argb:vacColor}};
+      });
+    });
+
+    // Sirky sloupcu pro souhrn
+    ws.getColumn(1).width=24;
+    ws.getColumn(2).width=10;
+    ws.getColumn(3).width=12;
+    ws.getColumn(4).width=10;
+    ws.getColumn(5).width=12;
+    ws.getColumn(6).width=12;
+    ws.getColumn(7).width=13;
+    ws.getColumn(8).width=12;
 
     const buf=await wb.xlsx.writeBuffer();
     const blob=new Blob([buf],{type:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"});
