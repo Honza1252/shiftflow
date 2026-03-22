@@ -1051,9 +1051,9 @@ function ScheduleView({storeId,employees,year,month,sched,onCellEdit,actions,hol
               {wDays.map((d,di)=>{
                 const {bg,lines,hrs,txtColor,clickable}=evalCell(emp,d);
                 return <td key={di}
-                  onClick={()=>isCur(d)&&clickable&&onCellEdit(emp,d)}
-                  title={!isCur(d)?"":clickable?"Kliknutím upravíte":`Read-only – edituje vedoucí ${stores.find(s=>s.id===emp.mainStore)?.name}`}
-                  style={{padding:"3px 2px",textAlign:"center",borderBottom:`1px solid ${C.border}`,borderLeft:"1px solid #f5f5f5",background:bg,cursor:isCur(d)&&clickable?"pointer":"default",minWidth:72,height:lines?.length>1?52:46,verticalAlign:"middle"}}>
+                  onClick={()=>isCur(d)&&clickable&&onCellEdit&&onCellEdit(emp,d)}
+                  title={!isCur(d)?"":(clickable&&onCellEdit)?"Kliknutím upravíte":"Pouze prohlížení"}
+                  style={{padding:"3px 2px",textAlign:"center",borderBottom:`1px solid ${C.border}`,borderLeft:"1px solid #f5f5f5",background:bg,cursor:(isCur(d)&&clickable&&onCellEdit)?"pointer":"default",minWidth:72,height:lines?.length>1?52:46,verticalAlign:"middle"}}>
                   {(lines||[]).map((l,li)=><div key={li} style={{fontSize:10,fontWeight:700,color:txtColor,lineHeight:1.25}}>{l}</div>)}
                   {hrs&&<div style={{fontSize:9,color:"#bbb",marginTop:1}}>({hrs%1===0?hrs:hrs.toFixed(1)}h)</div>}
                 </td>;
@@ -1419,7 +1419,7 @@ function EmployeesView({employees,setEmployees,stores}){
 }
 
 // ─── TIMESHEET ───────────────────────────────────────────────
-function TimesheetView({employee, year, month, holidays, stores, sched, employees, patterns, rows, onRowChange, timesheetData, onKdpPaidChange}){
+function TimesheetView({employee, year, month, holidays, stores, sched, employees, patterns, rows, onRowChange, timesheetData, onKdpPaidChange, canEditKdp=true}){
   const dim = getDim(year, month);
   const brRules = getBreakRules(employee.mainStore, stores);
   const fund = getWorkingDays(year, month, holidays) * empContractDay(employee);
@@ -2000,18 +2000,23 @@ function TimesheetView({employee, year, month, holidays, stores, sched, employee
             <div style={{fontSize:9,fontWeight:700,color:overtime>=0?"#2e7d32":"#c62828",textTransform:"uppercase",marginBottom:4}}>Přesčas / minus tento měsíc</div>
             <div style={{fontSize:18,fontWeight:800,color:overtime>=0?"#2e7d32":"#c62828"}}>{fmtHsign(overtime)}</div>
           </div>
-          {/* KDP proplaceno – editovatelné */}
+          {/* KDP proplaceno – editovatelné pro vedoucího, read-only pro prodavače */}
           <div style={{background:"#fff3e0",borderRadius:8,padding:"10px 12px",textAlign:"center"}}>
             <div style={{fontSize:9,fontWeight:700,color:"#e65100",textTransform:"uppercase",marginBottom:6}}>KDP proplaceno (vedoucí)</div>
-            <select
-              value={kdpPaidThis}
-              onChange={e=>onKdpPaidChange(Number(e.target.value))}
-              style={{padding:"5px 8px",borderRadius:6,border:`1.5px solid #ffcc80`,fontSize:14,fontWeight:700,color:"#e65100",background:"#fff",width:"100%",textAlign:"center"}}
-            >
-              {[0,0.5,1,1.5,2,2.5,3,3.5,4,4.5,5,6,7,8,9,10,12,14,16,20,24,32,40].map(v=>(
-                <option key={v} value={v}>{v===0?"— (nic)":v%1===0?`${v}h`:`${v}h`}</option>
-              ))}
-            </select>
+            {canEditKdp
+              ? <select
+                  value={kdpPaidThis}
+                  onChange={e=>onKdpPaidChange(Number(e.target.value))}
+                  style={{padding:"5px 8px",borderRadius:6,border:`1.5px solid #ffcc80`,fontSize:14,fontWeight:700,color:"#e65100",background:"#fff",width:"100%",textAlign:"center"}}
+                >
+                  {[0,0.5,1,1.5,2,2.5,3,3.5,4,4.5,5,6,7,8,9,10,12,14,16,20,24,32,40].map(v=>(
+                    <option key={v} value={v}>{v===0?"— (nic)":v%1===0?`${v}h`:`${v}h`}</option>
+                  ))}
+                </select>
+              : <div style={{fontSize:16,fontWeight:800,color:"#e65100",padding:"4px 0"}}>
+                  {kdpPaidThis===0?"— (nic)":kdpPaidThis%1===0?`${kdpPaidThis}h`:`${kdpPaidThis}h`}
+                </div>
+            }
           </div>
           {/* KDP výstup */}
           <div style={{background:kdpVystup>=0?"#e3f2fd":"#ffebee",borderRadius:8,padding:"10px 12px",textAlign:"center",border:`2px solid ${kdpVystup>=0?"#90caf9":"#ef9a9a"}`}}>
@@ -2751,7 +2756,7 @@ function MainApp({currentUser, handleLogout}){
         </div>
         <div style={{background:"#fff",borderRadius:10,padding:"20px",boxShadow:"0 1px 4px rgba(0,0,0,0.05)",marginBottom:20}}>
           <ScheduleView storeId={storeId} employees={employees} year={year} month={month}
-            sched={sched} onCellEdit={onCellEdit} actions={actions} holidays={holidays}
+            sched={sched} onCellEdit={isVedouci?onCellEdit:null} actions={actions} holidays={holidays}
             stores={stores} patterns={patterns}/>
         </div>
         <div style={{background:"#fff",borderRadius:10,padding:"20px",boxShadow:"0 1px 4px rgba(0,0,0,0.05)",marginBottom:20}}>
@@ -2772,6 +2777,7 @@ function MainApp({currentUser, handleLogout}){
           ?<TimesheetView employee={employees.find(e=>e.id===tsEmp)} year={year} month={month} holidays={holidays} stores={stores} sched={sched} employees={employees} patterns={patterns}
             rows={getTimesheetRows(tsEmp,year,month+1)} onRowChange={(day,field,value)=>updTimesheetRow(tsEmp,year,month+1,day,field,value)}
             timesheetData={timesheetData}
+            canEditKdp={isVedouci}
             onKdpPaidChange={v=>{
               const k=tsKey(tsEmp,year,month+1);
               setTimesheetData(prev=>({...prev,[k]:{...(prev[k]||{}),kdpPaid:v}}));
