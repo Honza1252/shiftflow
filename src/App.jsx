@@ -1768,17 +1768,7 @@ function TimesheetView({employee, year, month, holidays, stores, sched, employee
       .replace(/[ôÔ]/g,"o").replace(/[ä]/g,"a").replace(/[ö]/g,"o");
     const jsPDFLib = window.jspdf?.jsPDF || window.jsPDF;
     if(!jsPDFLib){ alert("PDF export se nacita, zkuste za chvili."); return; }
-    // Pockej na autotable pokud jeste neni nacten
-    if(!jsPDFLib.prototype?.autoTable){
-      // Zkus nacist autotable synchronne
-      if(!document.querySelector('script[src*="autotable"]')){
-        const s=document.createElement("script");
-        s.src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js";
-        document.head.appendChild(s);
-      }
-      alert("PDF plugin se nacita, zkuste znovu za 2 sekundy.");
-      return;
-    }
+    if(!jsPDFLib.prototype?.autoTable){ alert("PDF plugin neni dostupny, obnovte stranku."); return; }
     // A4 portrait: 210 x 297 mm, použitelná šířka ~182 mm (margin 14 mm)
     const doc = new jsPDFLib({ orientation:"portrait", unit:"mm", format:"a4" });
     const storeName = stores.find(s=>s.id===employee.mainStore)?.name||"";
@@ -2742,39 +2732,8 @@ function MainApp({currentUser, handleLogout}){
     });
   },[dbSavePatterns]);
 
-  // Načti SheetJS + jsPDF + ExcelJS z CDN – správné pořadí (autotable až po jsPDF)
-  useEffect(()=>{
-    const loadScript = (src, check, onLoad) => {
-      if(check()) { onLoad && onLoad(); return; }
-      const s = document.createElement("script");
-      s.src = src;
-      if(onLoad) s.onload = onLoad;
-      document.head.appendChild(s);
-    };
-    // XLSX
-    loadScript(
-      "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js",
-      ()=>!!window.XLSX
-    );
-    // jsPDF – a teprve po načtení nahraje autotable
-    loadScript(
-      "https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js",
-      ()=>!!window.jspdf,
-      ()=>{
-        // autotable se načte až po jsPDF
-        loadScript(
-          "https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js",
-          ()=>!!(window.jspdf?.jsPDF?.prototype?.autoTable),
-          ()=>{ window.jspdfAutotable = true; }
-        );
-      }
-    );
-    // ExcelJS
-    loadScript(
-      "https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.3.0/exceljs.min.js",
-      ()=>!!window.ExcelJS
-    );
-  },[]);
+  // Knihovny jsou načteny v index.html ve správném pořadí – nic nedělat
+  // XLSX, ExcelJS, jsPDF, jspdf-autotable jsou dostupné jako window.XLSX atd.
 
   const [editCell,setEditCell]=useState(null);
   const [tsEmp,setTsEmp]=useState(()=>{
