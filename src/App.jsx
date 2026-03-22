@@ -2278,8 +2278,8 @@ function MainApp({currentUser, handleLogout}){
 
   // ─── SAVE HELPERS ────────────────────────────────────────────
   const dbSaveEmployees=useCallback(async(emps)=>{
-    const rows=emps.map(empToDB);
-    await supabase.from("employees").upsert(rows,{onConflict:"id"});
+    const existing=emps.filter(e=>e.id&&typeof e.id==="number"&&e.id<1000000000);
+    if(existing.length) await supabase.from("employees").upsert(existing.map(empToDB),{onConflict:"id"});
   },[]);
 
   const dbSaveStores=useCallback(async(sts)=>{
