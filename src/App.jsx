@@ -1116,7 +1116,9 @@ function SettingsView({holidays,setHolidays,actions,setActions,stores,setStores,
             style={{display:"flex",alignItems:"center",gap:16,padding:"14px 20px",background:"#fff",border:`1.5px solid ${C.border}`,borderRadius:10,cursor:"pointer"}}
             onMouseEnter={e=>e.currentTarget.style.borderColor="#4f8ef7"}
             onMouseLeave={e=>e.currentTarget.style.borderColor=C.border}>
-            <div style={{width:40,height:40,background:"#eef2ff",borderRadius:9,display:"flex",alignItems:"center",justifyContent:"center",fontSize:18}}>🏪</div>
+            <div style={{width:40,height:40,background:"#eef2ff",borderRadius:9,display:"flex",alignItems:"center",justifyContent:"center",overflow:"hidden",padding:4}}>
+              <img src="/logo.png" alt="logo" style={{width:"100%",height:"100%",objectFit:"contain"}}/>
+            </div>
             <div style={{flex:1}}>
               <div style={{fontWeight:800,fontSize:14,color:C.topbar}}>{s.name}</div>
               <div style={{fontSize:12,color:"#aaa"}}>{employees.filter(e=>e.active&&e.mainStore===s.id).length} zaměstnanců · {s.id===2?"Jeden vzor":"T1/T2"}</div>
@@ -2451,9 +2453,9 @@ function LoginScreen({onLogin}){
     <div style={{minHeight:"100vh",background:"#1a1a2e",display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
       <div style={{background:"#fff",borderRadius:16,padding:40,width:"100%",maxWidth:400,boxShadow:"0 32px 80px rgba(0,0,0,0.4)"}}>
         <div style={{textAlign:"center",marginBottom:32}}>
-          <div style={{fontSize:36,marginBottom:8}}>🏪</div>
-          <div style={{fontSize:24,fontWeight:900,color:"#1a1a2e"}}>ShiftFlow</div>
-          <div style={{fontSize:13,color:"#aaa",marginTop:4}}>ELEKTRO Jankovský s.r.o.</div>
+          <img src="/logo.png" alt="ELEKTRO Jankovský" style={{width:240,marginBottom:8}}/>
+          <div style={{fontSize:18,fontWeight:800,color:"#1a1a2e",marginTop:4}}>Rozvrh směn</div>
+          <div style={{fontSize:13,color:"#aaa",marginTop:2}}>ELEKTRO Jankovský s.r.o.</div>
         </div>
         <div style={{display:"flex",flexDirection:"column",gap:14}}>
           <div>
@@ -3438,8 +3440,7 @@ ${d}${hol?"!":"."}`;
 
   if(!dbReady) return(
     <div style={{minHeight:"100vh",background:"#1a1a2e",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:16}}>
-      <div style={{fontSize:36}}>🏪</div>
-      <div style={{color:"#fff",fontSize:18,fontWeight:700}}>ShiftFlow</div>
+      <img src="/logo.png" alt="logo" style={{height:28,filter:"brightness(0) invert(1)"}}/>
       <div style={{color:"rgba(255,255,255,0.5)",fontSize:13}}>Načítám data z databáze…</div>
       <div style={{width:180,height:3,background:"rgba(255,255,255,0.1)",borderRadius:2,overflow:"hidden"}}>
         <div style={{height:"100%",background:"#4f8ef7",borderRadius:2,animation:"sfpulse 1.2s ease-in-out infinite"}}/>
@@ -3453,7 +3454,7 @@ ${d}${hol?"!":"."}`;
     </div>}
     <div style={{background:C.topbar,boxShadow:"0 2px 12px rgba(0,0,0,0.18)"}}>
       <div style={{display:"flex",alignItems:"center",padding:"0 20px",gap:16}}>
-        <div style={{color:"#fff",fontSize:16,fontWeight:800,padding:"14px 0",whiteSpace:"nowrap"}}>🏪 ShiftFlow</div>
+        <img src="/logo.png" alt="logo" style={{height:22,filter:"brightness(0) invert(1)",padding:"14px 0"}}/>
         <div style={{flex:1,display:"flex",justifyContent:"center",gap:6,padding:"10px 0"}}>
           {stores.map(s=><Btn key={s.id} variant="store" active={storeId===s.id} small onClick={()=>setStoreId(s.id)} style={{minWidth:90}}>{s.name}</Btn>)}
         </div>
