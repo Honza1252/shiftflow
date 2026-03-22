@@ -2972,7 +2972,7 @@ function MainApp({currentUser, handleLogout}){
     const mainEmps = employees.filter(e=>e.active&&e.mainStore===storeId);
     // A4 landscape: 297x210 mm
     const doc = new jsPDF({orientation:"landscape",unit:"mm",format:"a4"});
-    const pageW=297; const mL=8; const mR=8; const mT=10;
+    const pageW=297; const pageH=210; const mL=8; const mR=8; const mT=10;
     const usableW=pageW-mL-mR; // 281mm
 
     // === BARVY ===
@@ -3141,7 +3141,7 @@ function MainApp({currentUser, handleLogout}){
         const altBg=ri%2===0?[255,255,255]:[248,249,252];
 
         // Jméno + role buňka
-        doc.setFillColor(...altBg);
+        doc.setFillColor(altBg[0],altBg[1],altBg[2]);
         doc.rect(mL, y, nameW, rowH, "F");
         doc.setFont("helvetica","bold"); doc.setFontSize(7.5); doc.setTextColor(26,26,46);
         doc.text(cz(`${emp.firstName} ${emp.lastName}`).substring(0,18), mL+2, y+5);
@@ -3161,10 +3161,10 @@ function MainApp({currentUser, handleLogout}){
             const{label,hrs,dow}=days[d-1];
             const bg=cellBg(label,dow);
             const tc=cellTc(label,dow);
-            doc.setFillColor(...bg);
+            doc.setFillColor(bg[0],bg[1],bg[2]);
             doc.rect(x, y, dayW, rowH, "F");
             if(label){
-              doc.setTextColor(...tc);
+              doc.setTextColor(tc[0],tc[1],tc[2]);
               const isShift=label.includes("–");
               doc.setFont("helvetica", isShift?"bold":"normal");
               doc.setFontSize(isShift?6:7);
@@ -3218,7 +3218,7 @@ function MainApp({currentUser, handleLogout}){
     if(curY>pageH-25) { doc.addPage(); curY=mT+5; }
     let lx=mL;
     legendItems.forEach(({label,bg})=>{
-      doc.setFillColor(...bg);
+      doc.setFillColor(bg[0],bg[1],bg[2]);
       doc.rect(lx,curY,3.5,3.5,"F");
       doc.setDrawColor(160,162,175);
       doc.rect(lx,curY,3.5,3.5);
@@ -3306,7 +3306,7 @@ function MainApp({currentUser, handleLogout}){
         vacLeft>0?[46,125,50]:[198,40,40],
       ];
       sHdrs.forEach((_,hi)=>{
-        doc.setFillColor(...altBg);
+        doc.setFillColor(altBg[0],altBg[1],altBg[2]);
         doc.rect(sx,curY,sColW[hi],rowH2,"F");
         doc.setFont("helvetica",hi===0?"bold":"normal");
         doc.setFontSize(hi===0?7:7.5);
