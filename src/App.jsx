@@ -1,7 +1,3 @@
-import jsPDF from "jspdf";
-import autoTable from "jspdf-autotable";
-import * as XLSX from "xlsx";
-import ExcelJS from "exceljs";
 import { useState, useEffect, useCallback, useRef } from "react";
 import { createClient } from "@supabase/supabase-js";
 import jsPDF from "jspdf";
@@ -2896,8 +2892,7 @@ function MainApp({currentUser, handleLogout}){
     const dayLabels = ["Zaměstnanec","Role"];
     for(let d=1;d<=dim;d++){
       const dow=getDow(year,month,d);
-      dayLabels.push(`${DOW_LBL[dow]}
-${d}.`);
+      dayLabels.push(`${DOW_LBL[dow]}\n${d}.`);
     }
     const hdrRow = ws.addRow(dayLabels);
     hdrRow.eachCell(cell=>{
@@ -3047,11 +3042,8 @@ ${d}.`);
       doc.setFont("helvetica","bold"); doc.setFontSize(5); doc.setTextColor(255,255,255);
       const ds=fmtDate(year,month,d);
       const hol=holidays.find(h=>h.date===ds);
-      const lbl=hol?`${DOW_LBL[dow]}
-${d}!`:`${DOW_LBL[dow]}
-${d}.`;
-      const lines=lbl.split("
-");
+      const lbl=hol?`${DOW_LBL[dow]}\n${d}!`:`${DOW_LBL[dow]}\n${d}.`;
+      const lines=lbl.split("\n");
       doc.text(lines[0], x+dayW/2, startY+3.5, {align:"center"});
       doc.text(lines[1], x+dayW/2, startY+7.5, {align:"center"});
     }
