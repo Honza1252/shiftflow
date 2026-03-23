@@ -3966,34 +3966,91 @@ function CommissionInput({employees, stores, currentUser, sched, holidays, patte
   const handleSave = async()=>{
     if(!planProdejny||isNaN(Number(planProdejny))){ alert("Zadejte plán prodejny!"); return; }
     setSaving(true);
-
-    // Uložení dat pro aktuální prodejnu
     const upsertRows = rows.map(r=>({
-      store_id: storeId,
-      employee_id: r.employee_id,
-      month, year,
+      store_id: storeId, employee_id: r.employee_id, month, year,
       plan_prodejny: Number(planProdejny)||0,
-      hodiny: Number(r.hodiny)||0,
-      obrat: Number(r.obrat)||0,
-      trzba_pz: Number(r.trzba_pz)||0,
-      trzba_sluzby: Number(r.trzba_sluzby)||0,
+      hodiny: Number(r.hodiny)||0, obrat: Number(r.obrat)||0,
+      trzba_pz: Number(r.trzba_pz)||0, trzba_sluzby: Number(r.trzba_sluzby)||0,
       obrat_prislusenstvi: Number(r.obrat_prislusenstvi)||0,
       korunova_motivace: Number(r.korunova_motivace)||0,
-      locked: true,
+      locked: true, // vždy zamknout při uložení
     }));
     for(const ur of upsertRows){
       await supabase.from("commission_data").upsert(ur,{onConflict:"store_id,employee_id,month,year"});
     }
-
-    // Sdílení plánu prodejny do ostatních prodejen (plán se liší per prodejna ale ukládáme ho globálně)
-    // Zaměstnanci sdílení mezi prodejnami (extraStores) dostanou data automaticky při načtení
-    // Zamknutí – uložíme příznak locked=true → formulář bude read-only
     setSaving(false); setSaved(true);
     setTimeout(()=>setSaved(false),2500);
-    // Reload dat aby se zobrazil lock stav
-    setTimeout(()=>{
-      setRows(prev=>prev.map(r=>({...r, locked:true})));
-    },300);
+    setRows(prev=>prev.map(r=>({...r, locked:true})));
+  };
+
+  // Import → uloží + ihned zamkne (locked:true v DB)
+  const handleImportAndSave = async(file)=>{
+    try {
+      const {obratMap,pzMap,sluzbyMap,prislMap,korunovaMap} = await parseVzorPodklady(file);
+      const toAscii = s => String(s||"").normalize("NFC").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"");
+      const findKey = (r, map)=>{
+        const toAsciiStr = s => String(s||"").normalize("NFC").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"");
+        for(const prijmeni of [r.prijmeni, r.prijmeniFallback].filter(Boolean)){
+          if(prijmeni in map) return prijmeni;
+          const asc = toAsciiStr(prijmeni);
+          const found = Object.keys(map).find(k=>toAsciiStr(k)===asc);
+          if(found) return found;
+        }
+        return null;
+      };
+      const ok=[], warn=[], diagKeys=Object.keys(obratMap).filter(k=>!k.startsWith("id_")).sort();
+      // Aplikuj importovaná data na rows a rovnou ulož do DB
+      setRows(prev=>{
+        const next = prev.map(r=>{
+          const mk = findKey(r, obratMap);
+          if(!mk){ warn.push(r.name); return r; }
+          ok.push(r.name);
+          return {
+            ...r,
+            obrat: String(Math.round(obratMap[mk]||0)),
+            trzba_pz: String(Math.round(pzMap[mk]||0)),
+            trzba_sluzby: String(Math.round(sluzbyMap[mk]||0)),
+            obrat_prislusenstvi: String(Math.round(prislMap[mk]||0)),
+            korunova_motivace: String(Math.round(korunovaMap[mk]||0)),
+          };
+        });
+        // Uložit a zamknout asynchronně
+        if(planProdejny && !isNaN(Number(planProdejny))){
+          (async()=>{
+            for(const r of next){
+              await supabase.from("commission_data").upsert({
+                store_id:storeId, employee_id:r.employee_id, month, year,
+                plan_prodejny:Number(planProdejny)||0,
+                hodiny:Number(r.hodiny)||0, obrat:Number(r.obrat)||0,
+                trzba_pz:Number(r.trzba_pz)||0, trzba_sluzby:Number(r.trzba_sluzby)||0,
+                obrat_prislusenstvi:Number(r.obrat_prislusenstvi)||0,
+                korunova_motivace:Number(r.korunova_motivace)||0,
+                locked:true,
+              },{onConflict:"store_id,employee_id,month,year"});
+            }
+            setRows(p=>p.map(r=>({...r,locked:true})));
+            setSaved(true); setTimeout(()=>setSaved(false),3000);
+          })();
+        }
+        return next.map(r=>({...r,locked:false})); // UI update nejdřív bez locku, pak se lock nastaví
+      });
+      setTimeout(()=>setImportStatus({ok:[...ok], warn:[...warn], diagKeys}), 100);
+    } catch(err){
+      alert("Chyba při čtení souboru: "+err.message);
+    }
+  };
+
+  // Import handler – načte soubor, aplikuje data, uloží a zamkne
+  const handleImport = async(e)=>{
+    const file = e.target.files?.[0];
+    if(!file) return;
+    e.target.value = "";
+    if(!planProdejny||isNaN(Number(planProdejny))){
+      alert("Nejdřív zadejte Plán prodejny, pak nahrajte soubor.");
+      return;
+    }
+    setImportStatus(null);
+    await handleImportAndSave(file);
   };
 
   const isLocked = rows.length>0 && rows.every(r=>r.locked);
@@ -4126,14 +4183,15 @@ function CommissionInput({employees, stores, currentUser, sched, holidays, patte
           </div>}
           <div style={{marginTop:14,display:"flex",gap:10,alignItems:"center",flexWrap:"wrap"}}>
             {!isLocked&&<button onClick={handleSave} disabled={saving}
-              style={{background:"#1B4F8A",color:"#fff",border:"none",borderRadius:9,padding:"11px 28px",fontSize:14,fontWeight:700,cursor:saving?"not-allowed":"pointer",opacity:saving?0.7:1}}>
-              {saving?"Ukládám…":"💾 Uložit a zamknout"}
+              style={{background:"#6b7280",color:"#fff",border:"none",borderRadius:9,padding:"11px 28px",fontSize:14,fontWeight:700,cursor:saving?"not-allowed":"pointer",opacity:saving?0.7:1}}>
+              {saving?"Ukládám…":"💾 Uložit ručně a zamknout"}
             </button>}
             {isLocked&&<button onClick={handleUnlock}
               style={{background:"#fff7ed",color:"#c2410c",border:"1.5px solid #f97316",borderRadius:9,padding:"11px 28px",fontSize:14,fontWeight:700,cursor:"pointer"}}>
               🔓 Odemknout pro úpravy
             </button>}
             {saved&&<span style={{color:"#16a34a",fontWeight:700,fontSize:13}}>✅ Uloženo a zamčeno!</span>}
+            {!isLocked&&!saving&&<span style={{fontSize:12,color:"#aaa"}}>💡 Import xlsx uloží a zamkne automaticky</span>}
           </div>
         </>
     }
@@ -4235,11 +4293,20 @@ function CommissionResults({employees, stores}){
           if(!c) return null;
 
           const items = [
-            {label:"Záruky (PZ)",   done:c.plneniPz,   provize:c.provizePz,   plan:c.planPz,     actual:r.data.trzba_pz,    chybi:Math.max(0,c.planPz-r.data.trzba_pz),     jednotka:"Kč tržby",  weight:"4×"},
-            {label:"Obrat",         done:c.plneniObrat, provize:c.provizeObrat,plan:c.planObrat,  actual:r.data.obrat,       chybi:Math.max(0,c.planObrat-r.data.obrat),     jednotka:"Kč",        weight:"1×"},
-            {label:"Služby",        done:c.plneniSluzby,provize:c.provizeSluzby,plan:c.planSluzby,actual:r.data.trzba_sluzby,chybi:Math.max(0,c.planSluzby-r.data.trzba_sluzby),jednotka:"Kč tržby",weight:"1×"},
-            {label:"Příslušenství", done:c.plneniPrislusenství,provize:c.provizePrislusenství,plan:c.planPrislusenství,actual:r.data.obrat_prislusenstvi,chybi:Math.max(0,c.planPrislusenství-r.data.obrat_prislusenstvi),jednotka:"Kč",weight:"1×"},
+            {label:"Záruky (PZ)",   done:c.plneniPz,   provize:c.provizePz,   plan:c.planPz,     actual:r.data.trzba_pz,    chybi:Math.max(0,c.planPz-r.data.trzba_pz),     jednotka:"Kč tržby",  weight:"4×", sazba:0.10},
+            {label:"Obrat",         done:c.plneniObrat, provize:c.provizeObrat,plan:c.planObrat,  actual:r.data.obrat,       chybi:Math.max(0,c.planObrat-r.data.obrat),     jednotka:"Kč",        weight:"1×", sazba:null},
+            {label:"Služby",        done:c.plneniSluzby,provize:c.provizeSluzby,plan:c.planSluzby,actual:r.data.trzba_sluzby,chybi:Math.max(0,c.planSluzby-r.data.trzba_sluzby),jednotka:"Kč tržby",weight:"1×", sazba:0.10},
+            {label:"Příslušenství", done:c.plneniPrislusenství,provize:c.provizePrislusenství,plan:c.planPrislusenství,actual:r.data.obrat_prislusenstvi,chybi:Math.max(0,c.planPrislusenství-r.data.obrat_prislusenstvi),jednotka:"Kč",weight:"1×",sazba:0.038},
           ];
+
+          // Výpočet potenciálního zisku při 100% plnění všech složek
+          const provizeAt100 = calcCommission(
+            {...r.data, trzba_pz:c.planPz, obrat:c.planObrat, trzba_sluzby:c.planSluzby, obrat_prislusenstvi:c.planPrislusenství},
+            {koef_pz:0.025,koef_sluzby:0.012,koef_prislusenstvi:0.1465,obrat_koef_plny:0.004,obrat_koef_zkraceny:0.003,obrat_strop:3000,...(r.settings||{})},
+            results.map(x=>x.data),
+            r.penetraceOverride||null
+          );
+          const moznyZisk = provizeAt100 ? Math.max(0, provizeAt100.vyslednaProvize - c.vyslednaProvize) : 0;
 
           const celkPct = Math.round(c.celkPlneni*100);
           const koefPct = Math.round(c.koef*100);
@@ -4280,6 +4347,10 @@ function CommissionResults({employees, stores}){
                   <div style={{fontSize:10,color:"#aaa",fontWeight:600}}>BONUS</div>
                   <div style={{fontSize:14,fontWeight:800,color:"#16a34a"}}>+{czk(c.bonusObrat)}</div>
                 </div>}
+                {moznyZisk>50&&<div style={{textAlign:"center",background:"#fef9c3",borderRadius:8,padding:"4px 8px",border:"1px solid #fde047"}}>
+                  <div style={{fontSize:10,color:"#854d0e",fontWeight:600}}>MOŽNÝ ZISK</div>
+                  <div style={{fontSize:14,fontWeight:800,color:"#854d0e"}}>+{czk(moznyZisk)}</div>
+                </div>}
                 <div style={{color:"#bbb",fontSize:18,marginLeft:4}}>{isExp?"▲":"▼"}</div>
               </div>
             </div>
@@ -4306,6 +4377,7 @@ function CommissionResults({employees, stores}){
                     </div>
                     {it.chybi>0&&<div style={{marginTop:4,fontSize:12,color:"#dc2626",fontWeight:600}}>
                       Chybí: {czk(it.chybi)} {it.jednotka}
+                      {it.sazba&&<span style={{color:"#f97316",fontWeight:700,marginLeft:6}}>→ +{czk(Math.min(it.chybi*it.sazba, it.label==="Záruky (PZ)"?99999:it.label==="Příslušenství"?4000:1500))} provize</span>}
                     </div>}
                     {it.chybi===0&&<div style={{marginTop:4,fontSize:12,color:"#16a34a",fontWeight:700}}>✅ Plán splněn!</div>}
                     <div style={{marginTop:4,fontSize:12,color:"#1B4F8A"}}>Provize: <strong>{czk(it.provize)}</strong></div>
@@ -4315,6 +4387,13 @@ function CommissionResults({employees, stores}){
               {/* Korunová motivace */}
               {c.korunovaMot>0&&<div style={{fontSize:13,color:"#555",marginBottom:8}}>
                 💰 Korunová motivace: <strong>{czk(c.korunovaMot)}</strong>
+              </div>}
+              {/* Motivační banner */}
+              {moznyZisk>50&&<div style={{marginBottom:12,padding:"10px 14px",background:"#fef9c3",borderRadius:8,border:"1px solid #fde047",fontSize:13}}>
+                <span style={{fontWeight:700,color:"#854d0e"}}>💡 Splněním plánu ve všech složkách</span>
+                <span style={{color:"#713f12"}}> můžeš získat ještě </span>
+                <span style={{fontWeight:800,color:"#854d0e",fontSize:15}}>+{czk(moznyZisk)}</span>
+                <span style={{color:"#713f12"}}> navíc</span>
               </div>}
               {/* Výpočet provize */}
               <div style={{background:"#fff",borderRadius:8,padding:"10px 14px",border:"1px solid #e8e8f0",fontSize:12,color:"#555",lineHeight:2}}>
@@ -4337,16 +4416,23 @@ function CommissionResults({employees, stores}){
 }
 
 // ── Obrazovka 3: Nastavení koeficientů ───────────────────────
-function CommissionSettings({stores}){
+function CommissionSettings({stores, onSettingsSaved}){
   const [data, setData] = useState({});
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [importingPenetrace, setImportingPenetrace] = useState(false);
   const [penetraceStatus, setPenetraceStatus] = useState(null);
-  const [penetraceTable, setPenetraceTable] = useState([]); // [{month, store_id, koef, penetrace_loni}]
-  const [editingPen, setEditingPen] = useState({}); // {`${storeId}_${month}`: val}
+  const [penetraceTable, setPenetraceTable] = useState([]);
+  const [editingPen, setEditingPen] = useState({});
   const [savingPen, setSavingPen] = useState(false);
   const penetraceRef = useRef(null);
+
+  // Koeficienty které se zadávají v % (zobrazit ×100, uložit ÷100)
+  const PCT_FIELDS = new Set(["koef_pz","koef_sluzby","koef_prislusenstvi","obrat_koef_plny","obrat_koef_zkraceny"]);
+  // Pomocník: zobraz hodnotu z DB pro input (převeď na % pokud je to procentní pole)
+  const toDisplay = (key, val) => PCT_FIELDS.has(key) ? String(Math.round(Number(val||0)*10000)/100) : String(val||"");
+  // Pomocník: převeď vstup na DB hodnotu (% → desetinné číslo)
+  const fromDisplay = (key, val) => PCT_FIELDS.has(key) ? (Number(val)||0)/100 : Number(val)||0;
 
   const DEFAULTS = {koef_pz:0.025,koef_sluzby:0.012,koef_prislusenstvi:0.1465,obrat_koef_plny:0.004,obrat_koef_zkraceny:0.003,obrat_strop:3000};
   const PZ_DEFAULTS = {1:1630, 2:1775, 3:1710};
@@ -4364,7 +4450,8 @@ function CommissionSettings({stores}){
     const {data:penD} = await supabase.from("commission_penetrace").select("*").order("month");
     setPenetraceTable(penD||[]);
     const initEdit = {};
-    (penD||[]).forEach(r=>{ initEdit[`${r.store_id}_${r.month}`]=String(r.koef_prislusenstvi); });
+    // Penetrace v tabulce zobrazujeme také v % pro konzistenci
+    (penD||[]).forEach(r=>{ initEdit[`${r.store_id}_${r.month}`]=String(Math.round(Number(r.koef_prislusenstvi)*10000)/100); });
     setEditingPen(initEdit);
   };
 
@@ -4377,23 +4464,32 @@ function CommissionSettings({stores}){
     for(const s of stores){
       const r=data[s.id]; if(!r) continue;
       await supabase.from("commission_settings").upsert({
-        store_id:s.id, koef_pz:Number(r.koef_pz)||0.025, koef_sluzby:Number(r.koef_sluzby)||0.012,
-        koef_prislusenstvi:Number(r.koef_prislusenstvi)||0.1465, prumerna_cena_pz:Number(r.prumerna_cena_pz)||1630,
-        obrat_koef_plny:Number(r.obrat_koef_plny)||0.004, obrat_koef_zkraceny:Number(r.obrat_koef_zkraceny)||0.003,
-        obrat_strop:Number(r.obrat_strop)||3000, updated_at:new Date().toISOString(),
+        store_id:s.id,
+        koef_pz: fromDisplay("koef_pz", r.koef_pz),
+        koef_sluzby: fromDisplay("koef_sluzby", r.koef_sluzby),
+        koef_prislusenstvi: fromDisplay("koef_prislusenstvi", r.koef_prislusenstvi),
+        prumerna_cena_pz: Number(r.prumerna_cena_pz)||1630,
+        obrat_koef_plny: fromDisplay("obrat_koef_plny", r.obrat_koef_plny),
+        obrat_koef_zkraceny: fromDisplay("obrat_koef_zkraceny", r.obrat_koef_zkraceny),
+        obrat_strop: Number(r.obrat_strop)||3000,
+        updated_at:new Date().toISOString(),
       },{onConflict:"store_id"});
     }
     setSaving(false); setSaved(true); setTimeout(()=>setSaved(false),2500);
+    // Oznám rodičovské komponentě že se nastavení změnilo → přepočítej výsledky
+    if(onSettingsSaved) onSettingsSaved();
   };
 
   const handleSavePenetrace=async()=>{
     setSavingPen(true);
     for(const [key,val] of Object.entries(editingPen)){
       const [sid,mon]=key.split("_").map(Number);
-      const koef=Number(val)||0;
+      // Hodnota je v %, převeď na desetinné
+      const koef=(Number(val)||0)/100;
       await supabase.from("commission_penetrace").upsert({store_id:sid,month:mon,koef_prislusenstvi:koef},{onConflict:"store_id,month"});
     }
     setSavingPen(false); await loadAll();
+    if(onSettingsSaved) onSettingsSaved();
   };
 
   const handlePenetraceImport=async(e)=>{
@@ -4423,23 +4519,23 @@ function CommissionSettings({stores}){
         }
       }
       setPenetraceStatus({saved}); setImportingPenetrace(false); await loadAll();
+      if(onSettingsSaved) onSettingsSaved();
     } catch(err){ setImportingPenetrace(false); alert("Chyba importu: "+err.message); }
   };
 
-  const inputS={padding:"6px 9px",borderRadius:7,border:"1.5px solid #E8E8F0",fontSize:13,width:110,textAlign:"right"};
+  const inputS={padding:"6px 9px",borderRadius:7,border:"1.5px solid #E8E8F0",fontSize:13,width:90,textAlign:"right"};
   const thS={padding:"9px 10px",textAlign:"left",fontWeight:700,color:"#fff",fontSize:12,background:"#1B4F8A"};
   const tdS={padding:"8px 10px",fontSize:13};
   const fields=[
-    {key:"koef_pz",label:"Koef. PZ",help:"2,5 % z plánu = plán PZ"},
-    {key:"koef_sluzby",label:"Koef. služby",help:"1,2 % z plánu = plán služeb"},
-    {key:"koef_prislusenstvi",label:"Koef. příslušenství",help:"výchozí; přebíjí ho import"},
-    {key:"prumerna_cena_pz",label:"Průměrná cena PZ (Kč)",help:"STR 1 630, BL 1 775, PE 1 710"},
-    {key:"obrat_koef_plny",label:"Obrat koef. plný úvazek",help:"0,4 %"},
-    {key:"obrat_koef_zkraceny",label:"Obrat koef. zkrácený úvazek",help:"0,3 %"},
-    {key:"obrat_strop",label:"Strop obratové provize (Kč)",help:"3 000 Kč"},
+    {key:"koef_pz",         label:"Koef. PZ",                    help:"Plán PZ = X % z plánu prodejny",      suffix:"%"},
+    {key:"koef_sluzby",     label:"Koef. služby",                help:"Plán služeb = X % z plánu prodejny",  suffix:"%"},
+    {key:"koef_prislusenstvi",label:"Koef. příslušenství",       help:"Výchozí; přebíjí ho import",          suffix:"%"},
+    {key:"prumerna_cena_pz",label:"Průměrná cena PZ (Kč)",       help:"STR 1 630, BL 1 775, PE 1 710",       suffix:"Kč"},
+    {key:"obrat_koef_plny", label:"Obrat koef. plný úvazek",     help:"Provize z obratu plný úvazek",        suffix:"%"},
+    {key:"obrat_koef_zkraceny",label:"Obrat koef. zkrácený úvazek",help:"Provize z obratu zkrácený úvazek",  suffix:"%"},
+    {key:"obrat_strop",     label:"Strop obratové provize (Kč)", help:"Max. provize za obrat",               suffix:"Kč"},
   ];
 
-  // Sestavení přehledu penetrace: řádky = měsíce, sloupce = prodejny
   const allMonths = [...new Set(penetraceTable.map(r=>r.month))].sort((a,b)=>a-b);
 
   return <div>
@@ -4480,12 +4576,15 @@ function CommissionSettings({stores}){
               {stores.map((s,si)=>{
                 const key=`${s.id}_${mon}`;
                 const rec=penetraceTable.find(r=>r.store_id===s.id&&r.month===mon);
-                const koef=editingPen[key]!==undefined?editingPen[key]:String(rec?.koef_prislusenstvi||"");
+                const koef=editingPen[key]!==undefined?editingPen[key]:"";
                 const penLoni=rec?.penetrace_loni;
                 return <td key={s.id} style={{...tdS,textAlign:"center",background:si%2===0?"#fff":"#f8f9ff"}}>
-                  <input type="number" step="0.0001" value={koef}
-                    onChange={ev=>setEditingPen(p=>({...p,[key]:ev.target.value}))}
-                    style={{...inputS,width:90}}/>
+                  <div style={{display:"flex",alignItems:"center",justifyContent:"center",gap:4}}>
+                    <input type="number" step="0.01" value={koef}
+                      onChange={ev=>setEditingPen(p=>({...p,[key]:ev.target.value}))}
+                      style={{...inputS,width:70}}/>
+                    <span style={{fontSize:12,color:"#888"}}>%</span>
+                  </div>
                   {penLoni!=null&&<div style={{fontSize:10,color:"#aaa",marginTop:2}}>
                     loni: {(penLoni*100).toFixed(2)} %
                   </div>}
@@ -4500,7 +4599,7 @@ function CommissionSettings({stores}){
           style={{padding:"8px 20px",borderRadius:7,border:"none",background:"#1B4F8A",color:"#fff",fontWeight:700,fontSize:13,cursor:savingPen?"not-allowed":"pointer",opacity:savingPen?0.7:1}}>
           {savingPen?"Ukládám…":"💾 Uložit korekce penetrace"}
         </button>
-        <span style={{fontSize:11,color:"#aaa"}}>Hodnota = koef. příslušenství (penetrace + 0,5 %), např. 0.1465</span>
+        <span style={{fontSize:11,color:"#aaa"}}>Hodnota v % = koeficient příslušenství (penetrace loňského roku + 0,5 %), např. 14,65 %</span>
       </div>
     </div>}
 
@@ -4519,7 +4618,13 @@ function CommissionSettings({stores}){
               <div style={{fontSize:11,color:"#aaa"}}>{f.help}</div>
             </td>
             {stores.map((s,si)=><td key={s.id} style={{...tdS,textAlign:"center",background:si%2===0?"#fff":"#f8f9ff"}}>
-              <input type="number" step="any" value={data[s.id]?.[f.key]||""} onChange={e=>upd(s.id,f.key,e.target.value)} style={inputS}/>
+              <div style={{display:"flex",alignItems:"center",justifyContent:"center",gap:4}}>
+                <input type="number" step={f.suffix==="%"?"0.01":"1"}
+                  value={toDisplay(f.key, data[s.id]?.[f.key])}
+                  onChange={e=>upd(s.id, f.key, e.target.value)}
+                  style={inputS}/>
+                <span style={{fontSize:12,color:"#888",minWidth:20}}>{f.suffix}</span>
+              </div>
             </td>)}
           </tr>)}
         </tbody>
@@ -4539,11 +4644,17 @@ function CommissionSettings({stores}){
 function CommissionModule({employees, stores, currentUser, sched, holidays, patterns}){
   if(currentUser?.role !== "admin") return null;
   const [subTab, setSubTab] = useState("input");
+  const [resultsKey, setResultsKey] = useState(0); // increment to force re-fetch
   const subTabs=[
     {key:"input",   label:"📝 Zadat výsledky"},
     {key:"results", label:"📊 Výsledky týmu"},
     {key:"settings",label:"⚙️ Nastavení koeficientů"},
   ];
+  const handleSettingsSaved = ()=>{
+    // Po uložení koeficientů přepneme na Výsledky a přinutíme je k přenačtení
+    setResultsKey(k=>k+1);
+    setSubTab("results");
+  };
   return <div>
     <div style={{display:"flex",gap:4,marginBottom:20,borderBottom:"2px solid #e8e8f0",paddingBottom:0}}>
       {subTabs.map(t=><button key={t.key} onClick={()=>setSubTab(t.key)}
@@ -4552,8 +4663,8 @@ function CommissionModule({employees, stores, currentUser, sched, holidays, patt
       </button>)}
     </div>
     {subTab==="input"    && <CommissionInput employees={employees} stores={stores} currentUser={currentUser} sched={sched} holidays={holidays} patterns={patterns}/>}
-    {subTab==="results"  && <CommissionResults employees={employees} stores={stores}/>}
-    {subTab==="settings" && <CommissionSettings stores={stores}/>}
+    {subTab==="results"  && <CommissionResults key={resultsKey} employees={employees} stores={stores}/>}
+    {subTab==="settings" && <CommissionSettings stores={stores} onSettingsSaved={handleSettingsSaved}/>}
   </div>;
 }
 
