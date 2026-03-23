@@ -3965,7 +3965,18 @@ function CommissionInput({employees, stores, currentUser, sched, holidays, patte
         return null;
       };
 
-      if(!planProdejny||isNaN(Number(planProdejny))){
+      // Načti existující plány pro každou prodejnu z DB (pokud existují)
+      const {data:existingPlans} = await supabase.from("commission_data")
+        .select("store_id,plan_prodejny")
+        .eq("month",month).eq("year",year)
+        .limit(100);
+      // Mapa store_id → plan (priorita: existující v DB, pak aktuálně zadaný pro tuto prodejnu)
+      const storePlanMap = {};
+      (existingPlans||[]).forEach(r=>{ if(r.plan_prodejny) storePlanMap[r.store_id]=r.plan_prodejny; });
+      // Pro aktuální prodejnu použij zadaný plán
+      if(planProdejny && !isNaN(Number(planProdejny))) storePlanMap[storeId] = Number(planProdejny);
+
+      if(!Object.keys(storePlanMap).length){
         alert("Nejdřív zadejte Plán prodejny, pak nahrajte soubor.");
         return;
       }
@@ -3993,7 +4004,7 @@ function CommissionInput({employees, stores, currentUser, sched, holidays, patte
           store_id: e.mainStore,
           employee_id: e.id,
           month, year,
-          plan_prodejny: Number(planProdejny)||0,
+          plan_prodejny: storePlanMap[e.mainStore] || Number(planProdejny)||0,
           hodiny: schedH>0 ? schedH : 0,
           obrat: Math.round(obratMap[mk]||0),
           trzba_pz: Math.round(pzMap[mk]||0),
@@ -4004,14 +4015,22 @@ function CommissionInput({employees, stores, currentUser, sched, holidays, patte
         };
       }).filter(Boolean);
 
-      // Ulož do DB
-      for(const ur of importRows){
-        await supabase.from("commission_data").upsert(ur,{onConflict:"store_id,employee_id,month,year"});
-      }
+      // Ulož do DB – paralelně pro rychlost
+      const results_db = await Promise.all(
+        importRows.map(ur=>
+          supabase.from("commission_data").upsert(ur,{onConflict:"store_id,employee_id,month,year"})
+        )
+      );
+      const errors_db = results_db.filter(r=>r.error);
+      if(errors_db.length) console.error("DB upsert errors:", errors_db.map(r=>r.error));
 
-      // Aktualizuj lokální rows pro aktuálně zobrazenou prodejnu
+      // Přenačti data pro aktuálně zobrazenou prodejnu z DB (aby byly hodnoty čerstvé)
+      const {data:freshCommD} = await supabase.from("commission_data")
+        .select("*").eq("store_id",storeId).eq("month",month).eq("year",year);
+
       setRows(prev=>prev.map(r=>{
-        const saved = importRows.find(ir=>ir.employee_id===r.employee_id);
+        const saved = freshCommD?.find(d=>d.employee_id===r.employee_id) ||
+                      importRows.find(ir=>ir.employee_id===r.employee_id);
         if(!saved) return r;
         return {
           ...r,
@@ -4024,7 +4043,6 @@ function CommissionInput({employees, stores, currentUser, sched, holidays, patte
           locked: true,
         };
       }));
-      setRows(prev=>prev.map(r=>({...r,locked:true})));
 
       setTimeout(()=>setImportStatus({
         ok, warn, diagKeys,
@@ -4041,10 +4059,6 @@ function CommissionInput({employees, stores, currentUser, sched, holidays, patte
     const file = e.target.files?.[0];
     if(!file) return;
     e.target.value = "";
-    if(!planProdejny||isNaN(Number(planProdejny))){
-      alert("Nejdřív zadejte Plán prodejny, pak nahrajte soubor.");
-      return;
-    }
     setImportStatus(null);
     await handleImportAndSave(file);
   };
@@ -4606,8 +4620,13 @@ function CommissionSettings({stores, onSettingsSaved}){
     // Globální nastavení z DB
     const {data:gD} = await supabase.from("commission_global").select("*").single();
     if(gD){
+      // Přirážka může být 0 – nepouží || ale explicitní null check
+      const prirazkaDB = gD.prislusenství_prirazka;
+      const prirazkaDisplay = (prirazkaDB === null || prirazkaDB === undefined)
+        ? "0.5"
+        : String(Math.round(prirazkaDB * 10000) / 100); // 0 → "0", 0.005 → "0.5"
       setGlobalSettings({
-        prislusenství_prirazka: String(Math.round((gD.prislusenství_prirazka||0.005)*10000)/100),
+        prislusenství_prirazka: prirazkaDisplay,
         vaha_pz: String(gD.vaha_pz||4),
         vaha_obrat: String(gD.vaha_obrat||1),
         vaha_sluzby: String(gD.vaha_sluzby||1),
