@@ -4297,11 +4297,14 @@ function CommissionResults({employees, stores}){
               label:"Příslušenství", done:c.plneniPrislusenství, provize:c.provizePrislusenství,
               plan:c.planPrislusenství, actual:r.data.obrat_prislusenstvi,
               chybi:Math.max(0,c.planPrislusenství-r.data.obrat_prislusenstvi), jednotka:"Kč", weight:"1×",
-              // při 100% splnění sazba4 × plán, minus co už má
               moznyZiskSlozky: Math.min(
                 Math.max(0, c.planPrislusenství * (Number(r.settings?.sazba_prisl_4)||0.038) - c.provizePrislusenství),
                 Math.max(0, (Number(r.settings?.strop_prislusenstvi)||4000) - c.provizePrislusenství)
               ),
+              // Info o penetraci pro zobrazení v kartičce
+              penetraceInfo: r.penetraceOverride != null
+                ? `${(r.penetraceOverride*100).toFixed(2)} % (import)`
+                : `${((Number(r.settings?.koef_prislusenstvi)||0.1465)*100).toFixed(2)} % (výchozí)`,
             },
           ];
 
@@ -4402,6 +4405,9 @@ function CommissionResults({employees, stores}){
                       <span style={{color:"#666"}}>Skutečnost: <strong>{czk(it.actual)}</strong></span>
                       <span style={{color:"#666"}}>Plán: <strong>{czk(it.plan)}</strong></span>
                     </div>
+                    {it.penetraceInfo&&<div style={{marginTop:4,fontSize:11,color:"#888",background:"#f8f9ff",borderRadius:4,padding:"2px 6px",display:"inline-block"}}>
+                      📊 Penetrace: {it.penetraceInfo}
+                    </div>}
                     {it.chybi>0
                       ? <div style={{marginTop:4,fontSize:12,color:"#dc2626",fontWeight:600}}>
                           Chybí: {czk(it.chybi)} {it.jednotka}
@@ -4605,11 +4611,21 @@ function CommissionSettings({stores, onSettingsSaved}){
   };
 
   const handleSavePenetrace = async()=>{
-    // Uložíme penetraci = penetrace_loni + přirážka (z globalSettings)
     const prirazka = (Number(globalSettings.prislusenství_prirazka)||0.5)/100;
     setSavingPen(true);
+    // 1) Ulož přirážku do commission_global aby přežila reload
+    await supabase.from("commission_global").upsert({
+      id:1,
+      prislusenství_prirazka: prirazka,
+      vaha_pz: Number(globalSettings.vaha_pz)||4,
+      vaha_obrat: Number(globalSettings.vaha_obrat)||1,
+      vaha_sluzby: Number(globalSettings.vaha_sluzby)||1,
+      vaha_prisl: Number(globalSettings.vaha_prisl)||1,
+      kraceni: globalSettings.kraceni,
+    },{onConflict:"id"});
+    // 2) Přepočítej koeficienty v commission_penetrace
     for(const rec of penetraceTable){
-      const koef = (rec.penetrace_loni||0) + prirazka;
+      const koef = Math.round(((rec.penetrace_loni||0) + prirazka) * 100000) / 100000;
       await supabase.from("commission_penetrace").upsert(
         {store_id:rec.store_id, month:rec.month, koef_prislusenstvi:koef, penetrace_loni:rec.penetrace_loni},
         {onConflict:"store_id,month"});
@@ -4760,17 +4776,19 @@ function CommissionSettings({stores, onSettingsSaved}){
               {stores.map((s,si)=>{
                 const rec = penetraceTable.find(r=>r.store_id===s.id&&r.month===mon);
                 const penLoni = rec?.penetrace_loni;
-                const koefAkt = rec?.koef_prislusenstvi;
+                const koefUlozeny = rec?.koef_prislusenstvi; // skutečně uložená hodnota v DB
                 const prirazka = (Number(globalSettings.prislusenství_prirazka)||0.5)/100;
-                const koefVypocet = penLoni != null ? penLoni + prirazka : null;
+                const koefVypocet = penLoni != null ? penLoni + prirazka : null; // co by bylo při aktuální přirážce
+                const sedí = koefUlozeny!=null && koefVypocet!=null && Math.abs(koefUlozeny-koefVypocet)<0.0002;
                 return <td key={s.id} style={{...tdS,textAlign:"center",background:si%2===0?"#fff":"#f8f9ff"}}>
                   {penLoni!=null
                     ? <div style={{display:"flex",alignItems:"center",justifyContent:"center",gap:6,fontSize:13}}>
                         <span style={{color:"#888"}}>{(penLoni*100).toFixed(2)} %</span>
                         <span style={{color:"#bbb"}}>→</span>
-                        <span style={{fontWeight:700,color:"#1B4F8A"}}>{koefVypocet!=null?(koefVypocet*100).toFixed(2):"-"} %</span>
-                        {koefAkt!=null&&Math.abs(koefAkt-koefVypocet)>0.0001&&
-                          <span title="Ručně upraveno" style={{fontSize:10,color:"#f97316"}}>✎</span>}
+                        <span style={{fontWeight:700,color: sedí?"#1B4F8A":"#f97316"}}>
+                          {koefUlozeny!=null?(koefUlozeny*100).toFixed(2):"-"} %
+                        </span>
+                        {!sedí&&koefUlozeny!=null&&<span title={`Liší se od výpočtu (${koefVypocet!=null?(koefVypocet*100).toFixed(2):"-"} %)`} style={{fontSize:10,color:"#f97316",cursor:"help"}}>✎</span>}
                       </div>
                     : <span style={{color:"#ddd"}}>–</span>
                   }
