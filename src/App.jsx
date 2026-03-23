@@ -4168,17 +4168,19 @@ function CommissionResults({employees, stores}){
   const [results, setResults] = useState([]);
   const [loading, setLoading] = useState(false);
   const [expandedRow, setExpandedRow] = useState(null);
+  const [loadTs] = useState(()=>Date.now()); // mění se při remountu = čerstvý fetch
   const MONTHS_CZ = ["Leden","Únor","Březen","Duben","Květen","Červen","Červenec","Srpen","Září","Říjen","Listopad","Prosinec"];
 
   useEffect(()=>{
     setResults([]); setExpandedRow(null);
     (async()=>{
       setLoading(true);
-      const {data:sD} = await supabase.from("commission_settings").select("*").eq("store_id",storeId).single();
-      const settings = sD || {koef_pz:0.025,koef_sluzby:0.012,koef_prislusenstvi:0.1465,prumerna_cena_pz:storeId===2?1775:storeId===3?1710:1630,obrat_koef_plny:0.004,obrat_koef_zkraceny:0.003,obrat_strop:3000};
+      // Vždy načti čerstvá nastavení z DB (bez cache)
+      const {data:sD} = await supabase.from("commission_settings").select("*").eq("store_id",storeId);
+      const settings = sD?.[0] || {koef_pz:0.025,koef_sluzby:0.012,koef_prislusenstvi:0.1465,prumerna_cena_pz:storeId===2?1775:storeId===3?1710:1630,obrat_koef_plny:0.004,obrat_koef_zkraceny:0.003,obrat_strop:3000};
       const {data:penD} = await supabase.from("commission_penetrace")
-        .select("koef_prislusenstvi").eq("store_id",storeId).eq("month",month).single();
-      const penetraceOverride = penD?.koef_prislusenstvi ?? null;
+        .select("koef_prislusenstvi").eq("store_id",storeId).eq("month",month);
+      const penetraceOverride = penD?.[0]?.koef_prislusenstvi ?? null;
       const {data:commD} = await supabase.from("commission_data")
         .select("*").eq("store_id",storeId).eq("month",month).eq("year",year);
       if(!commD?.length){ setLoading(false); return; }
@@ -4190,13 +4192,15 @@ function CommissionResults({employees, stores}){
       const calcs = dataWithNames.map(d=>({
         name: d.name||`#${d.employee_id}`,
         data: d,
+        settings, // předáme settings dál pro výpočet moznyZisk
+        penetraceOverride,
         calc: calcCommission(d, settings, commD, penetraceOverride),
         penetraceZdroj: penetraceOverride!=null ? `import (${(penetraceOverride*100).toFixed(2)} %)` : `výchozí (${((Number(settings.koef_prislusenstvi)||0.1465)*100).toFixed(2)} %)`,
       })).sort((a,b)=>(b.calc?.celkPlneni||0)-(a.calc?.celkPlneni||0));
       setResults(calcs);
       setLoading(false);
     })();
-  },[storeId,month,year]);
+  },[storeId,month,year,loadTs]);
 
   const exportCsv=()=>{
     const header = ["Prodejce","Plnění PZ %","Plnění obratu %","Plnění služeb %","Plnění přísl. %","Celkové plnění %","Koeficient %","Provize Kč"];
@@ -4255,9 +4259,9 @@ function CommissionResults({employees, stores}){
           // Výpočet potenciálního zisku při 100% plnění všech složek
           const provizeAt100 = calcCommission(
             {...r.data, trzba_pz:c.planPz, obrat:c.planObrat, trzba_sluzby:c.planSluzby, obrat_prislusenstvi:c.planPrislusenství},
-            {koef_pz:0.025,koef_sluzby:0.012,koef_prislusenstvi:0.1465,obrat_koef_plny:0.004,obrat_koef_zkraceny:0.003,obrat_strop:3000,...(r.settings||{})},
+            r.settings || {koef_pz:0.025,koef_sluzby:0.012,koef_prislusenstvi:0.1465,obrat_koef_plny:0.004,obrat_koef_zkraceny:0.003,obrat_strop:3000},
             results.map(x=>x.data),
-            r.penetraceOverride||null
+            r.penetraceOverride
           );
           const moznyZisk = provizeAt100 ? Math.max(0, provizeAt100.vyslednaProvize - c.vyslednaProvize) : 0;
 
@@ -4370,7 +4374,9 @@ function CommissionResults({employees, stores}){
 
 // ── Obrazovka 3: Nastavení koeficientů ───────────────────────
 function CommissionSettings({stores, onSettingsSaved}){
-  const [data, setData] = useState({});
+  // displayData = co vidí uživatel v inputech (vždy string, % pole jsou v %)
+  // dbData = skutečné hodnoty pro uložení do DB (desetinná čísla)
+  const [displayData, setDisplayData] = useState({});  // {storeId: {key: stringValue}}
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [importingPenetrace, setImportingPenetrace] = useState(false);
@@ -4380,66 +4386,88 @@ function CommissionSettings({stores, onSettingsSaved}){
   const [savingPen, setSavingPen] = useState(false);
   const penetraceRef = useRef(null);
 
-  // Koeficienty které se zadávají v % (zobrazit ×100, uložit ÷100)
+  // Pole zadávaná v procentech (user vidí 2.5, DB obsahuje 0.025)
   const PCT_FIELDS = new Set(["koef_pz","koef_sluzby","koef_prislusenstvi","obrat_koef_plny","obrat_koef_zkraceny"]);
-  // Pomocník: zobraz hodnotu z DB pro input (převeď na % pokud je to procentní pole)
-  const toDisplay = (key, val) => PCT_FIELDS.has(key) ? String(Math.round(Number(val||0)*10000)/100) : String(val||"");
-  // Pomocník: převeď vstup na DB hodnotu (% → desetinné číslo)
-  const fromDisplay = (key, val) => PCT_FIELDS.has(key) ? (Number(val)||0)/100 : Number(val)||0;
 
-  const DEFAULTS = {koef_pz:0.025,koef_sluzby:0.012,koef_prislusenstvi:0.1465,obrat_koef_plny:0.004,obrat_koef_zkraceny:0.003,obrat_strop:3000};
+  const DEFAULTS_DB = {koef_pz:0.025, koef_sluzby:0.012, koef_prislusenstvi:0.1465,
+    obrat_koef_plny:0.004, obrat_koef_zkraceny:0.003, obrat_strop:3000};
   const PZ_DEFAULTS = {1:1630, 2:1775, 3:1710};
   const STORE_NAME_MAP = {"strakonice":1,"blatná":2,"blatna":2,"pelhřimov":3,"pelhrimov":3};
   const MONTHS_CZ = ["","Leden","Únor","Březen","Duben","Květen","Červen","Červenec","Srpen","Září","Říjen","Listopad","Prosinec"];
 
+  // Převede DB hodnotu na display string (% pole ×100)
+  const dbToDisplay = (key, dbVal) => {
+    const num = Number(dbVal||0);
+    if(PCT_FIELDS.has(key)) return String(Math.round(num * 10000) / 100); // 0.025 → "2.5"
+    return String(num||"");
+  };
+  // Převede display string na DB hodnotu (% pole ÷100)
+  const displayToDB = (key, displayVal) => {
+    const num = Number(displayVal)||0;
+    if(PCT_FIELDS.has(key)) return num / 100; // "2.5" → 0.025
+    return num;
+  };
+
   const loadAll = async()=>{
     const {data:sD} = await supabase.from("commission_settings").select("*");
-    const map = {};
+    const disp = {};
     stores.forEach(s=>{
       const found = sD?.find(r=>r.store_id===s.id);
-      map[s.id] = found ? {...found} : {...DEFAULTS, prumerna_cena_pz: PZ_DEFAULTS[s.id]||1630, store_id:s.id};
+      const dbRow = found || {...DEFAULTS_DB, prumerna_cena_pz: PZ_DEFAULTS[s.id]||1630};
+      disp[s.id] = {};
+      Object.keys(DEFAULTS_DB).forEach(key=>{
+        disp[s.id][key] = dbToDisplay(key, dbRow[key]);
+      });
+      disp[s.id]["prumerna_cena_pz"] = String(dbRow.prumerna_cena_pz||PZ_DEFAULTS[s.id]||1630);
     });
-    setData(map);
+    setDisplayData(disp);
+
     const {data:penD} = await supabase.from("commission_penetrace").select("*").order("month");
     setPenetraceTable(penD||[]);
     const initEdit = {};
-    // Penetrace v tabulce zobrazujeme také v % pro konzistenci
-    (penD||[]).forEach(r=>{ initEdit[`${r.store_id}_${r.month}`]=String(Math.round(Number(r.koef_prislusenstvi)*10000)/100); });
+    (penD||[]).forEach(r=>{
+      // Penetrace v % pro zobrazení
+      initEdit[`${r.store_id}_${r.month}`] = String(Math.round(Number(r.koef_prislusenstvi)*10000)/100);
+    });
     setEditingPen(initEdit);
   };
 
   useEffect(()=>{ loadAll(); },[]);
 
-  const upd=(storeId,field,val)=>setData(prev=>({...prev,[storeId]:{...prev[storeId],[field]:val}}));
+  // upd ukládá display string přímo – žádná konverze zde
+  const upd = (storeId, field, val) => {
+    setDisplayData(prev=>({...prev, [storeId]:{...prev[storeId], [field]:val}}));
+  };
 
-  const handleSave=async()=>{
+  const handleSave = async()=>{
     setSaving(true);
     for(const s of stores){
-      const r=data[s.id]; if(!r) continue;
+      const disp = displayData[s.id];
+      if(!disp) continue;
       await supabase.from("commission_settings").upsert({
-        store_id:s.id,
-        koef_pz: fromDisplay("koef_pz", r.koef_pz),
-        koef_sluzby: fromDisplay("koef_sluzby", r.koef_sluzby),
-        koef_prislusenstvi: fromDisplay("koef_prislusenstvi", r.koef_prislusenstvi),
-        prumerna_cena_pz: Number(r.prumerna_cena_pz)||1630,
-        obrat_koef_plny: fromDisplay("obrat_koef_plny", r.obrat_koef_plny),
-        obrat_koef_zkraceny: fromDisplay("obrat_koef_zkraceny", r.obrat_koef_zkraceny),
-        obrat_strop: Number(r.obrat_strop)||3000,
-        updated_at:new Date().toISOString(),
+        store_id: s.id,
+        koef_pz:              displayToDB("koef_pz", disp.koef_pz),
+        koef_sluzby:          displayToDB("koef_sluzby", disp.koef_sluzby),
+        koef_prislusenstvi:   displayToDB("koef_prislusenstvi", disp.koef_prislusenstvi),
+        prumerna_cena_pz:     Number(disp.prumerna_cena_pz)||PZ_DEFAULTS[s.id]||1630,
+        obrat_koef_plny:      displayToDB("obrat_koef_plny", disp.obrat_koef_plny),
+        obrat_koef_zkraceny:  displayToDB("obrat_koef_zkraceny", disp.obrat_koef_zkraceny),
+        obrat_strop:          Number(disp.obrat_strop)||3000,
+        updated_at: new Date().toISOString(),
       },{onConflict:"store_id"});
     }
     setSaving(false); setSaved(true); setTimeout(()=>setSaved(false),2500);
-    // Oznám rodičovské komponentě že se nastavení změnilo → přepočítej výsledky
     if(onSettingsSaved) onSettingsSaved();
   };
 
-  const handleSavePenetrace=async()=>{
+  const handleSavePenetrace = async()=>{
     setSavingPen(true);
     for(const [key,val] of Object.entries(editingPen)){
-      const [sid,mon]=key.split("_").map(Number);
-      // Hodnota je v %, převeď na desetinné
-      const koef=(Number(val)||0)/100;
-      await supabase.from("commission_penetrace").upsert({store_id:sid,month:mon,koef_prislusenstvi:koef},{onConflict:"store_id,month"});
+      const [sid,mon] = key.split("_").map(Number);
+      const koef = (Number(val)||0) / 100; // display % → DB desetinné
+      await supabase.from("commission_penetrace").upsert(
+        {store_id:sid, month:mon, koef_prislusenstvi:koef},
+        {onConflict:"store_id,month"});
     }
     setSavingPen(false); await loadAll();
     if(onSettingsSaved) onSettingsSaved();
@@ -4572,10 +4600,13 @@ function CommissionSettings({stores, onSettingsSaved}){
             </td>
             {stores.map((s,si)=><td key={s.id} style={{...tdS,textAlign:"center",background:si%2===0?"#fff":"#f8f9ff"}}>
               <div style={{display:"flex",alignItems:"center",justifyContent:"center",gap:4}}>
-                <input type="number" step={f.suffix==="%"?"0.01":"1"}
-                  value={toDisplay(f.key, data[s.id]?.[f.key])}
+                <input
+                  type="number"
+                  step={f.suffix==="%"?"0.01":"1"}
+                  value={displayData[s.id]?.[f.key] ?? ""}
                   onChange={e=>upd(s.id, f.key, e.target.value)}
-                  style={inputS}/>
+                  style={inputS}
+                />
                 <span style={{fontSize:12,color:"#888",minWidth:20}}>{f.suffix}</span>
               </div>
             </td>)}
