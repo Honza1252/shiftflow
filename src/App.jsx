@@ -3884,20 +3884,17 @@ function CommissionInput({employees, stores, currentUser, sched, holidays, patte
       // Hodiny z rozvrhu (sloupec Naplánováno)
       const newRows = emps.map(e=>{
         const savedD = commD?.find(d=>d.employee_id===e.id);
-        // Hodiny: přednost mají uložená data, jinak živý výpočet z rozvrhu
         const schedH = calcPlannedHours(e, storeId, year, month-1, sched, holidays, stores, patterns, employees);
-        // prijmeni = příjmení pro párování s xlsx (xlsx má "Příjmení Jméno [ID]")
-        // V DB: first_name = křestní jméno, last_name = příjmení
-        // Pokud last_name prázdné (starší záznamy), použij first_name
         const prijmeniSrc = (e.lastName && e.lastName.trim()) ? e.lastName : e.firstName;
         const prijmeniRaw = prijmeniSrc.normalize("NFC").toLowerCase();
-        // Fallback klíč – druhá možnost (firstName pokud primární je lastName a naopak)
         const prijmeniFallback = ((e.lastName && e.lastName.trim()) ? e.firstName : "").normalize("NFC").toLowerCase();
+        const isLocked = savedD?.locked === true;
         return {
           employee_id: e.id,
           name: `${e.firstName} ${e.lastName}`.trim(),
           prijmeni: prijmeniRaw,
           prijmeniFallback: prijmeniFallback,
+          locked: isLocked,
           hodiny: savedD ? String(savedD.hodiny) : schedH>0 ? String(schedH) : "",
           hodiny_source: savedD ? "saved" : schedH>0 ? "rozvrh" : "manual",
           obrat: savedD ? String(savedD.obrat) : "",
@@ -3969,6 +3966,8 @@ function CommissionInput({employees, stores, currentUser, sched, holidays, patte
   const handleSave = async()=>{
     if(!planProdejny||isNaN(Number(planProdejny))){ alert("Zadejte plán prodejny!"); return; }
     setSaving(true);
+
+    // Uložení dat pro aktuální prodejnu
     const upsertRows = rows.map(r=>({
       store_id: storeId,
       employee_id: r.employee_id,
@@ -3980,12 +3979,32 @@ function CommissionInput({employees, stores, currentUser, sched, holidays, patte
       trzba_sluzby: Number(r.trzba_sluzby)||0,
       obrat_prislusenstvi: Number(r.obrat_prislusenstvi)||0,
       korunova_motivace: Number(r.korunova_motivace)||0,
+      locked: true,
     }));
     for(const ur of upsertRows){
       await supabase.from("commission_data").upsert(ur,{onConflict:"store_id,employee_id,month,year"});
     }
+
+    // Sdílení plánu prodejny do ostatních prodejen (plán se liší per prodejna ale ukládáme ho globálně)
+    // Zaměstnanci sdílení mezi prodejnami (extraStores) dostanou data automaticky při načtení
+    // Zamknutí – uložíme příznak locked=true → formulář bude read-only
     setSaving(false); setSaved(true);
     setTimeout(()=>setSaved(false),2500);
+    // Reload dat aby se zobrazil lock stav
+    setTimeout(()=>{
+      setRows(prev=>prev.map(r=>({...r, locked:true})));
+    },300);
+  };
+
+  const isLocked = rows.length>0 && rows.every(r=>r.locked);
+  const handleUnlock = async()=>{
+    if(!window.confirm("Opravdu odemknout data pro úpravy? Data budou znovu editovatelná.")) return;
+    for(const r of rows){
+      await supabase.from("commission_data")
+        .update({locked:false})
+        .eq("store_id",storeId).eq("employee_id",r.employee_id).eq("month",month).eq("year",year);
+    }
+    setRows(prev=>prev.map(r=>({...r,locked:false})));
   };
 
   const MONTHS_CZ = ["Leden","Únor","Březen","Duben","Květen","Červen","Červenec","Srpen","Září","Říjen","Listopad","Prosinec"];
@@ -4017,18 +4036,31 @@ function CommissionInput({employees, stores, currentUser, sched, holidays, patte
       </div>
       <div>
         <div style={{fontSize:11,fontWeight:700,color:"#888",marginBottom:4}}>PLÁN PRODEJNY (Kč)</div>
-        <input value={planProdejny} onChange={e=>setPlanProdejny(e.target.value)}
-          placeholder="např. 3500000" style={{...inputS,width:160}}/>
+        <input value={planProdejny} onChange={e=>!isLocked&&setPlanProdejny(e.target.value)}
+          readOnly={isLocked} placeholder="např. 3500000"
+          style={{...inputS,width:160,background:isLocked?"#f3f4f6":"#fff",cursor:isLocked?"not-allowed":"text"}}/>
       </div>
-      <div>
+      {!isLocked&&<div>
         <div style={{fontSize:11,fontWeight:700,color:"#888",marginBottom:4}}>IMPORT DAT</div>
         <input ref={importRef} type="file" accept=".xlsx" style={{display:"none"}} onChange={handleImport}/>
         <button onClick={()=>importRef.current?.click()}
           style={{padding:"8px 16px",borderRadius:7,border:"1.5px solid #1B4F8A",background:"#eef4ff",color:"#1B4F8A",fontWeight:700,fontSize:13,cursor:"pointer",whiteSpace:"nowrap"}}>
           📂 Nahrát Vzor_podklady.xlsx
         </button>
-      </div>
+      </div>}
+      {isLocked&&<div style={{display:"flex",alignItems:"flex-end"}}>
+        <button onClick={handleUnlock}
+          style={{padding:"8px 16px",borderRadius:7,border:"1.5px solid #f97316",background:"#fff7ed",color:"#c2410c",fontWeight:700,fontSize:13,cursor:"pointer"}}>
+          🔓 Odemknout pro úpravy
+        </button>
+      </div>}
     </div>
+
+    {/* Lock banner */}
+    {isLocked&&<div style={{marginBottom:14,padding:"10px 16px",borderRadius:8,background:"#f0fdf4",border:"1.5px solid #86efac",fontSize:13,display:"flex",alignItems:"center",gap:8}}>
+      <span style={{fontSize:16}}>🔒</span>
+      <span style={{fontWeight:600,color:"#166534"}}>Data jsou uložena a zamčena. Pro úpravy klikněte na „Odemknout".</span>
+    </div>}
 
     {/* Status importu */}
     {importStatus&&<div style={{marginBottom:14,padding:"10px 14px",borderRadius:8,background: importStatus.warn.length?"#fff8e1":"#f0fdf4",border:`1.5px solid ${importStatus.warn.length?"#fbbf24":"#86efac"}`,fontSize:13}}>
@@ -4058,37 +4090,50 @@ function CommissionInput({employees, stores, currentUser, sched, holidays, patte
               </thead>
               <tbody>
                 {rows.map((r,i)=><tr key={r.employee_id} style={{background:i%2===0?"#fff":"#f8f9ff"}}>
-                  <td style={{padding:"8px 10px",fontWeight:700,color:"#1a1a2e",whiteSpace:"nowrap"}}>{r.name}</td>
+                  <td style={{padding:"8px 10px",fontWeight:700,color:"#1a1a2e",whiteSpace:"nowrap"}}>
+                    {r.locked&&<span title="Zamčeno" style={{marginRight:5,fontSize:11}}>🔒</span>}
+                    {r.name}
+                  </td>
                   <td style={{padding:"4px 6px"}}>
                     <div style={{position:"relative"}}>
-                      <input type="number" value={r.hodiny} onChange={e=>updRow(i,"hodiny",e.target.value)}
+                      <input type="number" value={r.hodiny} readOnly={isLocked}
+                        onChange={e=>!isLocked&&updRow(i,"hodiny",e.target.value)}
                         style={{...inputS,textAlign:"right",
-                          background: r.hodiny_source==="rozvrh"?"#f0fdf4": r.hodiny_source==="saved"?"#f0f9ff":"#fff",
-                          border: r.hodiny_source==="rozvrh"?"1.5px solid #86efac": r.hodiny_source==="saved"?"1.5px solid #93c5fd":"1.5px solid #E8E8F0",
+                          background: isLocked?"#f3f4f6": r.hodiny_source==="rozvrh"?"#f0fdf4": r.hodiny_source==="saved"?"#f0f9ff":"#fff",
+                          border: isLocked?"1.5px solid #d1d5db": r.hodiny_source==="rozvrh"?"1.5px solid #86efac": r.hodiny_source==="saved"?"1.5px solid #93c5fd":"1.5px solid #E8E8F0",
+                          cursor: isLocked?"not-allowed":"text",
                         }} min="0"/>
-                      {r.hodiny_source==="rozvrh"&&<span title="Převzato z rozvrhu" style={{position:"absolute",right:6,top:"50%",transform:"translateY(-50%)",fontSize:10,color:"#16a34a",pointerEvents:"none"}}>📅</span>}
+                      {!isLocked&&r.hodiny_source==="rozvrh"&&<span title="Převzato z rozvrhu" style={{position:"absolute",right:6,top:"50%",transform:"translateY(-50%)",fontSize:10,color:"#16a34a",pointerEvents:"none"}}>📅</span>}
                     </div>
                   </td>
                   {["obrat","trzba_pz","trzba_sluzby","obrat_prislusenstvi","korunova_motivace"].map(f=>(
                     <td key={f} style={{padding:"4px 6px"}}>
-                      <input type="number" value={r[f]} onChange={e=>updRow(i,f,e.target.value)}
-                        style={{...inputS,textAlign:"right"}} min="0"/>
+                      <input type="number" value={r[f]} readOnly={isLocked}
+                        onChange={e=>!isLocked&&updRow(i,f,e.target.value)}
+                        style={{...inputS,textAlign:"right",
+                          background:isLocked?"#f3f4f6":"#fff",
+                          cursor:isLocked?"not-allowed":"text",
+                        }} min="0"/>
                     </td>
                   ))}
                 </tr>)}
               </tbody>
             </table>
           </div>
-          <div style={{marginTop:10,fontSize:11,color:"#888",display:"flex",gap:16,flexWrap:"wrap"}}>
+          {!isLocked&&<div style={{marginTop:10,fontSize:11,color:"#888",display:"flex",gap:16,flexWrap:"wrap"}}>
             <span style={{display:"flex",alignItems:"center",gap:4}}><span style={{display:"inline-block",width:12,height:12,borderRadius:3,background:"#f0fdf4",border:"1px solid #86efac"}}/>📅 Hodiny z rozvrhu (lze upravit)</span>
             <span style={{display:"flex",alignItems:"center",gap:4}}><span style={{display:"inline-block",width:12,height:12,borderRadius:3,background:"#f0f9ff",border:"1px solid #93c5fd"}}/>Hodiny z uloženého záznamu</span>
-          </div>
+          </div>}
           <div style={{marginTop:14,display:"flex",gap:10,alignItems:"center",flexWrap:"wrap"}}>
-            <button onClick={handleSave} disabled={saving}
+            {!isLocked&&<button onClick={handleSave} disabled={saving}
               style={{background:"#1B4F8A",color:"#fff",border:"none",borderRadius:9,padding:"11px 28px",fontSize:14,fontWeight:700,cursor:saving?"not-allowed":"pointer",opacity:saving?0.7:1}}>
-              {saving?"Ukládám…":"💾 Uložit a spočítat"}
-            </button>
-            {saved&&<span style={{color:"#16a34a",fontWeight:700,fontSize:13}}>✅ Uloženo!</span>}
+              {saving?"Ukládám…":"💾 Uložit a zamknout"}
+            </button>}
+            {isLocked&&<button onClick={handleUnlock}
+              style={{background:"#fff7ed",color:"#c2410c",border:"1.5px solid #f97316",borderRadius:9,padding:"11px 28px",fontSize:14,fontWeight:700,cursor:"pointer"}}>
+              🔓 Odemknout pro úpravy
+            </button>}
+            {saved&&<span style={{color:"#16a34a",fontWeight:700,fontSize:13}}>✅ Uloženo a zamčeno!</span>}
           </div>
         </>
     }
@@ -4096,6 +4141,14 @@ function CommissionInput({employees, stores, currentUser, sched, holidays, patte
 }
 
 // ── Obrazovka 2: Výsledky týmu ────────────────────────────────
+function ProgressBar({value, max, color}){
+  const pct = max>0 ? Math.min(100, Math.round(value/max*100)) : 0;
+  const bg = pct>=80?"#16a34a":pct>=50?"#f97316":"#dc2626";
+  return <div style={{width:"100%",background:"#e5e7eb",borderRadius:99,height:8,overflow:"hidden"}}>
+    <div style={{width:`${pct}%`,background:color||bg,borderRadius:99,height:"100%",transition:"width 0.4s"}}/>
+  </div>;
+}
+
 function CommissionResults({employees, stores}){
   const now = new Date();
   const [storeId, setStoreId] = useState(stores[0]?.id||1);
@@ -4103,15 +4156,15 @@ function CommissionResults({employees, stores}){
   const [year, setYear] = useState(now.getFullYear());
   const [results, setResults] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [expandedRow, setExpandedRow] = useState(null);
   const MONTHS_CZ = ["Leden","Únor","Březen","Duben","Květen","Červen","Červenec","Srpen","Září","Říjen","Listopad","Prosinec"];
 
   useEffect(()=>{
+    setResults([]); setExpandedRow(null);
     (async()=>{
       setLoading(true);
-      setResults([]);
       const {data:sD} = await supabase.from("commission_settings").select("*").eq("store_id",storeId).single();
       const settings = sD || {koef_pz:0.025,koef_sluzby:0.012,koef_prislusenstvi:0.1465,prumerna_cena_pz:storeId===2?1775:storeId===3?1710:1630,obrat_koef_plny:0.004,obrat_koef_zkraceny:0.003,obrat_strop:3000};
-      // Načti měsíční penetraci z importu (pokud existuje)
       const {data:penD} = await supabase.from("commission_penetrace")
         .select("koef_prislusenstvi").eq("store_id",storeId).eq("month",month).single();
       const penetraceOverride = penD?.koef_prislusenstvi ?? null;
@@ -4121,51 +4174,37 @@ function CommissionResults({employees, stores}){
       const emps = employees.filter(e=>e.active&&e.mainStore===storeId);
       const dataWithNames = commD.map(d=>({
         ...d,
-        name: emps.find(e=>e.id===d.employee_id)?.firstName+" "+(emps.find(e=>e.id===d.employee_id)?.lastName||""),
+        name: ((emps.find(e=>e.id===d.employee_id)?.firstName||"")+" "+(emps.find(e=>e.id===d.employee_id)?.lastName||"")).trim(),
       }));
       const calcs = dataWithNames.map(d=>({
-        name: d.name.trim(),
+        name: d.name||`#${d.employee_id}`,
         data: d,
         calc: calcCommission(d, settings, commD, penetraceOverride),
         penetraceZdroj: penetraceOverride!=null ? `import (${(penetraceOverride*100).toFixed(2)} %)` : `výchozí (${((Number(settings.koef_prislusenstvi)||0.1465)*100).toFixed(2)} %)`,
-      }));
+      })).sort((a,b)=>(b.calc?.celkPlneni||0)-(a.calc?.celkPlneni||0));
       setResults(calcs);
       setLoading(false);
     })();
   },[storeId,month,year]);
 
   const exportCsv=()=>{
-    const header = ["Prodejce","Plnění PZ %","Plnění obratu %","Plnění služeb %","Plnění přísl. %","Celkové plnění %","Koeficient","Provize Kč","Hrubá mzda Kč"];
+    const header = ["Prodejce","Plnění PZ %","Plnění obratu %","Plnění služeb %","Plnění přísl. %","Celkové plnění %","Koeficient %","Provize Kč"];
     const rows = results.map(r=>{
       const c=r.calc;
-      if(!c) return [r.name,"–","–","–","–","–","–","–","–"];
-      return [
-        r.name,
-        Math.round(c.plneniPz*100),
-        Math.round(c.plneniObrat*100),
-        Math.round(c.plneniSluzby*100),
-        Math.round(c.plneniPrislusenství*100),
-        Math.round(c.celkPlneni*100),
-        (c.koef*100).toFixed(0)+"%",
-        Math.round(c.vyslednaProvize),
-        Math.round(c.hrubaMzda),
-      ];
+      if(!c) return [r.name,"–","–","–","–","–","–","–"];
+      return [r.name, Math.round(c.plneniPz*100), Math.round(c.plneniObrat*100),
+        Math.round(c.plneniSluzby*100), Math.round(c.plneniPrislusenství*100),
+        Math.round(c.celkPlneni*100), Math.round(c.koef*100), Math.round(c.vyslednaProvize)];
     });
-    const csv = [header,...rows].map(r=>r.join(";")).join("\n");
-    const blob = new Blob(["\uFEFF"+csv],{type:"text/csv;charset=utf-8"});
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a"); a.href=url; a.download=`provize_${storeId}_${month}_${year}.csv`; a.click();
+    const csv=[header,...rows].map(r=>r.join(";")).join("\n");
+    const blob=new Blob(["\uFEFF"+csv],{type:"text/csv;charset=utf-8"});
+    const a=document.createElement("a"); a.href=URL.createObjectURL(blob);
+    a.download=`provize_${storeId}_${month}_${year}.csv`; a.click();
   };
 
-  const thS={padding:"9px 10px",textAlign:"left",fontWeight:700,color:"#fff",fontSize:12,background:"#1B4F8A",whiteSpace:"nowrap"};
-  const tdS={padding:"8px 10px",fontSize:13,whiteSpace:"nowrap"};
   const inputS={padding:"6px 9px",borderRadius:7,border:"1.5px solid #E8E8F0",fontSize:13,width:"auto"};
-
-  const minIdx = results.length ? results.reduce((mi,r,i)=>{
-    const cv = r.calc?.celkPlneni||0;
-    const mv = results[mi].calc?.celkPlneni||0;
-    return cv < mv ? i : mi;
-  },0) : -1;
+  const pctColor = v => v>=0.8?"#16a34a":v>=0.5?"#f97316":"#dc2626";
+  const medal = (i) => i===0?"🥇":i===1?"🥈":i===2?"🥉":"";
 
   return <div>
     <div style={{display:"flex",gap:12,flexWrap:"wrap",marginBottom:20,alignItems:"flex-end"}}>
@@ -4187,50 +4226,112 @@ function CommissionResults({employees, stores}){
       </button>}
     </div>
 
-    {loading
-      ? <div style={{textAlign:"center",padding:40,color:"#aaa"}}>Načítám výsledky…</div>
-      : results.length===0
-        ? <div style={{textAlign:"center",padding:40,color:"#bbb"}}>Nejsou zadána data pro tento měsíc. Přejděte na "Zadat výsledky".</div>
-        : <div style={{overflowX:"auto"}}>
-            <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
-              <thead><tr>
-                {["Prodejce","Plnění PZ","Plnění obratu","Plnění služeb","Plnění přísl.","Celkové plnění","Koeficient","Provize","Hrubá mzda"].map(h=>(
-                  <th key={h} style={thS}>{h}</th>
-                ))}
-              </tr></thead>
-              <tbody>
-                {results.map((r,i)=>{
-                  const c = r.calc;
-                  const isMin = i===minIdx;
-                  const rowBg = isMin ? "#fff3e0" : i%2===0?"#fff":"#f8f9ff";
-                  if(!c) return <tr key={i}><td colSpan={9} style={{...tdS,background:rowBg}}>{r.name} – chyba výpočtu</td></tr>;
-                  return <tr key={i} style={{background:rowBg}}>
-                    <td style={{...tdS,fontWeight:700,color:"#1a1a2e"}}>{r.name}{isMin&&<span title="Nejnižší plnění – potřebuje pozornost" style={{marginLeft:6,fontSize:11}}>⚠️</span>}</td>
-                    {[
-                      {v:c.plneniPz},{v:c.plneniObrat},{v:c.plneniSluzby},{v:c.plneniPrislusenství},{v:c.celkPlneni}
-                    ].map((x,xi)=>(
-                      <td key={xi} style={{...tdS}}>
-                        <PlneniDot v={x.v}/>
-                        <span style={{color:x.v>=0.8?"#16a34a":x.v>=0.5?"#f97316":"#dc2626",fontWeight:600}}>
-                          {Math.round(x.v*100)} %
-                        </span>
-                      </td>
-                    ))}
-                    <td style={{...tdS,fontWeight:700}}>{Math.round(c.koef*100)} %</td>
-                    <td style={{...tdS,fontWeight:700,color:"#1B4F8A"}}>{czk(c.vyslednaProvize)}</td>
-                    <td style={{...tdS,fontWeight:700}}>{czk(c.hrubaMzda)}</td>
-                  </tr>;
-                })}
-              </tbody>
-            </table>
-            <div style={{marginTop:10,fontSize:11,color:"#aaa",display:"flex",gap:16,flexWrap:"wrap",padding:"6px 4px"}}>
-              <span><PlneniDot v={0.9}/> ≥ 80 % zelená</span>
-              <span><PlneniDot v={0.6}/> 50–79 % oranžová</span>
-              <span><PlneniDot v={0.2}/> &lt; 50 % červená</span>
-              <span>⚠️ = nejnižší celkové plnění v týmu</span>
-              {results[0]?.penetraceZdroj&&<span style={{marginLeft:"auto",color:"#1B4F8A"}}>📊 Koef. příslušenství: {results[0].penetraceZdroj}</span>}
+    {loading ? <div style={{textAlign:"center",padding:40,color:"#aaa"}}>Načítám výsledky…</div>
+    : results.length===0 ? <div style={{textAlign:"center",padding:40,color:"#bbb"}}>Nejsou zadána data pro tento měsíc.</div>
+    : <div style={{display:"flex",flexDirection:"column",gap:10}}>
+        {results.map((r,i)=>{
+          const c = r.calc;
+          const isExp = expandedRow===i;
+          if(!c) return null;
+
+          const items = [
+            {label:"Záruky (PZ)",   done:c.plneniPz,   provize:c.provizePz,   plan:c.planPz,     actual:r.data.trzba_pz,    chybi:Math.max(0,c.planPz-r.data.trzba_pz),     jednotka:"Kč tržby",  weight:"4×"},
+            {label:"Obrat",         done:c.plneniObrat, provize:c.provizeObrat,plan:c.planObrat,  actual:r.data.obrat,       chybi:Math.max(0,c.planObrat-r.data.obrat),     jednotka:"Kč",        weight:"1×"},
+            {label:"Služby",        done:c.plneniSluzby,provize:c.provizeSluzby,plan:c.planSluzby,actual:r.data.trzba_sluzby,chybi:Math.max(0,c.planSluzby-r.data.trzba_sluzby),jednotka:"Kč tržby",weight:"1×"},
+            {label:"Příslušenství", done:c.plneniPrislusenství,provize:c.provizePrislusenství,plan:c.planPrislusenství,actual:r.data.obrat_prislusenstvi,chybi:Math.max(0,c.planPrislusenství-r.data.obrat_prislusenstvi),jednotka:"Kč",weight:"1×"},
+          ];
+
+          const celkPct = Math.round(c.celkPlneni*100);
+          const koefPct = Math.round(c.koef*100);
+          const cardBg = i===0?"#f0fdf4":i===results.length-1?"#fff7ed":"#fff";
+          const borderColor = i===0?"#86efac":i===results.length-1?"#fed7aa":"#e8e8f0";
+
+          return <div key={i} style={{border:`1.5px solid ${borderColor}`,borderRadius:12,background:cardBg,overflow:"hidden"}}>
+            {/* Hlavička karty */}
+            <div style={{display:"flex",alignItems:"center",gap:12,padding:"14px 18px",cursor:"pointer",flexWrap:"wrap"}}
+              onClick={()=>setExpandedRow(isExp?null:i)}>
+              {/* Medaile + jméno */}
+              <div style={{minWidth:160,display:"flex",alignItems:"center",gap:8}}>
+                {medal(i)&&<span style={{fontSize:20}}>{medal(i)}</span>}
+                {!medal(i)&&<span style={{fontSize:13,color:"#aaa",fontWeight:700,minWidth:20,textAlign:"center"}}>{i+1}.</span>}
+                <span style={{fontWeight:800,fontSize:15,color:"#1a1a2e"}}>{r.name}</span>
+              </div>
+
+              {/* Celkové plnění – progress */}
+              <div style={{flex:1,minWidth:160}}>
+                <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}>
+                  <span style={{fontSize:11,color:"#888",fontWeight:600}}>Celkové plnění</span>
+                  <span style={{fontSize:13,fontWeight:800,color:pctColor(c.celkPlneni)}}>{celkPct} %</span>
+                </div>
+                <ProgressBar value={c.celkPlneni} max={1} color={pctColor(c.celkPlneni)}/>
+              </div>
+
+              {/* Koef + provize */}
+              <div style={{display:"flex",gap:16,alignItems:"center",flexShrink:0}}>
+                <div style={{textAlign:"center"}}>
+                  <div style={{fontSize:10,color:"#aaa",fontWeight:600}}>KOEFICIENT</div>
+                  <div style={{fontSize:16,fontWeight:800,color:koefPct>=90?"#16a34a":koefPct>=50?"#f97316":"#dc2626"}}>{koefPct} %</div>
+                </div>
+                <div style={{textAlign:"center"}}>
+                  <div style={{fontSize:10,color:"#aaa",fontWeight:600}}>PROVIZE</div>
+                  <div style={{fontSize:16,fontWeight:800,color:"#1B4F8A"}}>{czk(c.vyslednaProvize)}</div>
+                </div>
+                {c.bonusObrat>0&&<div style={{textAlign:"center"}}>
+                  <div style={{fontSize:10,color:"#aaa",fontWeight:600}}>BONUS</div>
+                  <div style={{fontSize:14,fontWeight:800,color:"#16a34a"}}>+{czk(c.bonusObrat)}</div>
+                </div>}
+                <div style={{color:"#bbb",fontSize:18,marginLeft:4}}>{isExp?"▲":"▼"}</div>
+              </div>
             </div>
-          </div>
+
+            {/* Rozbalený detail */}
+            {isExp&&<div style={{borderTop:"1px solid #e8e8f0",padding:"14px 18px",background:"#fafafe"}}>
+              <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(220px,1fr))",gap:12,marginBottom:16}}>
+                {items.map((it,xi)=>{
+                  const pct=Math.round(it.done*100);
+                  const barColor=pctColor(it.done);
+                  return <div key={xi} style={{background:"#fff",borderRadius:10,padding:"12px 14px",border:`1px solid ${it.done>=1?"#86efac":it.done>=0.5?"#fed7aa":"#fecaca"}`}}>
+                    <div style={{display:"flex",justifyContent:"space-between",marginBottom:6}}>
+                      <span style={{fontWeight:700,fontSize:13,color:"#1a1a2e"}}>{it.label}</span>
+                      <span style={{fontSize:11,color:"#aaa",fontWeight:600}}>váha {it.weight}</span>
+                    </div>
+                    <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}>
+                      <span style={{fontSize:11,color:"#888"}}>Splněno</span>
+                      <span style={{fontSize:13,fontWeight:700,color:barColor}}>{pct} %</span>
+                    </div>
+                    <ProgressBar value={it.done} max={1} color={barColor}/>
+                    <div style={{marginTop:8,display:"flex",justifyContent:"space-between",fontSize:12}}>
+                      <span style={{color:"#666"}}>Skutečnost: <strong>{czk(it.actual)}</strong></span>
+                      <span style={{color:"#666"}}>Plán: <strong>{czk(it.plan)}</strong></span>
+                    </div>
+                    {it.chybi>0&&<div style={{marginTop:4,fontSize:12,color:"#dc2626",fontWeight:600}}>
+                      Chybí: {czk(it.chybi)} {it.jednotka}
+                    </div>}
+                    {it.chybi===0&&<div style={{marginTop:4,fontSize:12,color:"#16a34a",fontWeight:700}}>✅ Plán splněn!</div>}
+                    <div style={{marginTop:4,fontSize:12,color:"#1B4F8A"}}>Provize: <strong>{czk(it.provize)}</strong></div>
+                  </div>;
+                })}
+              </div>
+              {/* Korunová motivace */}
+              {c.korunovaMot>0&&<div style={{fontSize:13,color:"#555",marginBottom:8}}>
+                💰 Korunová motivace: <strong>{czk(c.korunovaMot)}</strong>
+              </div>}
+              {/* Výpočet provize */}
+              <div style={{background:"#fff",borderRadius:8,padding:"10px 14px",border:"1px solid #e8e8f0",fontSize:12,color:"#555",lineHeight:2}}>
+                <span style={{fontWeight:700,color:"#1a1a2e"}}>Výpočet: </span>
+                ({czk(c.provizeObrat)} + {czk(c.provizePz)} + {czk(c.provizeSluzby)} + {czk(c.provizePrislusenství)} + {czk(c.korunovaMot)})
+                × {koefPct} % = {czk(c.zaklad)}
+                {c.bonusObrat>0&&<> + bonus {czk(c.bonusObrat)}</>}
+                {" "}= <strong style={{color:"#1B4F8A"}}>{czk(c.vyslednaProvize)}</strong>
+              </div>
+            </div>}
+          </div>;
+        })}
+        <div style={{marginTop:4,fontSize:11,color:"#aaa",display:"flex",gap:16,flexWrap:"wrap",padding:"4px"}}>
+          <span>🥇🥈🥉 = pořadí v týmu · kliknutím na kartu zobrazíte detail</span>
+          {results[0]?.penetraceZdroj&&<span style={{marginLeft:"auto",color:"#1B4F8A"}}>📊 Koef. příslušenství: {results[0].penetraceZdroj}</span>}
+        </div>
+      </div>
     }
   </div>;
 }
@@ -4242,7 +4343,197 @@ function CommissionSettings({stores}){
   const [saved, setSaved] = useState(false);
   const [importingPenetrace, setImportingPenetrace] = useState(false);
   const [penetraceStatus, setPenetraceStatus] = useState(null);
+  const [penetraceTable, setPenetraceTable] = useState([]); // [{month, store_id, koef, penetrace_loni}]
+  const [editingPen, setEditingPen] = useState({}); // {`${storeId}_${month}`: val}
+  const [savingPen, setSavingPen] = useState(false);
   const penetraceRef = useRef(null);
+
+  const DEFAULTS = {koef_pz:0.025,koef_sluzby:0.012,koef_prislusenstvi:0.1465,obrat_koef_plny:0.004,obrat_koef_zkraceny:0.003,obrat_strop:3000};
+  const PZ_DEFAULTS = {1:1630, 2:1775, 3:1710};
+  const STORE_NAME_MAP = {"strakonice":1,"blatná":2,"blatna":2,"pelhřimov":3,"pelhrimov":3};
+  const MONTHS_CZ = ["","Leden","Únor","Březen","Duben","Květen","Červen","Červenec","Srpen","Září","Říjen","Listopad","Prosinec"];
+
+  const loadAll = async()=>{
+    const {data:sD} = await supabase.from("commission_settings").select("*");
+    const map = {};
+    stores.forEach(s=>{
+      const found = sD?.find(r=>r.store_id===s.id);
+      map[s.id] = found ? {...found} : {...DEFAULTS, prumerna_cena_pz: PZ_DEFAULTS[s.id]||1630, store_id:s.id};
+    });
+    setData(map);
+    const {data:penD} = await supabase.from("commission_penetrace").select("*").order("month");
+    setPenetraceTable(penD||[]);
+    const initEdit = {};
+    (penD||[]).forEach(r=>{ initEdit[`${r.store_id}_${r.month}`]=String(r.koef_prislusenstvi); });
+    setEditingPen(initEdit);
+  };
+
+  useEffect(()=>{ loadAll(); },[]);
+
+  const upd=(storeId,field,val)=>setData(prev=>({...prev,[storeId]:{...prev[storeId],[field]:val}}));
+
+  const handleSave=async()=>{
+    setSaving(true);
+    for(const s of stores){
+      const r=data[s.id]; if(!r) continue;
+      await supabase.from("commission_settings").upsert({
+        store_id:s.id, koef_pz:Number(r.koef_pz)||0.025, koef_sluzby:Number(r.koef_sluzby)||0.012,
+        koef_prislusenstvi:Number(r.koef_prislusenstvi)||0.1465, prumerna_cena_pz:Number(r.prumerna_cena_pz)||1630,
+        obrat_koef_plny:Number(r.obrat_koef_plny)||0.004, obrat_koef_zkraceny:Number(r.obrat_koef_zkraceny)||0.003,
+        obrat_strop:Number(r.obrat_strop)||3000, updated_at:new Date().toISOString(),
+      },{onConflict:"store_id"});
+    }
+    setSaving(false); setSaved(true); setTimeout(()=>setSaved(false),2500);
+  };
+
+  const handleSavePenetrace=async()=>{
+    setSavingPen(true);
+    for(const [key,val] of Object.entries(editingPen)){
+      const [sid,mon]=key.split("_").map(Number);
+      const koef=Number(val)||0;
+      await supabase.from("commission_penetrace").upsert({store_id:sid,month:mon,koef_prislusenstvi:koef},{onConflict:"store_id,month"});
+    }
+    setSavingPen(false); await loadAll();
+  };
+
+  const handlePenetraceImport=async(e)=>{
+    const file=e.target.files?.[0]; if(!file) return;
+    e.target.value=""; setImportingPenetrace(true); setPenetraceStatus(null);
+    try {
+      const XLSX=await loadXLSX();
+      const buf=await file.arrayBuffer();
+      const wb=XLSX.read(new Uint8Array(buf),{type:"array"});
+      const ws=wb.Sheets[wb.SheetNames[0]];
+      const rows=XLSX.utils.sheet_to_json(ws,{header:1,defval:null});
+      const saved=[]; let currentMonth=null;
+      for(let i=0;i<rows.length;i++){
+        const r=rows[i]; if(!r) continue;
+        const c0=String(r[0]||"").trim();
+        if(c0==="Fiskální datum RMD"){ const mv=r[1]; if(mv!=null) currentMonth=Number(mv); continue; }
+        if(c0.toLowerCase().startsWith("prodejna")&&currentMonth!=null){
+          const storePart=c0.toLowerCase().replace("prodejna","").trim();
+          const storeId=STORE_NAME_MAP[storePart]; if(!storeId) continue;
+          const pen=r[11]; if(pen==null||isNaN(Number(pen))) continue;
+          const penNum=Number(pen);
+          const koef=Math.round((penNum+0.005)*10000)/10000;
+          const {error}=await supabase.from("commission_penetrace").upsert(
+            {store_id:storeId,month:currentMonth,koef_prislusenstvi:koef,penetrace_loni:penNum},
+            {onConflict:"store_id,month"});
+          if(!error) saved.push(`${c0} (${String(currentMonth).padStart(2,"0")}): ${(penNum*100).toFixed(2)} % → ${(koef*100).toFixed(2)} %`);
+        }
+      }
+      setPenetraceStatus({saved}); setImportingPenetrace(false); await loadAll();
+    } catch(err){ setImportingPenetrace(false); alert("Chyba importu: "+err.message); }
+  };
+
+  const inputS={padding:"6px 9px",borderRadius:7,border:"1.5px solid #E8E8F0",fontSize:13,width:110,textAlign:"right"};
+  const thS={padding:"9px 10px",textAlign:"left",fontWeight:700,color:"#fff",fontSize:12,background:"#1B4F8A"};
+  const tdS={padding:"8px 10px",fontSize:13};
+  const fields=[
+    {key:"koef_pz",label:"Koef. PZ",help:"2,5 % z plánu = plán PZ"},
+    {key:"koef_sluzby",label:"Koef. služby",help:"1,2 % z plánu = plán služeb"},
+    {key:"koef_prislusenstvi",label:"Koef. příslušenství",help:"výchozí; přebíjí ho import"},
+    {key:"prumerna_cena_pz",label:"Průměrná cena PZ (Kč)",help:"STR 1 630, BL 1 775, PE 1 710"},
+    {key:"obrat_koef_plny",label:"Obrat koef. plný úvazek",help:"0,4 %"},
+    {key:"obrat_koef_zkraceny",label:"Obrat koef. zkrácený úvazek",help:"0,3 %"},
+    {key:"obrat_strop",label:"Strop obratové provize (Kč)",help:"3 000 Kč"},
+  ];
+
+  // Sestavení přehledu penetrace: řádky = měsíce, sloupce = prodejny
+  const allMonths = [...new Set(penetraceTable.map(r=>r.month))].sort((a,b)=>a-b);
+
+  return <div>
+    {/* Import penetrace */}
+    <div style={{marginBottom:24,padding:"16px 20px",background:"#f0f9ff",borderRadius:10,border:"1.5px solid #93c5fd"}}>
+      <div style={{fontWeight:700,color:"#1B4F8A",marginBottom:6,fontSize:14}}>📊 Import penetrace příslušenství</div>
+      <div style={{fontSize:13,color:"#555",marginBottom:12,lineHeight:1.6}}>
+        Nahraj <strong>Příslušenství_data.xlsx</strong> jednou ročně. Koeficienty se uloží per pobočka × měsíc a lze je níže ručně korigovat.
+      </div>
+      <input ref={penetraceRef} type="file" accept=".xlsx" style={{display:"none"}} onChange={handlePenetraceImport}/>
+      <button onClick={()=>penetraceRef.current?.click()} disabled={importingPenetrace}
+        style={{padding:"9px 20px",borderRadius:7,border:"1.5px solid #1B4F8A",background:"#1B4F8A",color:"#fff",fontWeight:700,fontSize:13,cursor:importingPenetrace?"not-allowed":"pointer",opacity:importingPenetrace?0.7:1}}>
+        {importingPenetrace?"Zpracovávám…":"📂 Nahrát Příslušenství_data.xlsx"}
+      </button>
+      {penetraceStatus&&<div style={{marginTop:12,fontSize:12,color:"#166534",background:"#f0fdf4",borderRadius:7,padding:"10px 14px",border:"1px solid #86efac"}}>
+        <strong>✅ Importováno {penetraceStatus.saved.length} záznamů</strong>
+        <div style={{maxHeight:100,overflowY:"auto",lineHeight:1.8,marginTop:4}}>
+          {penetraceStatus.saved.map((s,i)=><div key={i}>{s}</div>)}
+        </div>
+      </div>}
+    </div>
+
+    {/* Přehled penetrace – editovatelná tabulka */}
+    {allMonths.length>0&&<div style={{marginBottom:24}}>
+      <div style={{fontWeight:700,color:"#1a1a2e",marginBottom:10,fontSize:14}}>
+        📈 Přehled penetrace příslušenství – koeficienty dle měsíce
+        <span style={{fontSize:11,fontWeight:400,color:"#888",marginLeft:8}}>(lze ručně upravit a uložit)</span>
+      </div>
+      <div style={{overflowX:"auto"}}>
+        <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
+          <thead><tr>
+            <th style={thS}>Měsíc</th>
+            {stores.map(s=><th key={s.id} style={{...thS,textAlign:"center"}}>{s.name}<br/><span style={{fontWeight:400,fontSize:10}}>koef. příslušenství</span></th>)}
+          </tr></thead>
+          <tbody>
+            {allMonths.map(mon=><tr key={mon} style={{borderBottom:"1px solid #eee"}}>
+              <td style={{...tdS,fontWeight:600}}>{MONTHS_CZ[mon]||mon}</td>
+              {stores.map((s,si)=>{
+                const key=`${s.id}_${mon}`;
+                const rec=penetraceTable.find(r=>r.store_id===s.id&&r.month===mon);
+                const koef=editingPen[key]!==undefined?editingPen[key]:String(rec?.koef_prislusenstvi||"");
+                const penLoni=rec?.penetrace_loni;
+                return <td key={s.id} style={{...tdS,textAlign:"center",background:si%2===0?"#fff":"#f8f9ff"}}>
+                  <input type="number" step="0.0001" value={koef}
+                    onChange={ev=>setEditingPen(p=>({...p,[key]:ev.target.value}))}
+                    style={{...inputS,width:90}}/>
+                  {penLoni!=null&&<div style={{fontSize:10,color:"#aaa",marginTop:2}}>
+                    loni: {(penLoni*100).toFixed(2)} %
+                  </div>}
+                </td>;
+              })}
+            </tr>)}
+          </tbody>
+        </table>
+      </div>
+      <div style={{marginTop:10,display:"flex",gap:10,alignItems:"center"}}>
+        <button onClick={handleSavePenetrace} disabled={savingPen}
+          style={{padding:"8px 20px",borderRadius:7,border:"none",background:"#1B4F8A",color:"#fff",fontWeight:700,fontSize:13,cursor:savingPen?"not-allowed":"pointer",opacity:savingPen?0.7:1}}>
+          {savingPen?"Ukládám…":"💾 Uložit korekce penetrace"}
+        </button>
+        <span style={{fontSize:11,color:"#aaa"}}>Hodnota = koef. příslušenství (penetrace + 0,5 %), např. 0.1465</span>
+      </div>
+    </div>}
+
+    {/* Výchozí koeficienty */}
+    <div style={{fontWeight:700,color:"#1a1a2e",marginBottom:10,fontSize:14}}>⚙️ Výchozí koeficienty per pobočka</div>
+    <div style={{overflowX:"auto"}}>
+      <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
+        <thead><tr>
+          <th style={thS}>Parametr</th>
+          {stores.map(s=><th key={s.id} style={{...thS,textAlign:"center"}}>{s.name}</th>)}
+        </tr></thead>
+        <tbody>
+          {fields.map(f=><tr key={f.key} style={{borderBottom:"1px solid #eee"}}>
+            <td style={{...tdS,maxWidth:260}}>
+              <div style={{fontWeight:600,color:"#1a1a2e"}}>{f.label}</div>
+              <div style={{fontSize:11,color:"#aaa"}}>{f.help}</div>
+            </td>
+            {stores.map((s,si)=><td key={s.id} style={{...tdS,textAlign:"center",background:si%2===0?"#fff":"#f8f9ff"}}>
+              <input type="number" step="any" value={data[s.id]?.[f.key]||""} onChange={e=>upd(s.id,f.key,e.target.value)} style={inputS}/>
+            </td>)}
+          </tr>)}
+        </tbody>
+      </table>
+    </div>
+    <div style={{marginTop:16,display:"flex",gap:10,alignItems:"center"}}>
+      <button onClick={handleSave} disabled={saving}
+        style={{background:"#1B4F8A",color:"#fff",border:"none",borderRadius:9,padding:"11px 28px",fontSize:14,fontWeight:700,cursor:saving?"not-allowed":"pointer",opacity:saving?0.7:1}}>
+        {saving?"Ukládám…":"💾 Uložit nastavení"}
+      </button>
+      {saved&&<span style={{color:"#16a34a",fontWeight:700,fontSize:13}}>✅ Uloženo!</span>}
+    </div>
+  </div>;
+}
 
   const DEFAULTS = {
     koef_pz:0.025, koef_sluzby:0.012, koef_prislusenstvi:0.1465,
