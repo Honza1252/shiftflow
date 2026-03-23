@@ -3916,53 +3916,6 @@ function CommissionInput({employees, stores, currentUser, sched, holidays, patte
     setRows(prev=>prev.map((r,i)=>i===idx?{...r,[field]:val}:r));
   };
 
-  // Import Vzor_podklady.xlsx
-  const handleImport = async(e)=>{
-    const file = e.target.files?.[0];
-    if(!file) return;
-    e.target.value = "";
-    setImportStatus(null);
-    try {
-      const {obratMap,pzMap,sluzbyMap,prislMap,korunovaMap} = await parseVzorPodklady(file);
-
-      // Párování mimo setState – čisté, předvídatelné
-      const findKey = (r, map)=>{
-        const toAsciiStr = s => String(s||"").normalize("NFC").toLowerCase()
-          .normalize("NFD").replace(/[\u0300-\u036f]/g,"");
-        // Zkus primární příjmení
-        for(const prijmeni of [r.prijmeni, r.prijmeniFallback].filter(Boolean)){
-          if(prijmeni in map) return prijmeni;
-          const asc = toAsciiStr(prijmeni);
-          const found = Object.keys(map).find(k=>toAsciiStr(k)===asc);
-          if(found) return found;
-        }
-        return null;
-      };
-
-      const ok = [], warn = [];
-      const diagKeys = Object.keys(obratMap).filter(k=>!k.startsWith("id_")).sort();
-      setRows(prev=>{
-        const next = prev.map(r=>{
-          const mk = findKey(r, obratMap);
-          if(!mk){ warn.push(`${r.name} [hledáno: ${r.prijmeni}]`); return r; }
-          ok.push(r.name);
-          return {
-            ...r,
-            obrat: String(Math.round(obratMap[mk]||0)),
-            trzba_pz: String(Math.round(pzMap[mk]||0)),
-            trzba_sluzby: String(Math.round(sluzbyMap[mk]||0)),
-            obrat_prislusenstvi: String(Math.round(prislMap[mk]||0)),
-            korunova_motivace: String(Math.round(korunovaMap[mk]||0)),
-          };
-        });
-        return next;
-      });
-      setTimeout(()=>setImportStatus({ok:[...ok], warn:[...warn], diagKeys}), 100);
-    } catch(err){
-      alert("Chyba při čtení souboru: "+err.message);
-    }
-  };
-
   const handleSave = async()=>{
     if(!planProdejny||isNaN(Number(planProdejny))){ alert("Zadejte plán prodejny!"); return; }
     setSaving(true);
