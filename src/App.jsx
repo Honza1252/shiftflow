@@ -3797,57 +3797,55 @@ async function parseVzorPodklady(file){
         const data = new Uint8Array(e.target.result);
         const wb = XLSX.read(data, {type:"array"});
 
-        // Pomocník: načte řádky z listu, vrátí {prijmeni_lower: hodnota}
+        // Načte řádky, vrátí mapu: "id_XXXX" → hodnota, + příjmení NFC + ASCII fallback
+        // Detekce dat: řádek kde col[0] obsahuje [číselné ID]
+        const norm = s => String(s||"").trim().normalize("NFC").toLowerCase();
+        const toAscii = s => norm(s).normalize("NFD").replace(/[\u0300-\u036f]/g,"");
+
         const parseSheet = (sheetName, colIdx)=>{
           const ws = wb.Sheets[sheetName];
           if(!ws) return {};
           const rows = XLSX.utils.sheet_to_json(ws, {header:1, defval:null});
           const result = {};
-          // Hledáme řádek s "Prodavač" jako záhlaví (řádek 4, index 4)
-          let dataStart = -1;
-          for(let i=0;i<rows.length;i++){
-            if(rows[i] && String(rows[i][0]||"").trim()==="Prodavač"){ dataStart=i+1; break; }
-          }
-          if(dataStart<0) return result;
-          for(let i=dataStart; i<rows.length; i++){
+          for(let i=0; i<rows.length; i++){
             const nameRaw = rows[i]?.[0];
             if(!nameRaw) continue;
             const nameStr = String(nameRaw).trim();
-            // Jméno formát: "Příjmení Jméno [ID]" – vezmeme první slovo jako příjmení, normalizujeme
-            const prijmeni = nameStr.split(" ")[0].normalize("NFC").toLowerCase();
+            const idM = nameStr.match(/\[(\d+)\]/);
+            if(!idM) continue; // přeskočíme řádky bez [ID] (záhlaví, součty)
             const val = rows[i]?.[colIdx];
-            result[prijmeni] = val != null ? Number(val)||0 : 0;
+            const numVal = (val != null && !isNaN(Number(val))) ? Number(val) : 0;
+            result[`id_${idM[1]}`] = numVal;
+            result[norm(nameStr.split(" ")[0])] = numVal;
+            result[toAscii(nameStr.split(" ")[0])] = numVal;
           }
           return result;
         };
 
-        // Korunová motivace: součet sloupce 1 (přímá provize) + sloupce 2 (fin. podpora)
         const parseKorunova = ()=>{
           const ws = wb.Sheets["Korunová motivace"];
           if(!ws) return {};
           const rows = XLSX.utils.sheet_to_json(ws, {header:1, defval:null});
           const result = {};
-          let dataStart = -1;
-          for(let i=0;i<rows.length;i++){
-            if(rows[i] && String(rows[i][0]||"").trim()==="Prodavač"){ dataStart=i+1; break; }
-          }
-          if(dataStart<0) return result;
-          for(let i=dataStart; i<rows.length; i++){
+          for(let i=0; i<rows.length; i++){
             const nameRaw = rows[i]?.[0];
             if(!nameRaw) continue;
-            const prijmeni = String(nameRaw).trim().split(" ")[0].normalize("NFC").toLowerCase();
-            const v1 = Number(rows[i]?.[1])||0;
-            const v2 = Number(rows[i]?.[2])||0;
-            result[prijmeni] = v1 + v2;
+            const nameStr = String(nameRaw).trim();
+            const idM = nameStr.match(/\[(\d+)\]/);
+            if(!idM) continue;
+            const total = (Number(rows[i]?.[1])||0) + (Number(rows[i]?.[2])||0);
+            result[`id_${idM[1]}`] = total;
+            result[norm(nameStr.split(" ")[0])] = total;
+            result[toAscii(nameStr.split(" ")[0])] = total;
           }
           return result;
         };
 
-        const obratMap       = parseSheet("Obrat Kč", 1);
-        const pzMap          = parseSheet("PZ", 2);           // Prodej v marži = sloupec index 2
-        const sluzbyMap      = parseSheet("Služby", 2);
-        const prislMap       = parseSheet("Příslušenství", 1);
-        const korunovaMap    = parseKorunova();
+        const obratMap    = parseSheet("Obrat Kč", 1);
+        const pzMap       = parseSheet("PZ", 2);
+        const sluzbyMap   = parseSheet("Služby", 2);
+        const prislMap    = parseSheet("Příslušenství", 1);
+        const korunovaMap = parseKorunova();
 
         resolve({ obratMap, pzMap, sluzbyMap, prislMap, korunovaMap });
       } catch(err){ reject(err); }
@@ -3924,14 +3922,13 @@ function CommissionInput({employees, stores, currentUser, sched, holidays, patte
     try {
       const {obratMap,pzMap,sluzbyMap,prislMap,korunovaMap} = await parseVzorPodklady(file);
       const ok = [], warn = [];
-      // Normalizační helper – odstraní diakritiku pro fallback porovnání
-      const toAscii = s => s.normalize("NFD").replace(/[\u0300-\u036f]/g,"");
+      const toAscii = s => String(s||"").normalize("NFC").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"");
       setRows(prev=>prev.map(r=>{
-        const key = r.prijmeni; // už NFC lowercase
-        // 1. přesná shoda NFC
-        let matchKey = Object.keys(obratMap).find(k=>k===key);
-        // 2. fallback: ASCII bez diakritiky
-        if(!matchKey) matchKey = Object.keys(obratMap).find(k=>toAscii(k)===toAscii(key));
+        // Párování přes příjmení: 1) NFC lowercase, 2) ASCII bez diakritiky
+        const nfcKey = r.prijmeni;
+        const asciiKey = toAscii(r.prijmeni);
+        const matchKey = (nfcKey in obratMap) ? nfcKey
+          : Object.keys(obratMap).find(k=>toAscii(k)===asciiKey);
         if(!matchKey){
           warn.push(r.name);
           return r;
