@@ -3872,43 +3872,57 @@ async function parseVzorPodklady(file){
 // ── Obrazovka 1: Zadat výsledky ───────────────────────────────
 function CommissionInput({employees, stores, currentUser, sched, holidays, patterns}){
   const now = new Date();
-  const [storeId, setStoreId] = useState(stores[0]?.id||1);
+  const ALL_STORES = 0; // speciální hodnota pro "Všechny prodejny"
+  const [storeId, setStoreId] = useState(ALL_STORES);
   const [month, setMonth] = useState(now.getMonth()+1);
   const [year, setYear] = useState(now.getFullYear());
-  const [planProdejny, setPlanProdejny] = useState("");
-  const [rows, setRows] = useState([]);
+  // planyPoboček: { storeId: "číslo jako string" }
+  const [planyPoboček, setPlanyPoboček] = useState({});
+  const [rows, setRows] = useState([]); // pro single-store pohled
   const [saving, setSaving] = useState(false);
+  const [savingPlans, setSavingPlans] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [savedPlans, setSavedPlans] = useState(false);
   const [loadingData, setLoadingData] = useState(false);
-  const [importStatus, setImportStatus] = useState(null); // {ok:[], warn:[]}
+  const [importing, setImporting] = useState(false);
+  const [importStatus, setImportStatus] = useState(null);
   const importRef = useRef(null);
+  const MONTHS_CZ = ["Leden","Únor","Březen","Duben","Květen","Červen","Červenec","Srpen","Září","Říjen","Listopad","Prosinec"];
+  const inputS = {padding:"6px 9px",borderRadius:7,border:"1.5px solid #E8E8F0",fontSize:13,width:"100%",boxSizing:"border-box"};
+  const thS = {padding:"8px 10px",textAlign:"left",fontWeight:700,color:"#fff",fontSize:12,whiteSpace:"nowrap",background:"#1B4F8A"};
 
-  // Načti data při změně prodejny/měsíce/roku
+  // Načti plány pro všechny pobočky při změně měsíce/roku
   useEffect(()=>{
-    if(!storeId||!month||!year) return;
     (async()=>{
-      setLoadingData(true);
-      setImportStatus(null);
-      const emps = employees.filter(e=>e.active && e.mainStore===storeId);
+      // Načti existující plány z DB (každá prodejna má svůj plán)
+      const {data:planD} = await supabase.from("commission_store_plans")
+        .select("*").eq("month",month).eq("year",year);
+      const pm = {};
+      stores.forEach(s=>{ pm[s.id] = ""; });
+      (planD||[]).forEach(r=>{ pm[r.store_id] = String(r.plan_prodejny||""); });
+      setPlanyPoboček(pm);
+    })();
+  },[month,year]);
 
-      // Existující uložená data
+  // Načti data pro single-store pohled
+  useEffect(()=>{
+    if(storeId===ALL_STORES) { setRows([]); return; }
+    if(!month||!year) return;
+    (async()=>{
+      setLoadingData(true); setImportStatus(null);
+      const emps = employees.filter(e=>e.active && e.mainStore===storeId);
       const {data:commD} = await supabase.from("commission_data")
         .select("*").eq("store_id",storeId).eq("month",month).eq("year",year);
-
-      // Hodiny z rozvrhu (sloupec Naplánováno)
       const newRows = emps.map(e=>{
         const savedD = commD?.find(d=>d.employee_id===e.id);
         const schedH = calcPlannedHours(e, storeId, year, month-1, sched, holidays, stores, patterns, employees);
         const prijmeniSrc = (e.lastName && e.lastName.trim()) ? e.lastName : e.firstName;
-        const prijmeniRaw = prijmeniSrc.normalize("NFC").toLowerCase();
-        const prijmeniFallback = ((e.lastName && e.lastName.trim()) ? e.firstName : "").normalize("NFC").toLowerCase();
-        const isLocked = savedD?.locked === true;
         return {
           employee_id: e.id,
           name: `${e.firstName} ${e.lastName}`.trim(),
-          prijmeni: prijmeniRaw,
-          prijmeniFallback: prijmeniFallback,
-          locked: isLocked,
+          prijmeni: prijmeniSrc.normalize("NFC").toLowerCase(),
+          prijmeniFallback: ((e.lastName&&e.lastName.trim())?e.firstName:"").normalize("NFC").toLowerCase(),
+          locked: savedD?.locked===true,
           hodiny: savedD ? String(savedD.hodiny) : schedH>0 ? String(schedH) : "",
           hodiny_source: savedD ? "saved" : schedH>0 ? "rozvrh" : "manual",
           obrat: savedD ? String(savedD.obrat) : "",
@@ -3916,11 +3930,8 @@ function CommissionInput({employees, stores, currentUser, sched, holidays, patte
           trzba_sluzby: savedD ? String(savedD.trzba_sluzby) : "",
           obrat_prislusenstvi: savedD ? String(savedD.obrat_prislusenstvi) : "",
           korunova_motivace: savedD ? String(savedD.korunova_motivace) : "",
-          plan_prodejny: savedD ? String(savedD.plan_prodejny) : "",
         };
       });
-      if(newRows.length && newRows[0].plan_prodejny) setPlanProdejny(newRows[0].plan_prodejny);
-      else setPlanProdejny("");
       setRows(newRows);
       setLoadingData(false);
     })();
@@ -3930,142 +3941,44 @@ function CommissionInput({employees, stores, currentUser, sched, holidays, patte
     setRows(prev=>prev.map((r,i)=>i===idx?{...r,[field]:val}:r));
   };
 
-  const handleSave = async()=>{
-    if(!planProdejny||isNaN(Number(planProdejny))){ alert("Zadejte plán prodejny!"); return; }
-    setSaving(true);
-    const upsertRows = rows.map(r=>({
-      store_id: storeId, employee_id: r.employee_id, month, year,
-      plan_prodejny: Number(planProdejny)||0,
-      hodiny: Number(r.hodiny)||0, obrat: Number(r.obrat)||0,
-      trzba_pz: Number(r.trzba_pz)||0, trzba_sluzby: Number(r.trzba_sluzby)||0,
-      obrat_prislusenstvi: Number(r.obrat_prislusenstvi)||0,
-      korunova_motivace: Number(r.korunova_motivace)||0,
-      locked: true, // vždy zamknout při uložení
-    }));
-    for(const ur of upsertRows){
-      await supabase.from("commission_data").upsert(ur,{onConflict:"store_id,employee_id,month,year"});
-    }
-    setSaving(false); setSaved(true);
-    setTimeout(()=>setSaved(false),2500);
-    setRows(prev=>prev.map(r=>({...r, locked:true})));
-  };
+  const isLocked = storeId!==ALL_STORES && rows.length>0 && rows.every(r=>r.locked);
 
-  // Import → parsuje xlsx, mapuje na VŠECHNY zaměstnance všech poboček, uloží a zamkne
-  const handleImportAndSave = async(file)=>{
-    try {
-      const {obratMap,pzMap,sluzbyMap,prislMap,korunovaMap} = await parseVzorPodklady(file);
-      const toAsciiStr = s => String(s||"").normalize("NFC").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"");
-      const findKey = (r, map)=>{
-        for(const prijmeni of [r.prijmeni, r.prijmeniFallback].filter(Boolean)){
-          if(prijmeni in map) return prijmeni;
-          const asc = toAsciiStr(prijmeni);
-          const found = Object.keys(map).find(k=>toAsciiStr(k)===asc);
-          if(found) return found;
-        }
-        return null;
-      };
-
-      // Načti existující plány pro každou prodejnu z DB (pokud existují)
-      const {data:existingPlans} = await supabase.from("commission_data")
-        .select("store_id,plan_prodejny")
-        .eq("month",month).eq("year",year)
-        .limit(100);
-      // Mapa store_id → plan (priorita: existující v DB, pak aktuálně zadaný pro tuto prodejnu)
-      const storePlanMap = {};
-      (existingPlans||[]).forEach(r=>{ if(r.plan_prodejny) storePlanMap[r.store_id]=r.plan_prodejny; });
-      // Pro aktuální prodejnu použij zadaný plán
-      if(planProdejny && !isNaN(Number(planProdejny))) storePlanMap[storeId] = Number(planProdejny);
-
-      if(!Object.keys(storePlanMap).length){
-        alert("Nejdřív zadejte Plán prodejny, pak nahrajte soubor.");
-        return;
-      }
-
-      // Zpracuj VŠECHNY aktivní zaměstnance ze všech poboček
-      const allActiveEmps = employees.filter(e=>e.active);
-      const ok=[], warn=[], diagKeys=Object.keys(obratMap).filter(k=>!k.startsWith("id_")).sort();
-
-      // Načti hodiny z rozvrhu pro všechny zaměstnance
-      const importRows = allActiveEmps.map(e=>{
-        const prijmeniSrc = (e.lastName && e.lastName.trim()) ? e.lastName : e.firstName;
-        const prijmeniRaw = prijmeniSrc.normalize("NFC").toLowerCase();
-        const prijmeniFallback = ((e.lastName && e.lastName.trim()) ? e.firstName : "").normalize("NFC").toLowerCase();
-        const fakeRow = {prijmeni: prijmeniRaw, prijmeniFallback};
-        const mk = findKey(fakeRow, obratMap);
-
-        const schedH = calcPlannedHours(e, e.mainStore, year, month-1, sched, holidays, stores, patterns, employees);
-
-        if(!mk){
-          warn.push(`${e.firstName} ${e.lastName}`.trim());
-          return null;
-        }
-        ok.push(`${e.firstName} ${e.lastName}`.trim());
-        return {
-          store_id: e.mainStore,
-          employee_id: e.id,
-          month, year,
-          plan_prodejny: storePlanMap[e.mainStore] || Number(planProdejny)||0,
-          hodiny: schedH>0 ? schedH : 0,
-          obrat: Math.round(obratMap[mk]||0),
-          trzba_pz: Math.round(pzMap[mk]||0),
-          trzba_sluzby: Math.round(sluzbyMap[mk]||0),
-          obrat_prislusenstvi: Math.round(prislMap[mk]||0),
-          korunova_motivace: Math.round(korunovaMap[mk]||0),
-          locked: true,
-        };
-      }).filter(Boolean);
-
-      // Ulož do DB – paralelně pro rychlost
-      const results_db = await Promise.all(
-        importRows.map(ur=>
-          supabase.from("commission_data").upsert(ur,{onConflict:"store_id,employee_id,month,year"})
-        )
+  // Ulož plány poboček (vždy editovatelné, nezávisle na zamčení)
+  const handleSavePlans = async()=>{
+    setSavingPlans(true);
+    for(const s of stores){
+      const plan = Number(planyPoboček[s.id])||0;
+      if(!plan) continue;
+      await supabase.from("commission_store_plans").upsert(
+        {store_id:s.id, month, year, plan_prodejny:plan},
+        {onConflict:"store_id,month,year"}
       );
-      const errors_db = results_db.filter(r=>r.error);
-      if(errors_db.length) console.error("DB upsert errors:", errors_db.map(r=>r.error));
-
-      // Přenačti data pro aktuálně zobrazenou prodejnu z DB (aby byly hodnoty čerstvé)
-      const {data:freshCommD} = await supabase.from("commission_data")
-        .select("*").eq("store_id",storeId).eq("month",month).eq("year",year);
-
-      setRows(prev=>prev.map(r=>{
-        const saved = freshCommD?.find(d=>d.employee_id===r.employee_id) ||
-                      importRows.find(ir=>ir.employee_id===r.employee_id);
-        if(!saved) return r;
-        return {
-          ...r,
-          hodiny: String(saved.hodiny),
-          obrat: String(saved.obrat),
-          trzba_pz: String(saved.trzba_pz),
-          trzba_sluzby: String(saved.trzba_sluzby),
-          obrat_prislusenstvi: String(saved.obrat_prislusenstvi),
-          korunova_motivace: String(saved.korunova_motivace),
-          locked: true,
-        };
-      }));
-
-      setTimeout(()=>setImportStatus({
-        ok, warn, diagKeys,
-        info: `Uloženo ${importRows.length} zaměstnanců z ${new Set(importRows.map(r=>r.store_id)).size} poboček`,
-      }), 100);
-      setSaved(true); setTimeout(()=>setSaved(false),3000);
-    } catch(err){
-      alert("Chyba při čtení souboru: "+err.message);
     }
+    setSavingPlans(false); setSavedPlans(true); setTimeout(()=>setSavedPlans(false),2500);
   };
 
-  // Import handler – načte soubor, aplikuje data, uloží a zamkne
-  const handleImport = async(e)=>{
-    const file = e.target.files?.[0];
-    if(!file) return;
-    e.target.value = "";
-    setImportStatus(null);
-    await handleImportAndSave(file);
+  // Ulož aktuální prodejnu ručně
+  const handleSave = async()=>{
+    const plan = Number(planyPoboček[storeId])||0;
+    if(!plan){ alert("Zadejte Plán prodejny!"); return; }
+    setSaving(true);
+    for(const r of rows){
+      await supabase.from("commission_data").upsert({
+        store_id:storeId, employee_id:r.employee_id, month, year,
+        plan_prodejny:plan,
+        hodiny:Number(r.hodiny)||0, obrat:Number(r.obrat)||0,
+        trzba_pz:Number(r.trzba_pz)||0, trzba_sluzby:Number(r.trzba_sluzby)||0,
+        obrat_prislusenstvi:Number(r.obrat_prislusenstvi)||0,
+        korunova_motivace:Number(r.korunova_motivace)||0,
+        locked:true,
+      },{onConflict:"store_id,employee_id,month,year"});
+    }
+    setSaving(false); setSaved(true); setTimeout(()=>setSaved(false),2500);
+    setRows(prev=>prev.map(r=>({...r,locked:true})));
   };
 
-  const isLocked = rows.length>0 && rows.every(r=>r.locked);
   const handleUnlock = async()=>{
-    if(!window.confirm("Opravdu odemknout data pro úpravy? Data budou znovu editovatelná.")) return;
+    if(!window.confirm("Opravdu odemknout data pro úpravy?")) return;
     for(const r of rows){
       await supabase.from("commission_data")
         .update({locked:false})
@@ -4074,16 +3987,103 @@ function CommissionInput({employees, stores, currentUser, sched, holidays, patte
     setRows(prev=>prev.map(r=>({...r,locked:false})));
   };
 
-  const MONTHS_CZ = ["Leden","Únor","Březen","Duben","Květen","Červen","Červenec","Srpen","Září","Říjen","Listopad","Prosinec"];
-  const inputS = {padding:"6px 9px",borderRadius:7,border:"1.5px solid #E8E8F0",fontSize:13,width:"100%",boxSizing:"border-box"};
-  const thS = {padding:"8px 10px",textAlign:"left",fontWeight:700,color:"#fff",fontSize:12,whiteSpace:"nowrap",background:"#1B4F8A"};
+  // Hromadný import – vždy pro všechny pobočky
+  const handleImportAndSave = async(file)=>{
+    try {
+      setImporting(true);
+      // Zkontroluj jestli jsou zadané plány
+      const missingPlans = stores.filter(s=>!Number(planyPoboček[s.id]));
+      if(missingPlans.length){
+        const names = missingPlans.map(s=>s.name).join(", ");
+        if(!window.confirm(`Chybí plán pro: ${names}\nPokračovat bez nich?`)) { setImporting(false); return; }
+      }
 
+      const {obratMap,pzMap,sluzbyMap,prislMap,korunovaMap} = await parseVzorPodklady(file);
+      const toAsciiStr = s => String(s||"").normalize("NFC").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"");
+      const findKey = (r,map)=>{
+        for(const p of [r.prijmeni,r.prijmeniFallback].filter(Boolean)){
+          if(p in map) return p;
+          const asc=toAsciiStr(p);
+          const found=Object.keys(map).find(k=>toAsciiStr(k)===asc);
+          if(found) return found;
+        }
+        return null;
+      };
+
+      const ok=[], warn=[], statByStore={};
+      stores.forEach(s=>{ statByStore[s.id]={name:s.name, count:0}; });
+      const diagKeys=Object.keys(obratMap).filter(k=>!k.startsWith("id_")).sort();
+
+      const allActiveEmps = employees.filter(e=>e.active);
+      const importRows = allActiveEmps.map(e=>{
+        const prijmeniSrc = (e.lastName&&e.lastName.trim()) ? e.lastName : e.firstName;
+        const fakeRow = {
+          prijmeni: prijmeniSrc.normalize("NFC").toLowerCase(),
+          prijmeniFallback: ((e.lastName&&e.lastName.trim())?e.firstName:"").normalize("NFC").toLowerCase(),
+        };
+        const mk = findKey(fakeRow, obratMap);
+        const schedH = calcPlannedHours(e, e.mainStore, year, month-1, sched, holidays, stores, patterns, employees);
+        const plan = Number(planyPoboček[e.mainStore])||0;
+        if(!mk){ warn.push(`${e.firstName} ${e.lastName}`.trim()); return null; }
+        ok.push(`${e.firstName} ${e.lastName}`.trim());
+        if(statByStore[e.mainStore]) statByStore[e.mainStore].count++;
+        return {
+          store_id:e.mainStore, employee_id:e.id, month, year,
+          plan_prodejny:plan,
+          hodiny:schedH>0?schedH:0,
+          obrat:Math.round(obratMap[mk]||0),
+          trzba_pz:Math.round(pzMap[mk]||0),
+          trzba_sluzby:Math.round(sluzbyMap[mk]||0),
+          obrat_prislusenstvi:Math.round(prislMap[mk]||0),
+          korunova_motivace:Math.round(korunovaMap[mk]||0),
+          locked:true,
+        };
+      }).filter(Boolean);
+
+      // Ulož plány poboček do commission_store_plans
+      await handleSavePlans();
+
+      // Ulož výsledky všech zaměstnanců
+      await Promise.all(importRows.map(ur=>
+        supabase.from("commission_data").upsert(ur,{onConflict:"store_id,employee_id,month,year"})
+      ));
+
+      // Přenačti aktuálně zobrazené rows
+      if(storeId!==ALL_STORES){
+        const {data:freshD} = await supabase.from("commission_data")
+          .select("*").eq("store_id",storeId).eq("month",month).eq("year",year);
+        setRows(prev=>prev.map(r=>{
+          const d=freshD?.find(x=>x.employee_id===r.employee_id);
+          if(!d) return r;
+          return {...r, hodiny:String(d.hodiny), obrat:String(d.obrat),
+            trzba_pz:String(d.trzba_pz), trzba_sluzby:String(d.trzba_sluzby),
+            obrat_prislusenstvi:String(d.obrat_prislusenstvi),
+            korunova_motivace:String(d.korunova_motivace), locked:true};
+        }));
+      }
+
+      const statStr = Object.values(statByStore).filter(s=>s.count>0).map(s=>`${s.name}: ${s.count}`).join(", ");
+      setImportStatus({ok, warn, diagKeys,
+        info:`Uloženo ${importRows.length} zaměstnanců – ${statStr}`});
+      setImporting(false);
+    } catch(err){ setImporting(false); alert("Chyba importu: "+err.message); }
+  };
+
+  const handleImport = async(e)=>{
+    const file=e.target.files?.[0]; if(!file) return;
+    e.target.value="";
+    await handleImportAndSave(file);
+  };
+
+  // ── RENDER ──────────────────────────────────────────────────
   return <div>
-    <div style={{display:"flex",gap:12,flexWrap:"wrap",marginBottom:20,alignItems:"flex-end"}}>
+    {/* Selektory */}
+    <div style={{display:"flex",gap:12,flexWrap:"wrap",marginBottom:16,alignItems:"flex-end"}}>
       <div>
         <div style={{fontSize:11,fontWeight:700,color:"#888",marginBottom:4}}>POBOČKA</div>
         <select value={storeId} onChange={e=>setStoreId(Number(e.target.value))}
-          style={{...inputS,width:"auto",minWidth:140}}>
+          style={{...inputS,width:"auto",minWidth:150}}>
+          <option value={ALL_STORES}>📋 Všechny prodejny</option>
           {stores.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}
         </select>
       </div>
@@ -4101,110 +4101,136 @@ function CommissionInput({employees, stores, currentUser, sched, holidays, patte
           {[2025,2026,2027].map(y=><option key={y} value={y}>{y}</option>)}
         </select>
       </div>
-      <div>
-        <div style={{fontSize:11,fontWeight:700,color:"#888",marginBottom:4}}>PLÁN PRODEJNY (Kč)</div>
-        <input value={planProdejny} onChange={e=>!isLocked&&setPlanProdejny(e.target.value)}
-          readOnly={isLocked} placeholder="např. 3500000"
-          style={{...inputS,width:160,background:isLocked?"#f3f4f6":"#fff",cursor:isLocked?"not-allowed":"text"}}/>
-      </div>
-      {!isLocked&&<div>
-        <div style={{fontSize:11,fontWeight:700,color:"#888",marginBottom:4}}>IMPORT DAT</div>
-        <input ref={importRef} type="file" accept=".xlsx" style={{display:"none"}} onChange={handleImport}/>
-        <button onClick={()=>importRef.current?.click()}
-          style={{padding:"8px 16px",borderRadius:7,border:"1.5px solid #1B4F8A",background:"#eef4ff",color:"#1B4F8A",fontWeight:700,fontSize:13,cursor:"pointer",whiteSpace:"nowrap"}}>
-          📂 Nahrát Vzor_podklady.xlsx
-        </button>
-      </div>}
-      {isLocked&&<div style={{display:"flex",alignItems:"flex-end"}}>
-        <button onClick={handleUnlock}
-          style={{padding:"8px 16px",borderRadius:7,border:"1.5px solid #f97316",background:"#fff7ed",color:"#c2410c",fontWeight:700,fontSize:13,cursor:"pointer"}}>
-          🔓 Odemknout pro úpravy
-        </button>
-      </div>}
     </div>
 
-    {/* Lock banner */}
-    {isLocked&&<div style={{marginBottom:14,padding:"10px 16px",borderRadius:8,background:"#f0fdf4",border:"1.5px solid #86efac",fontSize:13,display:"flex",alignItems:"center",gap:8}}>
-      <span style={{fontSize:16}}>🔒</span>
-      <span style={{fontWeight:600,color:"#166534"}}>Data jsou uložena a zamčena. Pro úpravy klikněte na „Odemknout".</span>
-    </div>}
+    {/* Plány poboček – vždy editovatelné */}
+    <div style={{marginBottom:16,padding:"14px 16px",background:"#f8f9ff",borderRadius:10,border:"1.5px solid #e8e8f0"}}>
+      <div style={{fontWeight:700,color:"#1a1a2e",marginBottom:10,fontSize:13}}>
+        📋 Plán prodejny na {MONTHS_CZ[month-1]} {year}
+        <span style={{fontSize:11,fontWeight:400,color:"#888",marginLeft:8}}>— zadej pro každou prodejnu zvlášť</span>
+      </div>
+      <div style={{display:"flex",gap:16,flexWrap:"wrap",alignItems:"flex-end"}}>
+        {stores.map(s=>(
+          <div key={s.id}>
+            <div style={{fontSize:11,fontWeight:700,color:"#888",marginBottom:4}}>{s.name.toUpperCase()}</div>
+            <div style={{display:"flex",alignItems:"center",gap:6}}>
+              <input type="number" min="0" placeholder="např. 3500000"
+                value={planyPoboček[s.id]||""}
+                onChange={e=>setPlanyPoboček(prev=>({...prev,[s.id]:e.target.value}))}
+                style={{...inputS,width:150,border:planyPoboček[s.id]?"1.5px solid #86efac":"1.5px solid #E8E8F0"}}/>
+              <span style={{fontSize:12,color:"#888"}}>Kč</span>
+            </div>
+          </div>
+        ))}
+        <div style={{display:"flex",gap:8,alignItems:"center"}}>
+          <button onClick={handleSavePlans} disabled={savingPlans}
+            style={{padding:"8px 18px",borderRadius:7,background:"#1B4F8A",color:"#fff",border:"none",fontWeight:700,fontSize:13,cursor:savingPlans?"not-allowed":"pointer",opacity:savingPlans?0.7:1}}>
+            {savingPlans?"Ukládám…":"💾 Uložit plány"}
+          </button>
+          {savedPlans&&<span style={{color:"#16a34a",fontWeight:700,fontSize:13}}>✅ Plány uloženy!</span>}
+        </div>
+      </div>
+    </div>
+
+    {/* Import – vždy viditelný */}
+    <div style={{marginBottom:16,padding:"12px 16px",background:"#f0f9ff",borderRadius:10,border:"1.5px solid #93c5fd",display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}}>
+      <div style={{flex:1}}>
+        <div style={{fontWeight:700,color:"#1B4F8A",fontSize:13}}>📂 Hromadný import dat</div>
+        <div style={{fontSize:12,color:"#555",marginTop:2}}>
+          Nahraje výsledky pro <strong>všechny prodejny najednou</strong>. Plány musí být uloženy výše.
+        </div>
+      </div>
+      <input ref={importRef} type="file" accept=".xlsx" style={{display:"none"}} onChange={handleImport}/>
+      <button onClick={()=>importRef.current?.click()} disabled={importing}
+        style={{padding:"9px 20px",borderRadius:7,border:"1.5px solid #1B4F8A",background:importing?"#e0e7ff":"#eef4ff",color:"#1B4F8A",fontWeight:700,fontSize:13,cursor:importing?"not-allowed":"pointer",whiteSpace:"nowrap"}}>
+        {importing?"⏳ Nahrávám…":"📂 Nahrát Vzor_podklady.xlsx"}
+      </button>
+    </div>
 
     {/* Status importu */}
-    {importStatus&&<div style={{marginBottom:14,padding:"10px 14px",borderRadius:8,background:importStatus.warn.length?"#fff8e1":"#f0fdf4",border:`1.5px solid ${importStatus.warn.length?"#fbbf24":"#86efac"}`,fontSize:13}}>
+    {importStatus&&<div style={{marginBottom:14,padding:"10px 14px",borderRadius:8,
+      background:importStatus.warn.length?"#fff8e1":"#f0fdf4",
+      border:`1.5px solid ${importStatus.warn.length?"#fbbf24":"#86efac"}`,fontSize:13}}>
       {importStatus.info&&<div style={{color:"#166534",fontWeight:700,marginBottom:4}}>✅ {importStatus.info}</div>}
       {importStatus.ok.length>0&&<div style={{color:"#166534"}}>Nalezeno: {importStatus.ok.join(", ")}</div>}
       {importStatus.warn.length>0&&<div style={{color:"#92400e",fontWeight:600,marginTop:4}}>⚠️ Nenalezeno: {importStatus.warn.join(", ")}</div>}
       {importStatus.warn.length>0&&importStatus.diagKeys&&<div style={{color:"#666",fontSize:11,marginTop:4}}>Klíče v souboru: {importStatus.diagKeys.join(", ")}</div>}
     </div>}
 
-    {loadingData
-      ? <div style={{textAlign:"center",padding:40,color:"#aaa"}}>Načítám data…</div>
-      : rows.length === 0
-        ? <div style={{textAlign:"center",padding:40,color:"#bbb"}}>Žádní aktivní prodejci na této pobočce.</div>
-        : <>
-          <div style={{overflowX:"auto"}}>
-            <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
-              <thead>
-                <tr>
-                  <th style={thS}>Prodejce</th>
-                  <th style={{...thS,textAlign:"center"}}>
-                    Hodiny
-                    <div style={{fontSize:10,fontWeight:400,opacity:0.8}}>z rozvrhu</div>
-                  </th>
-                  {["Obrat (Kč)","Tržba PZ (Kč)","Tržba služeb (Kč)","Obrat přísl. (Kč)","Kor. motivace (Kč)"].map(h=>(
-                    <th key={h} style={thS}>{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map((r,i)=><tr key={r.employee_id} style={{background:i%2===0?"#fff":"#f8f9ff"}}>
-                  <td style={{padding:"8px 10px",fontWeight:700,color:"#1a1a2e",whiteSpace:"nowrap"}}>
-                    {r.locked&&<span title="Zamčeno" style={{marginRight:5,fontSize:11}}>🔒</span>}
-                    {r.name}
-                  </td>
-                  <td style={{padding:"4px 6px"}}>
-                    <div style={{position:"relative"}}>
-                      <input type="number" value={r.hodiny} readOnly={isLocked}
-                        onChange={e=>!isLocked&&updRow(i,"hodiny",e.target.value)}
-                        style={{...inputS,textAlign:"right",
-                          background: isLocked?"#f3f4f6": r.hodiny_source==="rozvrh"?"#f0fdf4": r.hodiny_source==="saved"?"#f0f9ff":"#fff",
-                          border: isLocked?"1.5px solid #d1d5db": r.hodiny_source==="rozvrh"?"1.5px solid #86efac": r.hodiny_source==="saved"?"1.5px solid #93c5fd":"1.5px solid #E8E8F0",
-                          cursor: isLocked?"not-allowed":"text",
-                        }} min="0"/>
-                      {!isLocked&&r.hodiny_source==="rozvrh"&&<span title="Převzato z rozvrhu" style={{position:"absolute",right:6,top:"50%",transform:"translateY(-50%)",fontSize:10,color:"#16a34a",pointerEvents:"none"}}>📅</span>}
-                    </div>
-                  </td>
-                  {["obrat","trzba_pz","trzba_sluzby","obrat_prislusenstvi","korunova_motivace"].map(f=>(
-                    <td key={f} style={{padding:"4px 6px"}}>
-                      <input type="number" value={r[f]} readOnly={isLocked}
-                        onChange={e=>!isLocked&&updRow(i,f,e.target.value)}
-                        style={{...inputS,textAlign:"right",
-                          background:isLocked?"#f3f4f6":"#fff",
-                          cursor:isLocked?"not-allowed":"text",
-                        }} min="0"/>
-                    </td>
-                  ))}
-                </tr>)}
-              </tbody>
-            </table>
-          </div>
-          {!isLocked&&<div style={{marginTop:10,fontSize:11,color:"#888",display:"flex",gap:16,flexWrap:"wrap"}}>
-            <span style={{display:"flex",alignItems:"center",gap:4}}><span style={{display:"inline-block",width:12,height:12,borderRadius:3,background:"#f0fdf4",border:"1px solid #86efac"}}/>📅 Hodiny z rozvrhu (lze upravit)</span>
-            <span style={{display:"flex",alignItems:"center",gap:4}}><span style={{display:"inline-block",width:12,height:12,borderRadius:3,background:"#f0f9ff",border:"1px solid #93c5fd"}}/>Hodiny z uloženého záznamu</span>
-          </div>}
-          <div style={{marginTop:14,display:"flex",gap:10,alignItems:"center",flexWrap:"wrap"}}>
-            {!isLocked&&<button onClick={handleSave} disabled={saving}
-              style={{background:"#6b7280",color:"#fff",border:"none",borderRadius:9,padding:"11px 28px",fontSize:14,fontWeight:700,cursor:saving?"not-allowed":"pointer",opacity:saving?0.7:1}}>
-              {saving?"Ukládám…":"💾 Uložit ručně a zamknout"}
-            </button>}
-            {isLocked&&<button onClick={handleUnlock}
-              style={{background:"#fff7ed",color:"#c2410c",border:"1.5px solid #f97316",borderRadius:9,padding:"11px 28px",fontSize:14,fontWeight:700,cursor:"pointer"}}>
-              🔓 Odemknout pro úpravy
-            </button>}
-            {saved&&<span style={{color:"#16a34a",fontWeight:700,fontSize:13}}>✅ Uloženo a zamčeno!</span>}
-            {!isLocked&&!saving&&<span style={{fontSize:12,color:"#aaa"}}>💡 Import xlsx uloží a zamkne automaticky</span>}
-          </div>
-        </>
+    {/* Detail jedné prodejny */}
+    {storeId===ALL_STORES
+      ? <div style={{textAlign:"center",padding:40,color:"#888",background:"#f8f9ff",borderRadius:10,border:"1.5px dashed #e8e8f0"}}>
+          <div style={{fontSize:32,marginBottom:8}}>📋</div>
+          <div style={{fontWeight:700,fontSize:15,marginBottom:4}}>Zobrazení všech poboček</div>
+          <div style={{fontSize:13}}>Pro detail a ruční úpravy vyber konkrétní prodejnu v selectoru nahoře.</div>
+          <div style={{fontSize:13,marginTop:4,color:"#1B4F8A"}}>Import xlsx funguje pro všechny prodejny najednou bez ohledu na výběr.</div>
+        </div>
+      : loadingData
+        ? <div style={{textAlign:"center",padding:40,color:"#aaa"}}>Načítám data…</div>
+        : rows.length===0
+          ? <div style={{textAlign:"center",padding:40,color:"#bbb"}}>Žádní aktivní prodejci na této pobočce.</div>
+          : <>
+              {/* Lock banner */}
+              {isLocked&&<div style={{marginBottom:14,padding:"10px 16px",borderRadius:8,background:"#f0fdf4",border:"1.5px solid #86efac",fontSize:13,display:"flex",alignItems:"center",gap:8}}>
+                <span style={{fontSize:16}}>🔒</span>
+                <span style={{fontWeight:600,color:"#166534"}}>Data jsou uložena a zamčena. Pro úpravy klikněte na „Odemknout".</span>
+              </div>}
+              <div style={{overflowX:"auto"}}>
+                <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
+                  <thead>
+                    <tr>
+                      <th style={thS}>Prodejce</th>
+                      <th style={{...thS,textAlign:"center"}}>Hodiny<div style={{fontSize:10,fontWeight:400,opacity:0.8}}>z rozvrhu</div></th>
+                      {["Obrat (Kč)","Tržba PZ (Kč)","Tržba služeb (Kč)","Obrat přísl. (Kč)","Kor. motivace (Kč)"].map(h=>(
+                        <th key={h} style={thS}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rows.map((r,i)=><tr key={r.employee_id} style={{background:i%2===0?"#fff":"#f8f9ff"}}>
+                      <td style={{padding:"8px 10px",fontWeight:700,color:"#1a1a2e",whiteSpace:"nowrap"}}>
+                        {r.locked&&<span title="Zamčeno" style={{marginRight:5,fontSize:11}}>🔒</span>}
+                        {r.name}
+                      </td>
+                      <td style={{padding:"4px 6px"}}>
+                        <div style={{position:"relative"}}>
+                          <input type="number" value={r.hodiny} readOnly={isLocked}
+                            onChange={e=>!isLocked&&updRow(i,"hodiny",e.target.value)}
+                            style={{...inputS,textAlign:"right",
+                              background:isLocked?"#f3f4f6":r.hodiny_source==="rozvrh"?"#f0fdf4":r.hodiny_source==="saved"?"#f0f9ff":"#fff",
+                              border:isLocked?"1.5px solid #d1d5db":r.hodiny_source==="rozvrh"?"1.5px solid #86efac":r.hodiny_source==="saved"?"1.5px solid #93c5fd":"1.5px solid #E8E8F0",
+                              cursor:isLocked?"not-allowed":"text"}} min="0"/>
+                          {!isLocked&&r.hodiny_source==="rozvrh"&&<span title="Převzato z rozvrhu" style={{position:"absolute",right:6,top:"50%",transform:"translateY(-50%)",fontSize:10,color:"#16a34a",pointerEvents:"none"}}>📅</span>}
+                        </div>
+                      </td>
+                      {["obrat","trzba_pz","trzba_sluzby","obrat_prislusenstvi","korunova_motivace"].map(f=>(
+                        <td key={f} style={{padding:"4px 6px"}}>
+                          <input type="number" value={r[f]} readOnly={isLocked}
+                            onChange={e=>!isLocked&&updRow(i,f,e.target.value)}
+                            style={{...inputS,textAlign:"right",background:isLocked?"#f3f4f6":"#fff",cursor:isLocked?"not-allowed":"text"}} min="0"/>
+                        </td>
+                      ))}
+                    </tr>)}
+                  </tbody>
+                </table>
+              </div>
+              {!isLocked&&<div style={{marginTop:8,fontSize:11,color:"#888",display:"flex",gap:16,flexWrap:"wrap"}}>
+                <span><span style={{display:"inline-block",width:10,height:10,borderRadius:2,background:"#f0fdf4",border:"1px solid #86efac",marginRight:4}}/>📅 Hodiny z rozvrhu</span>
+                <span><span style={{display:"inline-block",width:10,height:10,borderRadius:2,background:"#f0f9ff",border:"1px solid #93c5fd",marginRight:4}}/>Hodiny z uloženého záznamu</span>
+              </div>}
+              <div style={{marginTop:14,display:"flex",gap:10,alignItems:"center",flexWrap:"wrap"}}>
+                {!isLocked&&<button onClick={handleSave} disabled={saving}
+                  style={{background:"#6b7280",color:"#fff",border:"none",borderRadius:9,padding:"11px 28px",fontSize:14,fontWeight:700,cursor:saving?"not-allowed":"pointer",opacity:saving?0.7:1}}>
+                  {saving?"Ukládám…":"💾 Uložit ručně a zamknout"}
+                </button>}
+                {isLocked&&<button onClick={handleUnlock}
+                  style={{background:"#fff7ed",color:"#c2410c",border:"1.5px solid #f97316",borderRadius:9,padding:"11px 28px",fontSize:14,fontWeight:700,cursor:"pointer"}}>
+                  🔓 Odemknout pro úpravy
+                </button>}
+                {saved&&<span style={{color:"#16a34a",fontWeight:700,fontSize:13}}>✅ Uloženo a zamčeno!</span>}
+                {!isLocked&&!saving&&<span style={{fontSize:12,color:"#aaa"}}>💡 Import xlsx uloží a zamkne automaticky</span>}
+              </div>
+            </>
     }
   </div>;
 }
