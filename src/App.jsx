@@ -4296,14 +4296,33 @@ function CommissionResults({employees, stores}){
             },
           ];
 
-          // Výpočet potenciálního zisku při 100% plnění všech složek
-          const provizeAt100 = calcCommission(
-            {...r.data, trzba_pz:c.planPz, obrat:c.planObrat, trzba_sluzby:c.planSluzby, obrat_prislusenstvi:c.planPrislusenství},
-            r.settings || {koef_pz:0.025,koef_sluzby:0.012,koef_prislusenstvi:0.1465,obrat_koef_plny:0.004,obrat_koef_zkraceny:0.003,obrat_strop:3000},
-            results.map(x=>x.data),
-            r.penetraceOverride
-          );
-          const moznyZisk = provizeAt100 ? Math.max(0, provizeAt100.vyslednaProvize - c.vyslednaProvize) : 0;
+          // Výpočet možného zisku – přímý, bez simulace
+          // 1) Provize ze složek při 100 % plnění
+          const sett = r.settings || {};
+          const sazbaPzS    = Number(sett.sazba_pz)||0.10;
+          const sazbaSluzbyS= Number(sett.sazba_sluzby)||0.10;
+          const stropSluzbyS= Number(sett.strop_sluzby)||1500;
+          const obratKoefS  = (Number(r.data.hodiny)||0)>=160 ? (Number(sett.obrat_koef_plny)||0.004) : (Number(sett.obrat_koef_zkraceny)||0.003);
+          const obratStropS = Number(sett.obrat_strop)||3000;
+          const sazbaPrisl4S= Number(sett.sazba_prisl_4)||0.038;
+          const stropPrislS = Number(sett.strop_prislusenstvi)||4000;
+
+          const pz100    = c.planPz * sazbaPzS;                                           // PZ: plán × sazba (bez stropu)
+          const obrat100 = Math.min(c.planObrat * obratKoefS, obratStropS);               // Obrat: plán × sazba, max strop
+          const sluzby100= Math.min(c.planSluzby * sazbaSluzbyS, stropSluzbyS);           // Služby: plán × sazba, max strop
+          const prisl100 = Math.min(c.planPrislusenství * sazbaPrisl4S, stropPrislS);     // Přísl: plán × sazba4, max strop
+          const koru100  = c.korunovaMot;                                                  // Korunová: beze změny
+
+          const zaklad100 = pz100 + obrat100 + sluzby100 + prisl100 + koru100;
+          const koef100   = 1.00; // celkové plnění 100 % → koeficient 100 %
+          const provize100= zaklad100 * koef100;
+
+          // Rozklad možného zisku
+          const moznyZProvizi  = Math.round(zaklad100 - (c.provizeObrat + c.provizePz + c.provizeSluzby + c.provizePrislusenství + c.korunovaMot));
+          const moznyZKoef     = Math.round(zaklad100 * koef100 - zaklad100 * c.koef);  // přínos skoku koeficientu
+          // Pozor: moznyZProvizi + moznyZKoef ≠ přesně celkový zisk kvůli zaokrouhlení
+          // Přesné celkové číslo:
+          const moznyZisk = Math.round(Math.max(0, provize100 - c.vyslednaProvize));
 
           const celkPct = Math.round(c.celkPlneni*100);
           const koefPct = Math.round(c.koef*100);
@@ -4395,11 +4414,23 @@ function CommissionResults({employees, stores}){
                 </div>
               </div>
               {/* Motivační banner */}
-              {moznyZisk>50&&<div style={{marginBottom:12,padding:"10px 14px",background:"#fef9c3",borderRadius:8,border:"1px solid #fde047",fontSize:13}}>
-                <span style={{fontWeight:700,color:"#854d0e"}}>💡 Splněním plánu ve všech složkách</span>
-                <span style={{color:"#713f12"}}> můžeš získat ještě </span>
-                <span style={{fontWeight:800,color:"#854d0e",fontSize:15}}>+{czk(moznyZisk)}</span>
-                <span style={{color:"#713f12"}}> navíc</span>
+              {moznyZisk>50&&<div style={{marginBottom:12,padding:"14px 16px",background:"#fef9c3",borderRadius:8,border:"1px solid #fde047"}}>
+                <div style={{display:"flex",alignItems:"center",gap:16,flexWrap:"wrap"}}>
+                  <div>
+                    <div style={{fontSize:11,color:"#854d0e",fontWeight:700,marginBottom:2}}>💡 SPLNĚNÍM PLÁNU VE VŠECH SLOŽKÁCH ZÍSKÁŠ NAVÍC</div>
+                    <div style={{fontSize:22,fontWeight:900,color:"#854d0e"}}>+{czk(moznyZisk)}</div>
+                  </div>
+                  <div style={{display:"flex",flexDirection:"column",gap:4,fontSize:12,color:"#713f12"}}>
+                    <div style={{display:"flex",alignItems:"center",gap:8}}>
+                      <span style={{background:"#fde68a",borderRadius:4,padding:"2px 8px",fontWeight:700,minWidth:80,textAlign:"right"}}>+{czk(Math.max(0,moznyZProvizi))}</span>
+                      <span>z vyšších provizí jednotlivých složek</span>
+                    </div>
+                    <div style={{display:"flex",alignItems:"center",gap:8}}>
+                      <span style={{background:"#fde68a",borderRadius:4,padding:"2px 8px",fontWeight:700,minWidth:80,textAlign:"right"}}>+{czk(Math.max(0,moznyZKoef))}</span>
+                      <span>ze skoku koeficientu {Math.round(c.koef*100)} % → 100 %</span>
+                    </div>
+                  </div>
+                </div>
               </div>}
               {/* Výpočet provize */}
               <div style={{background:"#fff",borderRadius:8,padding:"10px 14px",border:"1px solid #e8e8f0",fontSize:12,color:"#555",lineHeight:2}}>
