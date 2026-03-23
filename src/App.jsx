@@ -3653,7 +3653,16 @@ ${d}${hol?"!":"."}`;
 // ═══════════════════════════════════════════════════════════════
 
 // ── Výpočetní jádro ──────────────────────────────────────────
-function calcKoefKraceni(plneni){
+function calcKoefKraceni(plneni, kraceni){
+  // kraceni = [{od: 0-1, koef: 0-1}] seřazeno od největšího
+  if(kraceni && kraceni.length){
+    const sorted = [...kraceni].sort((a,b)=>b.od-a.od);
+    for(const r of sorted){
+      if(plneni >= r.od/100) return r.koef/100;
+    }
+    return 0;
+  }
+  // Výchozí tabulka (fallback)
   if(plneni>=0.99) return 1.00;
   if(plneni>=0.79) return 0.90;
   if(plneni>=0.49) return 0.50;
@@ -3662,8 +3671,9 @@ function calcKoefKraceni(plneni){
   return 0.00;
 }
 
-function calcCommission(emp, settings, allEmpsData, penetraceOverride){
+function calcCommission(emp, settings, allEmpsData, penetraceOverride, globalSettings){
   const s = settings;
+  const g = globalSettings || {};
   const soucetHodin = allEmpsData.reduce((a,e)=>a+(Number(e.hodiny)||0),0);
   if(!soucetHodin) return null;
   const podil = (Number(emp.hodiny)||0) / soucetHodin;
@@ -3671,13 +3681,11 @@ function calcCommission(emp, settings, allEmpsData, penetraceOverride){
 
   const koefPrislusenství = penetraceOverride != null ? penetraceOverride : (Number(s.koef_prislusenstvi)||0.1465);
 
-  // Plány
   const planObrat = plan * podil;
   const planPz    = plan * (Number(s.koef_pz)||0.025) * podil;
   const planSluzby = plan * (Number(s.koef_sluzby)||0.012) * podil;
   const planPrislusenství = planObrat * koefPrislusenství;
 
-  // Složka 1 – Obrat
   const hodiny = Number(emp.hodiny)||0;
   const obratKoef = hodiny >= 160 ? (Number(s.obrat_koef_plny)||0.004) : (Number(s.obrat_koef_zkraceny)||0.003);
   const obrat = Number(emp.obrat)||0;
@@ -3688,42 +3696,41 @@ function calcCommission(emp, settings, allEmpsData, penetraceOverride){
   const bonusObrat120 = Number(s.bonus_obrat_120)||1000;
   const bonusObrat = plneniObrat >= 1.2 ? bonusObrat120 : plneniObrat >= 1.1 ? bonusObrat110 : 0;
 
-  // Složka 2 – PZ
   const trzba_pz = Number(emp.trzba_pz)||0;
   const sazbaPz = Number(s.sazba_pz)||0.10;
   const provizePz = trzba_pz * sazbaPz;
   const plneniPz = planPz > 0 ? trzba_pz / planPz : 0;
 
-  // Složka 3 – Služby
   const trzba_sluzby = Number(emp.trzba_sluzby)||0;
   const sazbaSluzby = Number(s.sazba_sluzby)||0.10;
   const stropSluzby = Number(s.strop_sluzby)||1500;
   const provizeSluzby = Math.min(trzba_sluzby * sazbaSluzby, stropSluzby);
   const plneniSluzby = planSluzby > 0 ? trzba_sluzby / planSluzby : 0;
 
-  // Složka 4 – Příslušenství (stupňovité sazby dle plnění)
   const obrat_prislusenství = Number(emp.obrat_prislusenstvi)||0;
   const plneniPrislusenství = planPrislusenství > 0 ? obrat_prislusenství / planPrislusenství : 0;
   const stropPrislusenství = Number(s.strop_prislusenstvi)||4000;
-  // Sazby: 0-10%=0, 11-25%=sazba1, 26-60%=sazba2, 61-99%=sazba3, 100%+=sazba4
-  const sazbaPrisl0   = 0;
-  const sazbaPrisl1   = Number(s.sazba_prisl_1)||0.01;  // 11–25 %
-  const sazbaPrisl2   = Number(s.sazba_prisl_2)||0.02;  // 26–60 %
-  const sazbaPrisl3   = Number(s.sazba_prisl_3)||0.03;  // 61–99 %
-  const sazbaPrisl4   = Number(s.sazba_prisl_4)||0.038; // 100 %+
-  let sazbaPrisl = sazbaPrisl0;
+  const sazbaPrisl1 = Number(s.sazba_prisl_1)||0.01;
+  const sazbaPrisl2 = Number(s.sazba_prisl_2)||0.02;
+  const sazbaPrisl3 = Number(s.sazba_prisl_3)||0.03;
+  const sazbaPrisl4 = Number(s.sazba_prisl_4)||0.038;
+  let sazbaPrisl = 0;
   if(plneniPrislusenství >= 1.00)      sazbaPrisl = sazbaPrisl4;
   else if(plneniPrislusenství >= 0.61) sazbaPrisl = sazbaPrisl3;
   else if(plneniPrislusenství >= 0.26) sazbaPrisl = sazbaPrisl2;
   else if(plneniPrislusenství >= 0.11) sazbaPrisl = sazbaPrisl1;
   const provizePrislusenství = Math.min(obrat_prislusenství * sazbaPrisl, stropPrislusenství);
 
-  // Složka 5 – Korunová motivace
   const korunovaMot = Number(emp.korunova_motivace)||0;
 
-  // Celkové plnění (PZ váha 4×)
-  const celkPlneni = (Math.min(plneniPz,1)*4 + Math.min(plneniObrat,1)*1 + Math.min(plneniSluzby,1)*1 + Math.min(plneniPrislusenství,1)*1) / 7;
-  const koef = calcKoefKraceni(celkPlneni);
+  // Váhy z globálního nastavení
+  const vahaPz    = Number(g.vaha_pz)||4;
+  const vahaObrat = Number(g.vaha_obrat)||1;
+  const vahaSluzby= Number(g.vaha_sluzby)||1;
+  const vahaPrisl = Number(g.vaha_prisl)||1;
+  const vahaSouc  = vahaPz + vahaObrat + vahaSluzby + vahaPrisl;
+  const celkPlneni = (Math.min(plneniPz,1)*vahaPz + Math.min(plneniObrat,1)*vahaObrat + Math.min(plneniSluzby,1)*vahaSluzby + Math.min(plneniPrislusenství,1)*vahaPrisl) / vahaSouc;
+  const koef = calcKoefKraceni(celkPlneni, g.kraceni);
 
   const zaklad = (provizeObrat + provizePz + provizeSluzby + provizePrislusenství + korunovaMot) * koef;
   const vyslednaProvize = zaklad + bonusObrat;
@@ -3735,8 +3742,7 @@ function calcCommission(emp, settings, allEmpsData, penetraceOverride){
     provizePz, plneniPz, sazbaPz,
     provizeSluzby, plneniSluzby, stropSluzby,
     provizePrislusenství, plneniPrislusenství, stropPrislusenství,
-    korunovaMot,
-    celkPlneni, koef,
+    korunovaMot, celkPlneni, koef,
     zaklad, vyslednaProvize, hrubaMzda,
   };
 }
@@ -4183,9 +4189,11 @@ function CommissionResults({employees, stores}){
     setResults([]); setExpandedRow(null);
     (async()=>{
       setLoading(true);
-      // Vždy načti čerstvá nastavení z DB (bez cache)
       const {data:sD} = await supabase.from("commission_settings").select("*").eq("store_id",storeId);
       const settings = sD?.[0] || {koef_pz:0.025,koef_sluzby:0.012,koef_prislusenstvi:0.1465,prumerna_cena_pz:storeId===2?1775:storeId===3?1710:1630,obrat_koef_plny:0.004,obrat_koef_zkraceny:0.003,obrat_strop:3000};
+      // Globální nastavení (váhy + krácení)
+      const {data:gD} = await supabase.from("commission_global").select("*").single();
+      const globalSett = gD || {vaha_pz:4,vaha_obrat:1,vaha_sluzby:1,vaha_prisl:1,kraceni:null};
       const {data:penD} = await supabase.from("commission_penetrace")
         .select("koef_prislusenstvi").eq("store_id",storeId).eq("month",month);
       const penetraceOverride = penD?.[0]?.koef_prislusenstvi ?? null;
@@ -4200,9 +4208,10 @@ function CommissionResults({employees, stores}){
       const calcs = dataWithNames.map(d=>({
         name: d.name||`#${d.employee_id}`,
         data: d,
-        settings, // předáme settings dál pro výpočet moznyZisk
+        settings,
+        globalSett,
         penetraceOverride,
-        calc: calcCommission(d, settings, commD, penetraceOverride),
+        calc: calcCommission(d, settings, commD, penetraceOverride, globalSett),
         penetraceZdroj: penetraceOverride!=null ? `import (${(penetraceOverride*100).toFixed(2)} %)` : `výchozí (${((Number(settings.koef_prislusenstvi)||0.1465)*100).toFixed(2)} %)`,
       })).sort((a,b)=>(b.calc?.celkPlneni||0)-(a.calc?.celkPlneni||0));
       setResults(calcs);
@@ -4314,7 +4323,8 @@ function CommissionResults({employees, stores}){
           const koru100  = c.korunovaMot;                                                  // Korunová: beze změny
 
           const zaklad100 = pz100 + obrat100 + sluzby100 + prisl100 + koru100;
-          const koef100   = 1.00; // celkové plnění 100 % → koeficient 100 %
+          // koef při 100 % = nejvyšší pásmo v tabulce krácení
+          const koef100 = calcKoefKraceni(1.0, r.globalSett?.kraceni);
           const provize100= zaklad100 * koef100;
 
           const zakladAkt = c.provizeObrat + c.provizePz + c.provizeSluzby + c.provizePrislusenství + c.korunovaMot;
@@ -4454,9 +4464,7 @@ function CommissionResults({employees, stores}){
 
 // ── Obrazovka 3: Nastavení koeficientů ───────────────────────
 function CommissionSettings({stores, onSettingsSaved}){
-  // displayData = co vidí uživatel v inputech (vždy string, % pole jsou v %)
-  // dbData = skutečné hodnoty pro uložení do DB (desetinná čísla)
-  const [displayData, setDisplayData] = useState({});  // {storeId: {key: stringValue}}
+  const [displayData, setDisplayData] = useState({});
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [importingPenetrace, setImportingPenetrace] = useState(false);
@@ -4466,24 +4474,29 @@ function CommissionSettings({stores, onSettingsSaved}){
   const [savingPen, setSavingPen] = useState(false);
   const penetraceRef = useRef(null);
 
-  // Pole zadávaná v procentech (user vidí 2.5, DB obsahuje 0.025)
+  // Globální nastavení (sdílené pro všechny pobočky)
+  const [globalSettings, setGlobalSettings] = useState({
+    prislusenství_prirazka: "0.5",  // % přirážka k penetraci loňského roku
+    vaha_pz: "4", vaha_obrat: "1", vaha_sluzby: "1", vaha_prisl: "1",
+    // Tabulka krácení: 6 pásem [od_pct, koef_pct]
+    kraceni: [
+      {od:0, koef:0}, {od:10, koef:15}, {od:24, koef:30},
+      {od:49, koef:50}, {od:79, koef:90}, {od:99, koef:100},
+    ],
+  });
+  const [savingGlobal, setSavingGlobal] = useState(false);
+  const [savedGlobal, setSavedGlobal] = useState(false);
+
   const PCT_FIELDS = new Set([
     "koef_pz","koef_sluzby","koef_prislusenstvi","obrat_koef_plny","obrat_koef_zkraceny",
-    "sazba_pz","sazba_sluzby",
-    "sazba_prisl_1","sazba_prisl_2","sazba_prisl_3","sazba_prisl_4",
+    "sazba_pz","sazba_sluzby","sazba_prisl_1","sazba_prisl_2","sazba_prisl_3","sazba_prisl_4",
   ]);
 
   const DEFAULTS_DB = {
-    // Plánové koeficienty
     koef_pz:0.025, koef_sluzby:0.012, koef_prislusenstvi:0.1465,
-    // Obrat
     obrat_koef_plny:0.004, obrat_koef_zkraceny:0.003, obrat_strop:3000,
     bonus_obrat_110:500, bonus_obrat_120:1000,
-    // PZ
-    sazba_pz:0.10,
-    // Služby
-    sazba_sluzby:0.10, strop_sluzby:1500,
-    // Příslušenství – stupňovité sazby
+    sazba_pz:0.10, sazba_sluzby:0.10, strop_sluzby:1500,
     sazba_prisl_1:0.01, sazba_prisl_2:0.02, sazba_prisl_3:0.03, sazba_prisl_4:0.038,
     strop_prislusenstvi:4000,
   };
@@ -4491,25 +4504,21 @@ function CommissionSettings({stores, onSettingsSaved}){
   const STORE_NAME_MAP = {"strakonice":1,"blatná":2,"blatna":2,"pelhřimov":3,"pelhrimov":3};
   const MONTHS_CZ = ["","Leden","Únor","Březen","Duben","Květen","Červen","Červenec","Srpen","Září","Říjen","Listopad","Prosinec"];
 
-  // Převede DB hodnotu na display string (% pole ×100)
-  // Pokud je DB hodnota null/undefined/0 pro procentní pole → použij default
   const dbToDisplay = (key, dbVal, defaultDbVal) => {
     let num = (dbVal === null || dbVal === undefined) ? defaultDbVal : Number(dbVal);
-    // Pro procentní pole: pokud je 0 a existuje default, použij default
     if(PCT_FIELDS.has(key) && num === 0 && defaultDbVal) num = defaultDbVal;
-    if(PCT_FIELDS.has(key)) return String(Math.round(num * 10000) / 100); // 0.025 → "2.5"
-    // Pro Kč pole: pokud je 0 a existuje default > 0, použij default
+    if(PCT_FIELDS.has(key)) return String(Math.round(num * 10000) / 100);
     if(num === 0 && defaultDbVal) return String(defaultDbVal);
     return String(num || "");
   };
-  // Převede display string na DB hodnotu (% pole ÷100)
   const displayToDB = (key, displayVal) => {
     const num = Number(displayVal)||0;
-    if(PCT_FIELDS.has(key)) return num / 100; // "2.5" → 0.025
+    if(PCT_FIELDS.has(key)) return num / 100;
     return num;
   };
 
   const loadAll = async()=>{
+    // Per-pobočka nastavení
     const {data:sD} = await supabase.from("commission_settings").select("*");
     const disp = {};
     stores.forEach(s=>{
@@ -4523,67 +4532,86 @@ function CommissionSettings({stores, onSettingsSaved}){
     });
     setDisplayData(disp);
 
+    // Globální nastavení z DB
+    const {data:gD} = await supabase.from("commission_global").select("*").single();
+    if(gD){
+      setGlobalSettings({
+        prislusenství_prirazka: String(Math.round((gD.prislusenství_prirazka||0.005)*10000)/100),
+        vaha_pz: String(gD.vaha_pz||4),
+        vaha_obrat: String(gD.vaha_obrat||1),
+        vaha_sluzby: String(gD.vaha_sluzby||1),
+        vaha_prisl: String(gD.vaha_prisl||1),
+        kraceni: gD.kraceni || [{od:0,koef:0},{od:10,koef:15},{od:24,koef:30},{od:49,koef:50},{od:79,koef:90},{od:99,koef:100}],
+      });
+    }
+
+    // Penetrace
     const {data:penD} = await supabase.from("commission_penetrace").select("*").order("month");
     setPenetraceTable(penD||[]);
-    const initEdit = {};
-    (penD||[]).forEach(r=>{
-      // Penetrace v % pro zobrazení
-      initEdit[`${r.store_id}_${r.month}`] = String(Math.round(Number(r.koef_prislusenstvi)*10000)/100);
-    });
-    setEditingPen(initEdit);
+    // editingPen zobrazuje loňskou penetraci (read-only) – editovatelná je jen přirážka
+    setEditingPen({});
   };
 
   useEffect(()=>{ loadAll(); },[]);
 
-  // upd ukládá display string přímo – žádná konverze zde
-  const upd = (storeId, field, val) => {
-    setDisplayData(prev=>({...prev, [storeId]:{...prev[storeId], [field]:val}}));
-  };
+  const upd = (storeId, field, val) =>
+    setDisplayData(prev=>({...prev,[storeId]:{...prev[storeId],[field]:val}}));
+  const updGlobal = (field, val) =>
+    setGlobalSettings(prev=>({...prev,[field]:val}));
+  const updKraceni = (idx, field, val) =>
+    setGlobalSettings(prev=>({
+      ...prev,
+      kraceni: prev.kraceni.map((r,i)=>i===idx?{...r,[field]:Number(val)}:r)
+    }));
 
   const handleSave = async()=>{
     setSaving(true);
     for(const s of stores){
-      const d = displayData[s.id];
-      if(!d) continue;
+      const d = displayData[s.id]; if(!d) continue;
       await supabase.from("commission_settings").upsert({
-        store_id: s.id,
-        // Plánové koeficienty
-        koef_pz:             displayToDB("koef_pz", d.koef_pz),
-        koef_sluzby:         displayToDB("koef_sluzby", d.koef_sluzby),
-        koef_prislusenstvi:  displayToDB("koef_prislusenstvi", d.koef_prislusenstvi),
-        // Obrat
-        obrat_koef_plny:     displayToDB("obrat_koef_plny", d.obrat_koef_plny),
-        obrat_koef_zkraceny: displayToDB("obrat_koef_zkraceny", d.obrat_koef_zkraceny),
-        obrat_strop:         Number(d.obrat_strop)||3000,
-        bonus_obrat_110:     Number(d.bonus_obrat_110)||500,
-        bonus_obrat_120:     Number(d.bonus_obrat_120)||1000,
-        // PZ
-        sazba_pz:            displayToDB("sazba_pz", d.sazba_pz),
-        // Služby
-        sazba_sluzby:        displayToDB("sazba_sluzby", d.sazba_sluzby),
-        strop_sluzby:        Number(d.strop_sluzby)||1500,
-        // Příslušenství
-        sazba_prisl_1:       displayToDB("sazba_prisl_1", d.sazba_prisl_1),
-        sazba_prisl_2:       displayToDB("sazba_prisl_2", d.sazba_prisl_2),
-        sazba_prisl_3:       displayToDB("sazba_prisl_3", d.sazba_prisl_3),
-        sazba_prisl_4:       displayToDB("sazba_prisl_4", d.sazba_prisl_4),
-        strop_prislusenstvi: Number(d.strop_prislusenstvi)||4000,
-        // Průměrná cena PZ
-        prumerna_cena_pz:    Number(d.prumerna_cena_pz)||PZ_DEFAULTS[s.id]||1630,
-        updated_at: new Date().toISOString(),
+        store_id:s.id,
+        koef_pz:displayToDB("koef_pz",d.koef_pz), koef_sluzby:displayToDB("koef_sluzby",d.koef_sluzby),
+        koef_prislusenstvi:displayToDB("koef_prislusenstvi",d.koef_prislusenstvi),
+        prumerna_cena_pz:Number(d.prumerna_cena_pz)||PZ_DEFAULTS[s.id]||1630,
+        obrat_koef_plny:displayToDB("obrat_koef_plny",d.obrat_koef_plny),
+        obrat_koef_zkraceny:displayToDB("obrat_koef_zkraceny",d.obrat_koef_zkraceny),
+        obrat_strop:Number(d.obrat_strop)||3000, bonus_obrat_110:Number(d.bonus_obrat_110)||500,
+        bonus_obrat_120:Number(d.bonus_obrat_120)||1000,
+        sazba_pz:displayToDB("sazba_pz",d.sazba_pz), sazba_sluzby:displayToDB("sazba_sluzby",d.sazba_sluzby),
+        strop_sluzby:Number(d.strop_sluzby)||1500,
+        sazba_prisl_1:displayToDB("sazba_prisl_1",d.sazba_prisl_1), sazba_prisl_2:displayToDB("sazba_prisl_2",d.sazba_prisl_2),
+        sazba_prisl_3:displayToDB("sazba_prisl_3",d.sazba_prisl_3), sazba_prisl_4:displayToDB("sazba_prisl_4",d.sazba_prisl_4),
+        strop_prislusenstvi:Number(d.strop_prislusenstvi)||4000,
+        updated_at:new Date().toISOString(),
       },{onConflict:"store_id"});
     }
     setSaving(false); setSaved(true); setTimeout(()=>setSaved(false),2500);
     if(onSettingsSaved) onSettingsSaved();
   };
 
+  const handleSaveGlobal = async()=>{
+    setSavingGlobal(true);
+    await supabase.from("commission_global").upsert({
+      id:1,
+      prislusenství_prirazka: (Number(globalSettings.prislusenství_prirazka)||0.5)/100,
+      vaha_pz: Number(globalSettings.vaha_pz)||4,
+      vaha_obrat: Number(globalSettings.vaha_obrat)||1,
+      vaha_sluzby: Number(globalSettings.vaha_sluzby)||1,
+      vaha_prisl: Number(globalSettings.vaha_prisl)||1,
+      kraceni: globalSettings.kraceni,
+    },{onConflict:"id"});
+    setSavingGlobal(false); setSavedGlobal(true); setTimeout(()=>setSavedGlobal(false),2500);
+    if(onSettingsSaved) onSettingsSaved();
+  };
+
   const handleSavePenetrace = async()=>{
+    // Uložíme penetraci = penetrace_loni + přirážka (z globalSettings)
+    const prirazka = (Number(globalSettings.prislusenství_prirazka)||0.5)/100;
     setSavingPen(true);
-    for(const [key,val] of Object.entries(editingPen)){
-      const [sid,mon] = key.split("_").map(Number);
-      const koef = (Number(val)||0) / 100; // display % → DB desetinné
+    for(const rec of penetraceTable){
+      const koef = (rec.penetrace_loni||0) + prirazka;
       await supabase.from("commission_penetrace").upsert(
-        {store_id:sid, month:mon, koef_prislusenstvi:koef},
+        {store_id:rec.store_id, month:rec.month, koef_prislusenstvi:koef, penetrace_loni:rec.penetrace_loni},
         {onConflict:"store_id,month"});
     }
     setSavingPen(false); await loadAll();
@@ -4690,50 +4718,146 @@ function CommissionSettings({stores, onSettingsSaved}){
       </div>}
     </div>
 
-    {/* Přehled penetrace – editovatelná tabulka */}
+    {/* Přehled penetrace – read-only s přirážkou */}
     {allMonths.length>0&&<div style={{marginBottom:24}}>
-      <div style={{fontWeight:700,color:"#1a1a2e",marginBottom:10,fontSize:14}}>
-        📈 Přehled penetrace příslušenství – koeficienty dle měsíce
-        <span style={{fontSize:11,fontWeight:400,color:"#888",marginLeft:8}}>(lze ručně upravit a uložit)</span>
+      <div style={{fontWeight:700,color:"#1a1a2e",marginBottom:6,fontSize:14}}>
+        📈 Přehled penetrace příslušenství
+      </div>
+      {/* Přirážka – jedna globální hodnota */}
+      <div style={{marginBottom:12,padding:"12px 16px",background:"#f0fdf4",borderRadius:8,border:"1.5px solid #86efac",display:"flex",alignItems:"center",gap:16,flexWrap:"wrap"}}>
+        <div style={{fontSize:13,color:"#1a1a2e"}}>
+          <strong>Přirážka k loňské penetraci</strong>
+          <div style={{fontSize:11,color:"#888",marginTop:2}}>Přičte se ke každé loňské hodnotě → výsledný koeficient pro daný měsíc</div>
+        </div>
+        <div style={{display:"flex",alignItems:"center",gap:6}}>
+          <span style={{fontSize:13,color:"#555"}}>loňská penetrace +</span>
+          <input type="number" step="0.01" value={globalSettings.prislusenství_prirazka}
+            onChange={e=>updGlobal("prislusenství_prirazka",e.target.value)}
+            style={{...inputS,width:70,border:"1.5px solid #86efac"}}/>
+          <span style={{fontSize:13,color:"#555"}}>% = výsledný koeficient</span>
+        </div>
+        <button onClick={handleSavePenetrace} disabled={savingPen}
+          style={{padding:"7px 16px",borderRadius:7,border:"none",background:"#16a34a",color:"#fff",fontWeight:700,fontSize:13,cursor:savingPen?"not-allowed":"pointer",opacity:savingPen?0.7:1}}>
+          {savingPen?"Přepočítávám…":"🔄 Přepočítat a uložit koeficienty"}
+        </button>
       </div>
       <div style={{overflowX:"auto"}}>
         <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
           <thead><tr>
             <th style={thS}>Měsíc</th>
-            {stores.map(s=><th key={s.id} style={{...thS,textAlign:"center"}}>{s.name}<br/><span style={{fontWeight:400,fontSize:10}}>koef. příslušenství</span></th>)}
+            {stores.map(s=><th key={s.id} style={{...thS,textAlign:"center"}}>
+              {s.name}
+              <div style={{display:"flex",justifyContent:"center",gap:4,marginTop:2,fontSize:10,fontWeight:400}}>
+                <span style={{opacity:0.7}}>loni %</span>
+                <span style={{opacity:0.4}}>→</span>
+                <span style={{opacity:0.9}}>koef. %</span>
+              </div>
+            </th>)}
           </tr></thead>
           <tbody>
             {allMonths.map(mon=><tr key={mon} style={{borderBottom:"1px solid #eee"}}>
               <td style={{...tdS,fontWeight:600}}>{MONTHS_CZ[mon]||mon}</td>
               {stores.map((s,si)=>{
-                const key=`${s.id}_${mon}`;
-                const rec=penetraceTable.find(r=>r.store_id===s.id&&r.month===mon);
-                const koef=editingPen[key]!==undefined?editingPen[key]:"";
-                const penLoni=rec?.penetrace_loni;
+                const rec = penetraceTable.find(r=>r.store_id===s.id&&r.month===mon);
+                const penLoni = rec?.penetrace_loni;
+                const koefAkt = rec?.koef_prislusenstvi;
+                const prirazka = (Number(globalSettings.prislusenství_prirazka)||0.5)/100;
+                const koefVypocet = penLoni != null ? penLoni + prirazka : null;
                 return <td key={s.id} style={{...tdS,textAlign:"center",background:si%2===0?"#fff":"#f8f9ff"}}>
-                  <div style={{display:"flex",alignItems:"center",justifyContent:"center",gap:4}}>
-                    <input type="number" step="0.01" value={koef}
-                      onChange={ev=>setEditingPen(p=>({...p,[key]:ev.target.value}))}
-                      style={{...inputS,width:70}}/>
-                    <span style={{fontSize:12,color:"#888"}}>%</span>
-                  </div>
-                  {penLoni!=null&&<div style={{fontSize:10,color:"#aaa",marginTop:2}}>
-                    loni: {(penLoni*100).toFixed(2)} %
-                  </div>}
+                  {penLoni!=null
+                    ? <div style={{display:"flex",alignItems:"center",justifyContent:"center",gap:6,fontSize:13}}>
+                        <span style={{color:"#888"}}>{(penLoni*100).toFixed(2)} %</span>
+                        <span style={{color:"#bbb"}}>→</span>
+                        <span style={{fontWeight:700,color:"#1B4F8A"}}>{koefVypocet!=null?(koefVypocet*100).toFixed(2):"-"} %</span>
+                        {koefAkt!=null&&Math.abs(koefAkt-koefVypocet)>0.0001&&
+                          <span title="Ručně upraveno" style={{fontSize:10,color:"#f97316"}}>✎</span>}
+                      </div>
+                    : <span style={{color:"#ddd"}}>–</span>
+                  }
                 </td>;
               })}
             </tr>)}
           </tbody>
         </table>
       </div>
-      <div style={{marginTop:10,display:"flex",gap:10,alignItems:"center"}}>
-        <button onClick={handleSavePenetrace} disabled={savingPen}
-          style={{padding:"8px 20px",borderRadius:7,border:"none",background:"#1B4F8A",color:"#fff",fontWeight:700,fontSize:13,cursor:savingPen?"not-allowed":"pointer",opacity:savingPen?0.7:1}}>
-          {savingPen?"Ukládám…":"💾 Uložit korekce penetrace"}
-        </button>
-        <span style={{fontSize:11,color:"#aaa"}}>Hodnota v % = koeficient příslušenství (penetrace loňského roku + 0,5 %), např. 14,65 %</span>
+      <div style={{marginTop:8,fontSize:11,color:"#aaa"}}>
+        ✎ = hodnota byla ručně upravena a liší se od výpočtu (loňská + přirážka)
       </div>
     </div>}
+
+    {/* Globální nastavení – váhy a tabulka krácení */}
+    <div style={{marginBottom:24,border:"1.5px solid #e8e8f0",borderRadius:10,overflow:"hidden"}}>
+      <div style={{background:"#1B4F8A",padding:"10px 16px"}}>
+        <div style={{fontWeight:700,color:"#fff",fontSize:13}}>⚖️ Celkové plnění – váhy složek a tabulka krácení</div>
+        <div style={{fontSize:11,color:"rgba(255,255,255,0.7)",marginTop:2}}>Globální nastavení – platí pro všechny pobočky</div>
+      </div>
+      <div style={{padding:"16px",display:"grid",gridTemplateColumns:"1fr 1fr",gap:20}}>
+        {/* Váhy složek */}
+        <div>
+          <div style={{fontWeight:700,color:"#1a1a2e",marginBottom:10,fontSize:13}}>Váhy složek ve vzorci celkového plnění</div>
+          <div style={{fontSize:11,color:"#888",marginBottom:10}}>
+            Vzorec: (PZ×váha + Obrat×váha + Služby×váha + Přísl.×váha) ÷ součet vah
+          </div>
+          {[
+            {key:"vaha_pz",     label:"Záruky (PZ)"},
+            {key:"vaha_obrat",  label:"Obrat"},
+            {key:"vaha_sluzby", label:"Služby"},
+            {key:"vaha_prisl",  label:"Příslušenství"},
+          ].map(f=>{
+            const total = (Number(globalSettings.vaha_pz)||4)+(Number(globalSettings.vaha_obrat)||1)+(Number(globalSettings.vaha_sluzby)||1)+(Number(globalSettings.vaha_prisl)||1);
+            const pct = Math.round((Number(globalSettings[f.key])||0)/total*100);
+            return <div key={f.key} style={{display:"flex",alignItems:"center",gap:10,marginBottom:8}}>
+              <span style={{minWidth:120,fontSize:13,color:"#555"}}>{f.label}</span>
+              <input type="number" step="1" min="0" value={globalSettings[f.key]}
+                onChange={e=>updGlobal(f.key,e.target.value)}
+                style={{...inputS,width:60}}/>
+              <span style={{fontSize:11,color:"#aaa",minWidth:40}}>({pct} %)</span>
+            </div>;
+          })}
+          <div style={{marginTop:8,fontSize:11,color:"#888",padding:"6px 10px",background:"#f8f9ff",borderRadius:6}}>
+            Součet vah: {(Number(globalSettings.vaha_pz)||4)+(Number(globalSettings.vaha_obrat)||1)+(Number(globalSettings.vaha_sluzby)||1)+(Number(globalSettings.vaha_prisl)||1)}
+          </div>
+        </div>
+
+        {/* Tabulka krácení */}
+        <div>
+          <div style={{fontWeight:700,color:"#1a1a2e",marginBottom:10,fontSize:13}}>Tabulka krácení provize</div>
+          <div style={{fontSize:11,color:"#888",marginBottom:10}}>Při celkovém plnění ≥ X % se použije koeficient Y %</div>
+          <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
+            <thead><tr style={{background:"#f0f4ff"}}>
+              <th style={{padding:"6px 10px",textAlign:"left",fontWeight:700,color:"#1B4F8A",fontSize:12}}>Od plnění %</th>
+              <th style={{padding:"6px 10px",textAlign:"left",fontWeight:700,color:"#1B4F8A",fontSize:12}}>Koeficient %</th>
+            </tr></thead>
+            <tbody>
+              {globalSettings.kraceni.map((r,idx)=>(
+                <tr key={idx} style={{borderBottom:"1px solid #eee"}}>
+                  <td style={{padding:"4px 6px"}}>
+                    <input type="number" step="1" min="0" max="100" value={r.od}
+                      onChange={e=>updKraceni(idx,"od",e.target.value)}
+                      style={{...inputS,width:70}}/>
+                    <span style={{marginLeft:4,fontSize:12,color:"#888"}}>%</span>
+                  </td>
+                  <td style={{padding:"4px 6px"}}>
+                    <input type="number" step="1" min="0" max="100" value={r.koef}
+                      onChange={e=>updKraceni(idx,"koef",e.target.value)}
+                      style={{...inputS,width:70}}/>
+                    <span style={{marginLeft:4,fontSize:12,color:"#888"}}>%</span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div style={{padding:"0 16px 16px",display:"flex",gap:10,alignItems:"center"}}>
+        <button onClick={handleSaveGlobal} disabled={savingGlobal}
+          style={{background:"#1B4F8A",color:"#fff",border:"none",borderRadius:9,padding:"10px 24px",fontSize:14,fontWeight:700,cursor:savingGlobal?"not-allowed":"pointer",opacity:savingGlobal?0.7:1}}>
+          {savingGlobal?"Ukládám…":"💾 Uložit globální nastavení"}
+        </button>
+        {savedGlobal&&<span style={{color:"#16a34a",fontWeight:700,fontSize:13}}>✅ Uloženo!</span>}
+        <span style={{fontSize:11,color:"#aaa",marginLeft:8}}>Po uložení se výsledky přepočítají automaticky</span>
+      </div>
+    </div>
 
     {/* Výchozí koeficienty – rozděleno do sekcí */}
     <div style={{fontWeight:700,color:"#1a1a2e",marginBottom:14,fontSize:14}}>⚙️ Sazby a koeficienty per pobočka</div>
