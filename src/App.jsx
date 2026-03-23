@@ -4041,12 +4041,22 @@ function CommissionInput({employees, stores, currentUser, sched, holidays, patte
       }).filter(Boolean);
 
       // Ulož plány poboček do commission_store_plans
-      await handleSavePlans();
+      for(const s of stores){
+        const plan = Number(planyPoboček[s.id])||0;
+        if(!plan) continue;
+        await supabase.from("commission_store_plans").upsert(
+          {store_id:s.id, month, year, plan_prodejny:plan},
+          {onConflict:"store_id,month,year"}
+        );
+      }
 
-      // Ulož výsledky všech zaměstnanců
-      await Promise.all(importRows.map(ur=>
-        supabase.from("commission_data").upsert(ur,{onConflict:"store_id,employee_id,month,year"})
-      ));
+      // Ulož výsledky všech zaměstnanců – sekvenčně pro spolehlivost
+      const dbErrors = [];
+      for(const ur of importRows){
+        const {error} = await supabase.from("commission_data")
+          .upsert(ur, {onConflict:"store_id,employee_id,month,year"});
+        if(error) dbErrors.push(`emp${ur.employee_id}(store${ur.store_id}): ${error.message}`);
+      }
 
       // Přenačti aktuálně zobrazené rows
       if(storeId!==ALL_STORES){
@@ -4064,7 +4074,9 @@ function CommissionInput({employees, stores, currentUser, sched, holidays, patte
 
       const statStr = Object.values(statByStore).filter(s=>s.count>0).map(s=>`${s.name}: ${s.count}`).join(", ");
       setImportStatus({ok, warn, diagKeys,
-        info:`Uloženo ${importRows.length} zaměstnanců – ${statStr}`});
+        info:`Uloženo ${importRows.length} zaměstnanců – ${statStr}`,
+        dbErrors: dbErrors.length ? dbErrors : null,
+      });
       setImporting(false);
     } catch(err){ setImporting(false); alert("Chyba importu: "+err.message); }
   };
@@ -4155,6 +4167,7 @@ function CommissionInput({employees, stores, currentUser, sched, holidays, patte
       {importStatus.ok.length>0&&<div style={{color:"#166534"}}>Nalezeno: {importStatus.ok.join(", ")}</div>}
       {importStatus.warn.length>0&&<div style={{color:"#92400e",fontWeight:600,marginTop:4}}>⚠️ Nenalezeno: {importStatus.warn.join(", ")}</div>}
       {importStatus.warn.length>0&&importStatus.diagKeys&&<div style={{color:"#666",fontSize:11,marginTop:4}}>Klíče v souboru: {importStatus.diagKeys.join(", ")}</div>}
+      {importStatus.dbErrors&&<div style={{color:"#dc2626",fontWeight:600,marginTop:4,fontSize:12}}>⛔ Chyby DB: {importStatus.dbErrors.join(" | ")}</div>}
     </div>}
 
     {/* Detail jedné prodejny */}
