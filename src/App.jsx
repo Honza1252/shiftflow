@@ -3950,13 +3950,12 @@ function CommissionInput({employees, stores, currentUser, sched, holidays, patte
     setRows(prev=>prev.map(r=>({...r, locked:true})));
   };
 
-  // Import → uloží + ihned zamkne (locked:true v DB)
+  // Import → parsuje xlsx, mapuje na VŠECHNY zaměstnance všech poboček, uloží a zamkne
   const handleImportAndSave = async(file)=>{
     try {
       const {obratMap,pzMap,sluzbyMap,prislMap,korunovaMap} = await parseVzorPodklady(file);
-      const toAscii = s => String(s||"").normalize("NFC").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"");
+      const toAsciiStr = s => String(s||"").normalize("NFC").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"");
       const findKey = (r, map)=>{
-        const toAsciiStr = s => String(s||"").normalize("NFC").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"");
         for(const prijmeni of [r.prijmeni, r.prijmeniFallback].filter(Boolean)){
           if(prijmeni in map) return prijmeni;
           const asc = toAsciiStr(prijmeni);
@@ -3965,43 +3964,73 @@ function CommissionInput({employees, stores, currentUser, sched, holidays, patte
         }
         return null;
       };
+
+      if(!planProdejny||isNaN(Number(planProdejny))){
+        alert("Nejdřív zadejte Plán prodejny, pak nahrajte soubor.");
+        return;
+      }
+
+      // Zpracuj VŠECHNY aktivní zaměstnance ze všech poboček
+      const allActiveEmps = employees.filter(e=>e.active);
       const ok=[], warn=[], diagKeys=Object.keys(obratMap).filter(k=>!k.startsWith("id_")).sort();
-      // Aplikuj importovaná data na rows a rovnou ulož do DB
-      setRows(prev=>{
-        const next = prev.map(r=>{
-          const mk = findKey(r, obratMap);
-          if(!mk){ warn.push(r.name); return r; }
-          ok.push(r.name);
-          return {
-            ...r,
-            obrat: String(Math.round(obratMap[mk]||0)),
-            trzba_pz: String(Math.round(pzMap[mk]||0)),
-            trzba_sluzby: String(Math.round(sluzbyMap[mk]||0)),
-            obrat_prislusenstvi: String(Math.round(prislMap[mk]||0)),
-            korunova_motivace: String(Math.round(korunovaMap[mk]||0)),
-          };
-        });
-        // Uložit a zamknout asynchronně
-        if(planProdejny && !isNaN(Number(planProdejny))){
-          (async()=>{
-            for(const r of next){
-              await supabase.from("commission_data").upsert({
-                store_id:storeId, employee_id:r.employee_id, month, year,
-                plan_prodejny:Number(planProdejny)||0,
-                hodiny:Number(r.hodiny)||0, obrat:Number(r.obrat)||0,
-                trzba_pz:Number(r.trzba_pz)||0, trzba_sluzby:Number(r.trzba_sluzby)||0,
-                obrat_prislusenstvi:Number(r.obrat_prislusenstvi)||0,
-                korunova_motivace:Number(r.korunova_motivace)||0,
-                locked:true,
-              },{onConflict:"store_id,employee_id,month,year"});
-            }
-            setRows(p=>p.map(r=>({...r,locked:true})));
-            setSaved(true); setTimeout(()=>setSaved(false),3000);
-          })();
+
+      // Načti hodiny z rozvrhu pro všechny zaměstnance
+      const importRows = allActiveEmps.map(e=>{
+        const prijmeniSrc = (e.lastName && e.lastName.trim()) ? e.lastName : e.firstName;
+        const prijmeniRaw = prijmeniSrc.normalize("NFC").toLowerCase();
+        const prijmeniFallback = ((e.lastName && e.lastName.trim()) ? e.firstName : "").normalize("NFC").toLowerCase();
+        const fakeRow = {prijmeni: prijmeniRaw, prijmeniFallback};
+        const mk = findKey(fakeRow, obratMap);
+
+        const schedH = calcPlannedHours(e, e.mainStore, year, month-1, sched, holidays, stores, patterns, employees);
+
+        if(!mk){
+          warn.push(`${e.firstName} ${e.lastName}`.trim());
+          return null;
         }
-        return next.map(r=>({...r,locked:false})); // UI update nejdřív bez locku, pak se lock nastaví
-      });
-      setTimeout(()=>setImportStatus({ok:[...ok], warn:[...warn], diagKeys}), 100);
+        ok.push(`${e.firstName} ${e.lastName}`.trim());
+        return {
+          store_id: e.mainStore,
+          employee_id: e.id,
+          month, year,
+          plan_prodejny: Number(planProdejny)||0,
+          hodiny: schedH>0 ? schedH : 0,
+          obrat: Math.round(obratMap[mk]||0),
+          trzba_pz: Math.round(pzMap[mk]||0),
+          trzba_sluzby: Math.round(sluzbyMap[mk]||0),
+          obrat_prislusenstvi: Math.round(prislMap[mk]||0),
+          korunova_motivace: Math.round(korunovaMap[mk]||0),
+          locked: true,
+        };
+      }).filter(Boolean);
+
+      // Ulož do DB
+      for(const ur of importRows){
+        await supabase.from("commission_data").upsert(ur,{onConflict:"store_id,employee_id,month,year"});
+      }
+
+      // Aktualizuj lokální rows pro aktuálně zobrazenou prodejnu
+      setRows(prev=>prev.map(r=>{
+        const saved = importRows.find(ir=>ir.employee_id===r.employee_id);
+        if(!saved) return r;
+        return {
+          ...r,
+          hodiny: String(saved.hodiny),
+          obrat: String(saved.obrat),
+          trzba_pz: String(saved.trzba_pz),
+          trzba_sluzby: String(saved.trzba_sluzby),
+          obrat_prislusenstvi: String(saved.obrat_prislusenstvi),
+          korunova_motivace: String(saved.korunova_motivace),
+          locked: true,
+        };
+      }));
+      setRows(prev=>prev.map(r=>({...r,locked:true})));
+
+      setTimeout(()=>setImportStatus({
+        ok, warn, diagKeys,
+        info: `Uloženo ${importRows.length} zaměstnanců z ${new Set(importRows.map(r=>r.store_id)).size} poboček`,
+      }), 100);
+      setSaved(true); setTimeout(()=>setSaved(false),3000);
     } catch(err){
       alert("Chyba při čtení souboru: "+err.message);
     }
@@ -4087,8 +4116,9 @@ function CommissionInput({employees, stores, currentUser, sched, holidays, patte
     </div>}
 
     {/* Status importu */}
-    {importStatus&&<div style={{marginBottom:14,padding:"10px 14px",borderRadius:8,background: importStatus.warn.length?"#fff8e1":"#f0fdf4",border:`1.5px solid ${importStatus.warn.length?"#fbbf24":"#86efac"}`,fontSize:13}}>
-      {importStatus.ok.length>0&&<div style={{color:"#166534",fontWeight:600}}>✅ Importováno: {importStatus.ok.join(", ")}</div>}
+    {importStatus&&<div style={{marginBottom:14,padding:"10px 14px",borderRadius:8,background:importStatus.warn.length?"#fff8e1":"#f0fdf4",border:`1.5px solid ${importStatus.warn.length?"#fbbf24":"#86efac"}`,fontSize:13}}>
+      {importStatus.info&&<div style={{color:"#166534",fontWeight:700,marginBottom:4}}>✅ {importStatus.info}</div>}
+      {importStatus.ok.length>0&&<div style={{color:"#166534"}}>Nalezeno: {importStatus.ok.join(", ")}</div>}
       {importStatus.warn.length>0&&<div style={{color:"#92400e",fontWeight:600,marginTop:4}}>⚠️ Nenalezeno: {importStatus.warn.join(", ")}</div>}
       {importStatus.warn.length>0&&importStatus.diagKeys&&<div style={{color:"#666",fontSize:11,marginTop:4}}>Klíče v souboru: {importStatus.diagKeys.join(", ")}</div>}
     </div>}
@@ -4219,19 +4249,54 @@ function CommissionResults({employees, stores}){
     })();
   },[storeId,month,year,loadTs]);
 
-  const exportCsv=()=>{
-    const header = ["Prodejce","Plnění PZ %","Plnění obratu %","Plnění služeb %","Plnění přísl. %","Celkové plnění %","Koeficient %","Provize Kč"];
-    const rows = results.map(r=>{
-      const c=r.calc;
-      if(!c) return [r.name,"–","–","–","–","–","–","–"];
-      return [r.name, Math.round(c.plneniPz*100), Math.round(c.plneniObrat*100),
-        Math.round(c.plneniSluzby*100), Math.round(c.plneniPrislusenství*100),
-        Math.round(c.celkPlneni*100), Math.round(c.koef*100), Math.round(c.vyslednaProvize)];
+  const exportXlsx = async()=>{
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet(`Provize ${MONTHS_CZ[month-1]} ${year}`);
+
+    // Záhlaví
+    const cols = ["Prodejce","Plnění PZ %","Plnění obratu %","Plnění služeb %","Plnění přísl. %","Celkové plnění %","Koeficient %","Provize Kč"];
+    ws.addRow(cols);
+    ws.getRow(1).font = {bold:true, color:{argb:"FFFFFFFF"}};
+    ws.getRow(1).fill = {type:"pattern", pattern:"solid", fgColor:{argb:"FF1B4F8A"}};
+    ws.getRow(1).alignment = {horizontal:"center"};
+
+    // Data
+    results.forEach((r,i)=>{
+      const c = r.calc;
+      if(!c) return;
+      const row = ws.addRow([
+        r.name,
+        Math.round(c.plneniPz*100),
+        Math.round(c.plneniObrat*100),
+        Math.round(c.plneniSluzby*100),
+        Math.round(c.plneniPrislusenství*100),
+        Math.round(c.celkPlneni*100),
+        Math.round(c.koef*100),
+        Math.round(c.vyslednaProvize),
+      ]);
+      row.getCell(1).font = {bold:true};
+      // Barevné indikátory plnění (sloupce 2–6)
+      [2,3,4,5,6].forEach(ci=>{
+        const val = row.getCell(ci).value;
+        row.getCell(ci).fill = {type:"pattern", pattern:"solid",
+          fgColor:{argb: val>=80?"FFD1FAE5": val>=50?"FFFED7AA":"FFFECACA"}};
+      });
+      // Provize tučně modře
+      row.getCell(8).font = {bold:true, color:{argb:"FF1B4F8A"}};
+      // Střídavé řádky
+      if(i%2===1) row.eachCell(cell=>{ if(!cell.fill?.fgColor?.argb) cell.fill={type:"pattern",pattern:"solid",fgColor:{argb:"FFF8F9FF"}}; });
     });
-    const csv=[header,...rows].map(r=>r.join(";")).join("\n");
-    const blob=new Blob(["\uFEFF"+csv],{type:"text/csv;charset=utf-8"});
-    const a=document.createElement("a"); a.href=URL.createObjectURL(blob);
-    a.download=`provize_${storeId}_${month}_${year}.csv`; a.click();
+
+    // Šířky sloupců
+    ws.getColumn(1).width = 22;
+    [2,3,4,5,6,7,8].forEach(ci=>{ ws.getColumn(ci).width = 14; ws.getColumn(ci).alignment={horizontal:"center"}; });
+
+    // Stáhnout
+    const buf = await wb.xlsx.writeBuffer();
+    const blob = new Blob([buf], {type:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"});
+    const a = document.createElement("a"); a.href=URL.createObjectURL(blob);
+    a.download=`provize_${stores.find(s=>s.id===storeId)?.name||storeId}_${MONTHS_CZ[month-1]}_${year}.xlsx`;
+    a.click();
   };
 
   const inputS={padding:"6px 9px",borderRadius:7,border:"1.5px solid #E8E8F0",fontSize:13,width:"auto"};
@@ -4252,9 +4317,9 @@ function CommissionResults({employees, stores}){
         <select value={year} onChange={e=>setYear(Number(e.target.value))} style={{...inputS,minWidth:90}}>
           {[2025,2026,2027].map(y=><option key={y} value={y}>{y}</option>)}
         </select></div>
-      {results.length>0&&<button onClick={exportCsv}
+      {results.length>0&&<button onClick={exportXlsx}
         style={{padding:"8px 18px",borderRadius:7,border:"1.5px solid #1B4F8A",background:"#fff",color:"#1B4F8A",fontWeight:700,fontSize:13,cursor:"pointer",marginLeft:"auto",alignSelf:"flex-end"}}>
-        📥 Export CSV
+        📊 Export Excel
       </button>}
     </div>
 
@@ -4611,7 +4676,11 @@ function CommissionSettings({stores, onSettingsSaved}){
   };
 
   const handleSavePenetrace = async()=>{
-    const prirazka = (Number(globalSettings.prislusenství_prirazka)||0.5)/100;
+    // Přirážka může být 0 – nepouží || ale explicitní null check
+    const prirazkaDisplay = globalSettings.prislusenství_prirazka;
+    const prirazka = (prirazkaDisplay === "" || prirazkaDisplay === null || prirazkaDisplay === undefined)
+      ? 0.005  // default 0.5% jen pokud pole je prázdné
+      : Number(prirazkaDisplay) / 100;  // 0 je validní hodnota
     setSavingPen(true);
     // 1) Ulož přirážku do commission_global aby přežila reload
     await supabase.from("commission_global").upsert({
@@ -4777,7 +4846,9 @@ function CommissionSettings({stores, onSettingsSaved}){
                 const rec = penetraceTable.find(r=>r.store_id===s.id&&r.month===mon);
                 const penLoni = rec?.penetrace_loni;
                 const koefUlozeny = rec?.koef_prislusenstvi; // skutečně uložená hodnota v DB
-                const prirazka = (Number(globalSettings.prislusenství_prirazka)||0.5)/100;
+                const prirazkaDisplay = globalSettings.prislusenství_prirazka;
+                const prirazka = (prirazkaDisplay === "" || prirazkaDisplay == null)
+                  ? 0.005 : Number(prirazkaDisplay) / 100;
                 const koefVypocet = penLoni != null ? penLoni + prirazka : null; // co by bylo při aktuální přirážce
                 const sedí = koefUlozeny!=null && koefVypocet!=null && Math.abs(koefUlozeny-koefVypocet)<0.0002;
                 return <td key={s.id} style={{...tdS,textAlign:"center",background:si%2===0?"#fff":"#f8f9ff"}}>
