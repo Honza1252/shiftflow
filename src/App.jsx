@@ -3963,15 +3963,20 @@ function CommissionInput({employees, stores, currentUser, sched, holidays, patte
     if(!plan){ alert("Zadejte Plán prodejny!"); return; }
     setSaving(true);
     for(const r of rows){
-      await supabase.from("commission_data").upsert({
+      const {error} = await supabase.from("commission_data").upsert({
         store_id:storeId, employee_id:r.employee_id, month, year,
         plan_prodejny:plan,
         hodiny:Number(r.hodiny)||0, obrat:Number(r.obrat)||0,
         trzba_pz:Number(r.trzba_pz)||0, trzba_sluzby:Number(r.trzba_sluzby)||0,
         obrat_prislusenstvi:Number(r.obrat_prislusenstvi)||0,
         korunova_motivace:Number(r.korunova_motivace)||0,
-        locked:true,
       },{onConflict:"store_id,employee_id,month,year"});
+      if(!error){
+        await supabase.from("commission_data")
+          .update({locked:true})
+          .eq("store_id",storeId).eq("employee_id",r.employee_id)
+          .eq("month",month).eq("year",year);
+      }
     }
     setSaving(false); setSaved(true); setTimeout(()=>setSaved(false),2500);
     setRows(prev=>prev.map(r=>({...r,locked:true})));
@@ -4036,7 +4041,7 @@ function CommissionInput({employees, stores, currentUser, sched, holidays, patte
           trzba_sluzby:Math.round(sluzbyMap[mk]||0),
           obrat_prislusenstvi:Math.round(prislMap[mk]||0),
           korunova_motivace:Math.round(korunovaMap[mk]||0),
-          locked:true,
+          // locked se nastaví separátním updatem po uložení dat
         };
       }).filter(Boolean);
 
@@ -4055,7 +4060,15 @@ function CommissionInput({employees, stores, currentUser, sched, holidays, patte
       for(const ur of importRows){
         const {error} = await supabase.from("commission_data")
           .upsert(ur, {onConflict:"store_id,employee_id,month,year"});
-        if(error) dbErrors.push(`emp${ur.employee_id}(store${ur.store_id}): ${error.message}`);
+        if(error){
+          dbErrors.push(`emp${ur.employee_id}(store${ur.store_id}): ${error.message}`);
+        } else {
+          // Pokus o nastavení locked – ignoruj chybu pokud sloupec neexistuje
+          await supabase.from("commission_data")
+            .update({locked:true})
+            .eq("store_id",ur.store_id).eq("employee_id",ur.employee_id)
+            .eq("month",ur.month).eq("year",ur.year);
+        }
       }
 
       // Přenačti aktuálně zobrazené rows
