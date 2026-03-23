@@ -3435,6 +3435,7 @@ ${d}${hol?"!":"."}`;
     {key:"schedule",  label:"📅 Rozvrh"},
     {key:"timesheet", label:"📋 Výkaz"},
     ...(isVedouci?[{key:"employees",label:"👥 Zaměstnanci"},{key:"settings",label:"⚙️ Nastavení"}]:[]),
+    ...(currentUser.role==="admin"?[{key:"provize",label:"💰 Provize"}]:[]),
   ];
 
 
@@ -3600,6 +3601,11 @@ ${d}${hol?"!":"."}`;
                 stores={stores} setStores={setStoresDB} employees={employees} patterns={patterns} setPatterns={setPatternsDB}/></>
           : <div style={{textAlign:"center",padding:"60px 0",color:"#bbb",fontSize:16}}>🔒 Přístup pouze pro vedoucí</div>}
       </div>}
+
+      {tab==="provize"&&currentUser.role==="admin"&&<div style={{background:"#fff",borderRadius:10,padding:"24px",boxShadow:"0 1px 4px rgba(0,0,0,0.05)"}}>
+        <h2 style={{margin:"0 0 20px 0",fontSize:20,fontWeight:800,color:"#1B4F8A"}}>💰 Provizní modul</h2>
+        <CommissionModule employees={employees} stores={stores} currentUser={currentUser}/>
+      </div>}
     </div>
 
     {editCell&&<Modal open={!!editCell} onClose={()=>setEditCell(null)} title="Upravit směnu" width={520}>
@@ -3639,6 +3645,525 @@ ${d}${hol?"!":"."}`;
         </div>
       </div>
     </Modal>
+  </div>;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// PROVIZNÍ MODUL – viditelný POUZE pro roli admin
+// ═══════════════════════════════════════════════════════════════
+
+// ── Výpočetní jádro ──────────────────────────────────────────
+function calcKoefKraceni(plneni){
+  if(plneni>=0.99) return 1.00;
+  if(plneni>=0.79) return 0.90;
+  if(plneni>=0.49) return 0.50;
+  if(plneni>=0.24) return 0.30;
+  if(plneni>=0.10) return 0.15;
+  return 0.00;
+}
+
+function calcCommission(emp, settings, allEmpsData){
+  // allEmpsData = pole {hodiny, obrat, trzba_pz, trzba_sluzby, obrat_prislusenstvi, korunova_motivace}
+  // emp = jeden záznam z toho pole, settings = koeficienty prodejny
+  const s = settings;
+  const soucetHodin = allEmpsData.reduce((a,e)=>a+(Number(e.hodiny)||0),0);
+  if(!soucetHodin) return null;
+  const podil = (Number(emp.hodiny)||0) / soucetHodin;
+  const plan = Number(emp.plan_prodejny)||0;
+
+  // Plány
+  const planObrat = plan * podil;
+  const planPz    = plan * (Number(s.koef_pz)||0.025) * podil;
+  const planSluzby = plan * (Number(s.koef_sluzby)||0.012) * podil;
+  const planPrislusenství = planObrat * (Number(s.koef_prislusenstvi)||0.1465);
+
+  // Složka 1 – Obrat
+  const hodiny = Number(emp.hodiny)||0;
+  const obratKoef = hodiny >= 160 ? (Number(s.obrat_koef_plny)||0.004) : (Number(s.obrat_koef_zkraceny)||0.003);
+  const obrat = Number(emp.obrat)||0;
+  const provizeObratRaw = obrat * obratKoef;
+  const provizeObrat = Math.min(provizeObratRaw, Number(s.obrat_strop)||3000);
+  const plneniObrat = planObrat > 0 ? obrat / planObrat : 0;
+  const bonusObrat = plneniObrat >= 1.2 ? 1000 : plneniObrat >= 1.1 ? 500 : 0;
+
+  // Složka 2 – PZ
+  const trzba_pz = Number(emp.trzba_pz)||0;
+  const provizePz = trzba_pz * 0.10;
+  const plneniPz = planPz > 0 ? trzba_pz / planPz : 0;
+
+  // Složka 3 – Služby
+  const trzba_sluzby = Number(emp.trzba_sluzby)||0;
+  const provizeSluzby = Math.min(trzba_sluzby * 0.10, 1500);
+  const plneniSluzby = planSluzby > 0 ? trzba_sluzby / planSluzby : 0;
+
+  // Složka 4 – Příslušenství
+  const obrat_prislusenství = Number(emp.obrat_prislusenstvi)||0;
+  const plneniPrislusenství = planPrislusenství > 0 ? obrat_prislusenství / planPrislusenství : 0;
+  let sazba = 0;
+  if(plneniPrislusenství >= 1.00) sazba = 0.038;
+  else if(plneniPrislusenství >= 0.61) sazba = 0.03;
+  else if(plneniPrislusenství >= 0.26) sazba = 0.02;
+  else if(plneniPrislusenství >= 0.11) sazba = 0.01;
+  const provizePrislusenství = Math.min(obrat_prislusenství * sazba, 4000);
+
+  // Složka 5 – Korunová motivace
+  const korunovaMot = Number(emp.korunova_motivace)||0;
+
+  // Celkové plnění (PZ váha 4×)
+  const celkPlneni = (Math.min(plneniPz,1)*4 + Math.min(plneniObrat,1)*1 + Math.min(plneniSluzby,1)*1 + Math.min(plneniPrislusenství,1)*1) / 7;
+  const koef = calcKoefKraceni(celkPlneni);
+
+  const zaklad = (provizeObrat + provizePz + provizeSluzby + provizePrislusenství + korunovaMot) * koef;
+  const vyslednaProvize = zaklad + bonusObrat;
+  const hrubaMzda = 22000 + vyslednaProvize;
+
+  return {
+    planObrat, planPz, planSluzby, planPrislusenství,
+    provizeObrat, plneniObrat, bonusObrat,
+    provizePz, plneniPz,
+    provizeSluzby, plneniSluzby,
+    provizePrislusenství, plneniPrislusenství,
+    korunovaMot,
+    celkPlneni, koef,
+    zaklad, vyslednaProvize, hrubaMzda,
+  };
+}
+
+function pct(v){ return `${Math.round((v||0)*100)} %`; }
+function czk(v){ return `${Math.round(v||0).toLocaleString("cs-CZ")} Kč`; }
+
+function PlneniDot({v}){
+  const pv = (v||0);
+  const bg = pv >= 0.8 ? "#16a34a" : pv >= 0.5 ? "#f97316" : "#dc2626";
+  return <span style={{display:"inline-block",width:10,height:10,borderRadius:"50%",background:bg,marginRight:5,flexShrink:0}}/>;
+}
+
+// ── Obrazovka 1: Zadat výsledky ───────────────────────────────
+function CommissionInput({employees, stores, currentUser}){
+  const now = new Date();
+  const [storeId, setStoreId] = useState(stores[0]?.id||1);
+  const [month, setMonth] = useState(now.getMonth()+1);
+  const [year, setYear] = useState(now.getFullYear());
+  const [planProdejny, setPlanProdejny] = useState("");
+  const [rows, setRows] = useState([]);
+  const [settings, setSettings] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [loadingData, setLoadingData] = useState(false);
+
+  const storeEmps = employees.filter(e=>e.active && e.mainStore===storeId);
+
+  // Načti data + nastavení při změně prodejny/měsíce/roku
+  useEffect(()=>{
+    if(!storeId||!month||!year) return;
+    (async()=>{
+      setLoadingData(true);
+      // Nastavení
+      const {data:sD} = await supabase.from("commission_settings").select("*").eq("store_id",storeId).single();
+      const defaultSettings = {
+        koef_pz:0.025, koef_sluzby:0.012, koef_prislusenstvi:0.1465,
+        prumerna_cena_pz: storeId===2?1775:storeId===3?1710:1630,
+        obrat_koef_plny:0.004, obrat_koef_zkraceny:0.003, obrat_strop:3000,
+      };
+      setSettings(sD || defaultSettings);
+
+      // Existující data
+      const emps = employees.filter(e=>e.active && e.mainStore===storeId);
+      const {data:commD} = await supabase.from("commission_data")
+        .select("*").eq("store_id",storeId).eq("month",month).eq("year",year);
+
+      // Timesheety – hodiny
+      const {data:tsD} = await supabase.from("timesheets")
+        .select("emp_id,year,month,day,arrival,departure,break_from,break_to")
+        .in("emp_id", emps.map(e=>e.id))
+        .eq("year",year).eq("month",month).gt("day",0);
+
+      // Spočítej hodiny z timesheetů
+      const tsHoursMap = {};
+      if(tsD?.length){
+        for(const r of tsD){
+          if(!tsHoursMap[r.emp_id]) tsHoursMap[r.emp_id] = 0;
+          if(r.arrival && r.departure){
+            const [fh,fm]=r.arrival.split(":").map(Number);
+            const [th,tm]=r.departure.split(":").map(Number);
+            let phys=(th*60+tm)-(fh*60+fm);
+            if(r.break_from&&r.break_to){
+              const [bfh,bfm]=r.break_from.split(":").map(Number);
+              const [bth,btm]=r.break_to.split(":").map(Number);
+              phys-=((bth*60+btm)-(bfh*60+bfm));
+            }
+            tsHoursMap[r.emp_id]+= Math.max(0,phys/60);
+          }
+        }
+      }
+
+      const newRows = emps.map(e=>{
+        const saved = commD?.find(d=>d.employee_id===e.id);
+        const tsH = tsHoursMap[e.id]||0;
+        return {
+          employee_id: e.id,
+          name: `${e.firstName} ${e.lastName}`.trim(),
+          hodiny: saved ? String(saved.hodiny) : tsH>0 ? String(Math.round(tsH*10)/10) : "",
+          obrat: saved ? String(saved.obrat) : "",
+          trzba_pz: saved ? String(saved.trzba_pz) : "",
+          trzba_sluzby: saved ? String(saved.trzba_sluzby) : "",
+          obrat_prislusenstvi: saved ? String(saved.obrat_prislusenstvi) : "",
+          korunova_motivace: saved ? String(saved.korunova_motivace) : "",
+          plan_prodejny: saved ? String(saved.plan_prodejny) : "",
+        };
+      });
+      if(newRows.length && newRows[0].plan_prodejny) setPlanProdejny(newRows[0].plan_prodejny);
+      else setPlanProdejny("");
+      setRows(newRows);
+      setLoadingData(false);
+    })();
+  },[storeId, month, year]);
+
+  const updRow=(idx,field,val)=>{
+    setRows(prev=>prev.map((r,i)=>i===idx?{...r,[field]:val}:r));
+  };
+
+  const handleSave = async()=>{
+    if(!planProdejny||isNaN(Number(planProdejny))){ alert("Zadejte plán prodejny!"); return; }
+    setSaving(true);
+    const upsertRows = rows.map(r=>({
+      store_id: storeId,
+      employee_id: r.employee_id,
+      month, year,
+      plan_prodejny: Number(planProdejny)||0,
+      hodiny: Number(r.hodiny)||0,
+      obrat: Number(r.obrat)||0,
+      trzba_pz: Number(r.trzba_pz)||0,
+      trzba_sluzby: Number(r.trzba_sluzby)||0,
+      obrat_prislusenstvi: Number(r.obrat_prislusenstvi)||0,
+      korunova_motivace: Number(r.korunova_motivace)||0,
+    }));
+    for(const ur of upsertRows){
+      await supabase.from("commission_data").upsert(ur,{onConflict:"store_id,employee_id,month,year"});
+    }
+    setSaving(false); setSaved(true);
+    setTimeout(()=>setSaved(false),2500);
+  };
+
+  const MONTHS_CZ = ["Leden","Únor","Březen","Duben","Květen","Červen","Červenec","Srpen","Září","Říjen","Listopad","Prosinec"];
+  const inputS = {padding:"6px 9px",borderRadius:7,border:"1.5px solid #E8E8F0",fontSize:13,width:"100%",boxSizing:"border-box"};
+  const thS = {padding:"8px 10px",textAlign:"left",fontWeight:700,color:"#fff",fontSize:12,whiteSpace:"nowrap",background:"#1B4F8A"};
+
+  return <div>
+    <div style={{display:"flex",gap:12,flexWrap:"wrap",marginBottom:20,alignItems:"flex-end"}}>
+      <div>
+        <div style={{fontSize:11,fontWeight:700,color:"#888",marginBottom:4}}>POBOČKA</div>
+        <select value={storeId} onChange={e=>setStoreId(Number(e.target.value))}
+          style={{...inputS,width:"auto",minWidth:140}}>
+          {stores.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}
+        </select>
+      </div>
+      <div>
+        <div style={{fontSize:11,fontWeight:700,color:"#888",marginBottom:4}}>MĚSÍC</div>
+        <select value={month} onChange={e=>setMonth(Number(e.target.value))}
+          style={{...inputS,width:"auto",minWidth:120}}>
+          {MONTHS_CZ.map((m,i)=><option key={i+1} value={i+1}>{m}</option>)}
+        </select>
+      </div>
+      <div>
+        <div style={{fontSize:11,fontWeight:700,color:"#888",marginBottom:4}}>ROK</div>
+        <select value={year} onChange={e=>setYear(Number(e.target.value))}
+          style={{...inputS,width:"auto",minWidth:90}}>
+          {[2025,2026,2027].map(y=><option key={y} value={y}>{y}</option>)}
+        </select>
+      </div>
+      <div>
+        <div style={{fontSize:11,fontWeight:700,color:"#888",marginBottom:4}}>PLÁN PRODEJNY (Kč)</div>
+        <input value={planProdejny} onChange={e=>setPlanProdejny(e.target.value)}
+          placeholder="např. 3500000" style={{...inputS,width:160}}/>
+      </div>
+    </div>
+
+    {loadingData
+      ? <div style={{textAlign:"center",padding:40,color:"#aaa"}}>Načítám data…</div>
+      : rows.length === 0
+        ? <div style={{textAlign:"center",padding:40,color:"#bbb"}}>Žádní aktivní prodejci na této pobočce.</div>
+        : <>
+          <div style={{overflowX:"auto"}}>
+            <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
+              <thead>
+                <tr>
+                  {["Prodejce","Hodiny","Obrat (Kč)","Tržba PZ (Kč)","Tržba služeb (Kč)","Obrat přísl. (Kč)","Kor. motivace (Kč)"].map(h=>(
+                    <th key={h} style={thS}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((r,i)=><tr key={r.employee_id} style={{background:i%2===0?"#fff":"#f8f9ff"}}>
+                  <td style={{padding:"8px 10px",fontWeight:700,color:"#1a1a2e",whiteSpace:"nowrap"}}>{r.name}</td>
+                  {["hodiny","obrat","trzba_pz","trzba_sluzby","obrat_prislusenstvi","korunova_motivace"].map(f=>(
+                    <td key={f} style={{padding:"4px 6px"}}>
+                      <input type="number" value={r[f]} onChange={e=>updRow(i,f,e.target.value)}
+                        style={{...inputS,textAlign:"right"}} min="0"/>
+                    </td>
+                  ))}
+                </tr>)}
+              </tbody>
+            </table>
+          </div>
+          <div style={{marginTop:16,display:"flex",gap:10,alignItems:"center"}}>
+            <button onClick={handleSave} disabled={saving}
+              style={{background:"#1B4F8A",color:"#fff",border:"none",borderRadius:9,padding:"11px 28px",fontSize:14,fontWeight:700,cursor:saving?"not-allowed":"pointer",opacity:saving?0.7:1}}>
+              {saving?"Ukládám…":"💾 Uložit a spočítat"}
+            </button>
+            {saved&&<span style={{color:"#16a34a",fontWeight:700,fontSize:13}}>✅ Uloženo!</span>}
+          </div>
+        </>
+    }
+  </div>;
+}
+
+// ── Obrazovka 2: Výsledky týmu ────────────────────────────────
+function CommissionResults({employees, stores}){
+  const now = new Date();
+  const [storeId, setStoreId] = useState(stores[0]?.id||1);
+  const [month, setMonth] = useState(now.getMonth()+1);
+  const [year, setYear] = useState(now.getFullYear());
+  const [results, setResults] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const MONTHS_CZ = ["Leden","Únor","Březen","Duben","Květen","Červen","Červenec","Srpen","Září","Říjen","Listopad","Prosinec"];
+
+  useEffect(()=>{
+    (async()=>{
+      setLoading(true);
+      setResults([]);
+      const {data:sD} = await supabase.from("commission_settings").select("*").eq("store_id",storeId).single();
+      const settings = sD || {koef_pz:0.025,koef_sluzby:0.012,koef_prislusenstvi:0.1465,prumerna_cena_pz:storeId===2?1775:storeId===3?1710:1630,obrat_koef_plny:0.004,obrat_koef_zkraceny:0.003,obrat_strop:3000};
+      const {data:commD} = await supabase.from("commission_data")
+        .select("*").eq("store_id",storeId).eq("month",month).eq("year",year);
+      if(!commD?.length){ setLoading(false); return; }
+      const emps = employees.filter(e=>e.active&&e.mainStore===storeId);
+      const dataWithNames = commD.map(d=>({
+        ...d,
+        name: emps.find(e=>e.id===d.employee_id)?.firstName+" "+(emps.find(e=>e.id===d.employee_id)?.lastName||""),
+      }));
+      const calcs = dataWithNames.map(d=>({
+        name: d.name.trim(),
+        data: d,
+        calc: calcCommission(d, settings, commD),
+      }));
+      setResults(calcs);
+      setLoading(false);
+    })();
+  },[storeId,month,year]);
+
+  const exportCsv=()=>{
+    const header = ["Prodejce","Plnění PZ %","Plnění obratu %","Plnění služeb %","Plnění přísl. %","Celkové plnění %","Koeficient","Provize Kč","Hrubá mzda Kč"];
+    const rows = results.map(r=>{
+      const c=r.calc;
+      if(!c) return [r.name,"–","–","–","–","–","–","–","–"];
+      return [
+        r.name,
+        Math.round(c.plneniPz*100),
+        Math.round(c.plneniObrat*100),
+        Math.round(c.plneniSluzby*100),
+        Math.round(c.plneniPrislusenství*100),
+        Math.round(c.celkPlneni*100),
+        (c.koef*100).toFixed(0)+"%",
+        Math.round(c.vyslednaProvize),
+        Math.round(c.hrubaMzda),
+      ];
+    });
+    const csv = [header,...rows].map(r=>r.join(";")).join("\n");
+    const blob = new Blob(["\uFEFF"+csv],{type:"text/csv;charset=utf-8"});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a"); a.href=url; a.download=`provize_${storeId}_${month}_${year}.csv`; a.click();
+  };
+
+  const thS={padding:"9px 10px",textAlign:"left",fontWeight:700,color:"#fff",fontSize:12,background:"#1B4F8A",whiteSpace:"nowrap"};
+  const tdS={padding:"8px 10px",fontSize:13,whiteSpace:"nowrap"};
+  const inputS={padding:"6px 9px",borderRadius:7,border:"1.5px solid #E8E8F0",fontSize:13,width:"auto"};
+
+  const minIdx = results.length ? results.reduce((mi,r,i)=>{
+    const cv = r.calc?.celkPlneni||0;
+    const mv = results[mi].calc?.celkPlneni||0;
+    return cv < mv ? i : mi;
+  },0) : -1;
+
+  return <div>
+    <div style={{display:"flex",gap:12,flexWrap:"wrap",marginBottom:20,alignItems:"flex-end"}}>
+      <div><div style={{fontSize:11,fontWeight:700,color:"#888",marginBottom:4}}>POBOČKA</div>
+        <select value={storeId} onChange={e=>setStoreId(Number(e.target.value))} style={{...inputS,minWidth:140}}>
+          {stores.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}
+        </select></div>
+      <div><div style={{fontSize:11,fontWeight:700,color:"#888",marginBottom:4}}>MĚSÍC</div>
+        <select value={month} onChange={e=>setMonth(Number(e.target.value))} style={{...inputS,minWidth:120}}>
+          {MONTHS_CZ.map((m,i)=><option key={i+1} value={i+1}>{m}</option>)}
+        </select></div>
+      <div><div style={{fontSize:11,fontWeight:700,color:"#888",marginBottom:4}}>ROK</div>
+        <select value={year} onChange={e=>setYear(Number(e.target.value))} style={{...inputS,minWidth:90}}>
+          {[2025,2026,2027].map(y=><option key={y} value={y}>{y}</option>)}
+        </select></div>
+      {results.length>0&&<button onClick={exportCsv}
+        style={{padding:"8px 18px",borderRadius:7,border:"1.5px solid #1B4F8A",background:"#fff",color:"#1B4F8A",fontWeight:700,fontSize:13,cursor:"pointer",marginLeft:"auto",alignSelf:"flex-end"}}>
+        📥 Export CSV
+      </button>}
+    </div>
+
+    {loading
+      ? <div style={{textAlign:"center",padding:40,color:"#aaa"}}>Načítám výsledky…</div>
+      : results.length===0
+        ? <div style={{textAlign:"center",padding:40,color:"#bbb"}}>Nejsou zadána data pro tento měsíc. Přejděte na "Zadat výsledky".</div>
+        : <div style={{overflowX:"auto"}}>
+            <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
+              <thead><tr>
+                {["Prodejce","Plnění PZ","Plnění obratu","Plnění služeb","Plnění přísl.","Celkové plnění","Koeficient","Provize","Hrubá mzda"].map(h=>(
+                  <th key={h} style={thS}>{h}</th>
+                ))}
+              </tr></thead>
+              <tbody>
+                {results.map((r,i)=>{
+                  const c = r.calc;
+                  const isMin = i===minIdx;
+                  const rowBg = isMin ? "#fff3e0" : i%2===0?"#fff":"#f8f9ff";
+                  if(!c) return <tr key={i}><td colSpan={9} style={{...tdS,background:rowBg}}>{r.name} – chyba výpočtu</td></tr>;
+                  return <tr key={i} style={{background:rowBg}}>
+                    <td style={{...tdS,fontWeight:700,color:"#1a1a2e"}}>{r.name}{isMin&&<span title="Nejnižší plnění – potřebuje pozornost" style={{marginLeft:6,fontSize:11}}>⚠️</span>}</td>
+                    {[
+                      {v:c.plneniPz},{v:c.plneniObrat},{v:c.plneniSluzby},{v:c.plneniPrislusenství},{v:c.celkPlneni}
+                    ].map((x,xi)=>(
+                      <td key={xi} style={{...tdS}}>
+                        <PlneniDot v={x.v}/>
+                        <span style={{color:x.v>=0.8?"#16a34a":x.v>=0.5?"#f97316":"#dc2626",fontWeight:600}}>
+                          {Math.round(x.v*100)} %
+                        </span>
+                      </td>
+                    ))}
+                    <td style={{...tdS,fontWeight:700}}>{Math.round(c.koef*100)} %</td>
+                    <td style={{...tdS,fontWeight:700,color:"#1B4F8A"}}>{czk(c.vyslednaProvize)}</td>
+                    <td style={{...tdS,fontWeight:700}}>{czk(c.hrubaMzda)}</td>
+                  </tr>;
+                })}
+              </tbody>
+            </table>
+            <div style={{marginTop:10,fontSize:11,color:"#aaa",display:"flex",gap:16,flexWrap:"wrap",padding:"6px 4px"}}>
+              <span><PlneniDot v={0.9}/> ≥ 80 % zelená</span>
+              <span><PlneniDot v={0.6}/> 50–79 % oranžová</span>
+              <span><PlneniDot v={0.2}/> &lt; 50 % červená</span>
+              <span>⚠️ = nejnižší celkové plnění v týmu</span>
+            </div>
+          </div>
+    }
+  </div>;
+}
+
+// ── Obrazovka 3: Nastavení koeficientů ───────────────────────
+function CommissionSettings({stores}){
+  const [data, setData] = useState({});
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+
+  const DEFAULTS = {
+    koef_pz:0.025, koef_sluzby:0.012, koef_prislusenstvi:0.1465,
+    obrat_koef_plny:0.004, obrat_koef_zkraceny:0.003, obrat_strop:3000,
+  };
+  const PZ_DEFAULTS = {1:1630, 2:1775, 3:1710};
+
+  useEffect(()=>{
+    (async()=>{
+      const {data:sD} = await supabase.from("commission_settings").select("*");
+      const map = {};
+      stores.forEach(s=>{
+        const found = sD?.find(r=>r.store_id===s.id);
+        map[s.id] = found ? {...found} : {...DEFAULTS, prumerna_cena_pz: PZ_DEFAULTS[s.id]||1630, store_id:s.id};
+      });
+      setData(map);
+    })();
+  },[]);
+
+  const upd=(storeId,field,val)=>{
+    setData(prev=>({...prev,[storeId]:{...prev[storeId],[field]:val}}));
+  };
+
+  const handleSave=async()=>{
+    setSaving(true);
+    for(const s of stores){
+      const r = data[s.id];
+      if(!r) continue;
+      await supabase.from("commission_settings").upsert({
+        store_id:s.id,
+        koef_pz: Number(r.koef_pz)||0.025,
+        koef_sluzby: Number(r.koef_sluzby)||0.012,
+        koef_prislusenstvi: Number(r.koef_prislusenstvi)||0.1465,
+        prumerna_cena_pz: Number(r.prumerna_cena_pz)||1630,
+        obrat_koef_plny: Number(r.obrat_koef_plny)||0.004,
+        obrat_koef_zkraceny: Number(r.obrat_koef_zkraceny)||0.003,
+        obrat_strop: Number(r.obrat_strop)||3000,
+        updated_at: new Date().toISOString(),
+      },{onConflict:"store_id"});
+    }
+    setSaving(false); setSaved(true);
+    setTimeout(()=>setSaved(false),2500);
+  };
+
+  const inputS={padding:"6px 9px",borderRadius:7,border:"1.5px solid #E8E8F0",fontSize:13,width:120,textAlign:"right"};
+  const thS={padding:"9px 10px",textAlign:"left",fontWeight:700,color:"#fff",fontSize:12,background:"#1B4F8A"};
+  const tdS={padding:"8px 10px",fontSize:13};
+  const fields=[
+    {key:"koef_pz",label:"Koef. PZ (výchozí 0.025)",help:"2,5 % z plánu prodejny = plán PZ"},
+    {key:"koef_sluzby",label:"Koef. služby (výchozí 0.012)",help:"1,2 % z plánu = plán služeb"},
+    {key:"koef_prislusenstvi",label:"Koef. příslušenství (výchozí 0.1465)",help:"penetrace min. rok + 0,5 %"},
+    {key:"prumerna_cena_pz",label:"Průměrná cena PZ (Kč)",help:"STR 1 630, BL 1 775, PE 1 710"},
+    {key:"obrat_koef_plny",label:"Obrat koef. plný úvazek (výchozí 0.004)",help:"0,4 % z obratu"},
+    {key:"obrat_koef_zkraceny",label:"Obrat koef. zkrácený úvazek (výchozí 0.003)",help:"0,3 % z obratu"},
+    {key:"obrat_strop",label:"Strop obratové provize (Kč)",help:"výchozí 3 000 Kč"},
+  ];
+
+  return <div>
+    <div style={{overflowX:"auto"}}>
+      <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
+        <thead><tr>
+          <th style={thS}>Parametr</th>
+          {stores.map(s=><th key={s.id} style={{...thS,textAlign:"center"}}>{s.name}</th>)}
+        </tr></thead>
+        <tbody>
+          {fields.map(f=><tr key={f.key} style={{borderBottom:"1px solid #eee"}}>
+            <td style={{...tdS,maxWidth:260}}>
+              <div style={{fontWeight:600,color:"#1a1a2e"}}>{f.label}</div>
+              <div style={{fontSize:11,color:"#aaa"}}>{f.help}</div>
+            </td>
+            {stores.map((s,si)=><td key={s.id} style={{...tdS,textAlign:"center",background:si%2===0?"#fff":"#f8f9ff"}}>
+              <input type="number" step="any" value={data[s.id]?.[f.key]||""}
+                onChange={e=>upd(s.id,f.key,e.target.value)} style={inputS}/>
+            </td>)}
+          </tr>)}
+        </tbody>
+      </table>
+    </div>
+    <div style={{marginTop:16,display:"flex",gap:10,alignItems:"center"}}>
+      <button onClick={handleSave} disabled={saving}
+        style={{background:"#1B4F8A",color:"#fff",border:"none",borderRadius:9,padding:"11px 28px",fontSize:14,fontWeight:700,cursor:saving?"not-allowed":"pointer",opacity:saving?0.7:1}}>
+        {saving?"Ukládám…":"💾 Uložit nastavení"}
+      </button>
+      {saved&&<span style={{color:"#16a34a",fontWeight:700,fontSize:13}}>✅ Uloženo!</span>}
+    </div>
+  </div>;
+}
+
+// ── Hlavní kontejner provizního modulu ───────────────────────
+function CommissionModule({employees, stores, currentUser}){
+  if(currentUser?.role !== "admin") return null;
+  const [subTab, setSubTab] = useState("input");
+  const subTabs=[
+    {key:"input",   label:"📝 Zadat výsledky"},
+    {key:"results", label:"📊 Výsledky týmu"},
+    {key:"settings",label:"⚙️ Nastavení koeficientů"},
+  ];
+  return <div>
+    <div style={{display:"flex",gap:4,marginBottom:20,borderBottom:"2px solid #e8e8f0",paddingBottom:0}}>
+      {subTabs.map(t=><button key={t.key} onClick={()=>setSubTab(t.key)}
+        style={{padding:"9px 18px",background:"none",border:"none",borderBottom:subTab===t.key?"3px solid #1B4F8A":"3px solid transparent",color:subTab===t.key?"#1B4F8A":"#888",fontWeight:subTab===t.key?700:500,fontSize:13,cursor:"pointer",marginBottom:-2}}>
+        {t.label}
+      </button>)}
+    </div>
+    {subTab==="input"    && <CommissionInput employees={employees} stores={stores} currentUser={currentUser}/>}
+    {subTab==="results"  && <CommissionResults employees={employees} stores={stores}/>}
+    {subTab==="settings" && <CommissionSettings stores={stores}/>}
   </div>;
 }
 
