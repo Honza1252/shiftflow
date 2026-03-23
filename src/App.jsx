@@ -3886,12 +3886,18 @@ function CommissionInput({employees, stores, currentUser, sched, holidays, patte
         const savedD = commD?.find(d=>d.employee_id===e.id);
         // Hodiny: přednost mají uložená data, jinak živý výpočet z rozvrhu
         const schedH = calcPlannedHours(e, storeId, year, month-1, sched, holidays, stores, patterns, employees);
-        // prijmeni: normalizujeme NFD→NFC aby diakritika spolehlivě seděla s xlsx
-        const prijmeniRaw = (e.firstName||"").normalize("NFC").toLowerCase();
+        // prijmeni = příjmení pro párování s xlsx (xlsx má "Příjmení Jméno [ID]")
+        // V DB: first_name = křestní jméno, last_name = příjmení
+        // Pokud last_name prázdné (starší záznamy), použij first_name
+        const prijmeniSrc = (e.lastName && e.lastName.trim()) ? e.lastName : e.firstName;
+        const prijmeniRaw = prijmeniSrc.normalize("NFC").toLowerCase();
+        // Fallback klíč – druhá možnost (firstName pokud primární je lastName a naopak)
+        const prijmeniFallback = ((e.lastName && e.lastName.trim()) ? e.firstName : "").normalize("NFC").toLowerCase();
         return {
           employee_id: e.id,
           name: `${e.firstName} ${e.lastName}`.trim(),
           prijmeni: prijmeniRaw,
+          prijmeniFallback: prijmeniFallback,
           hodiny: savedD ? String(savedD.hodiny) : schedH>0 ? String(schedH) : "",
           hodiny_source: savedD ? "saved" : schedH>0 ? "rozvrh" : "manual",
           obrat: savedD ? String(savedD.obrat) : "",
@@ -3921,29 +3927,40 @@ function CommissionInput({employees, stores, currentUser, sched, holidays, patte
     setImportStatus(null);
     try {
       const {obratMap,pzMap,sluzbyMap,prislMap,korunovaMap} = await parseVzorPodklady(file);
-      const ok = [], warn = [];
-      const toAscii = s => String(s||"").normalize("NFC").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"");
-      setRows(prev=>prev.map(r=>{
-        // Párování přes příjmení: 1) NFC lowercase, 2) ASCII bez diakritiky
-        const nfcKey = r.prijmeni;
-        const asciiKey = toAscii(r.prijmeni);
-        const matchKey = (nfcKey in obratMap) ? nfcKey
-          : Object.keys(obratMap).find(k=>toAscii(k)===asciiKey);
-        if(!matchKey){
-          warn.push(r.name);
-          return r;
+
+      // Párování mimo setState – čisté, předvídatelné
+      const findKey = (r, map)=>{
+        const toAsciiStr = s => String(s||"").normalize("NFC").toLowerCase()
+          .normalize("NFD").replace(/[\u0300-\u036f]/g,"");
+        // Zkus primární příjmení
+        for(const prijmeni of [r.prijmeni, r.prijmeniFallback].filter(Boolean)){
+          if(prijmeni in map) return prijmeni;
+          const asc = toAsciiStr(prijmeni);
+          const found = Object.keys(map).find(k=>toAsciiStr(k)===asc);
+          if(found) return found;
         }
-        ok.push(r.name);
-        return {
-          ...r,
-          obrat: String(Math.round(obratMap[matchKey]||0)),
-          trzba_pz: String(Math.round(pzMap[matchKey]||0)),
-          trzba_sluzby: String(Math.round(sluzbyMap[matchKey]||0)),
-          obrat_prislusenstvi: String(Math.round(prislMap[matchKey]||0)),
-          korunova_motivace: String(Math.round(korunovaMap[matchKey]||0)),
-        };
-      }));
-      setImportStatus({ok, warn});
+        return null;
+      };
+
+      const ok = [], warn = [];
+      const diagKeys = Object.keys(obratMap).filter(k=>!k.startsWith("id_")).sort();
+      setRows(prev=>{
+        const next = prev.map(r=>{
+          const mk = findKey(r, obratMap);
+          if(!mk){ warn.push(`${r.name} [hledáno: ${r.prijmeni}]`); return r; }
+          ok.push(r.name);
+          return {
+            ...r,
+            obrat: String(Math.round(obratMap[mk]||0)),
+            trzba_pz: String(Math.round(pzMap[mk]||0)),
+            trzba_sluzby: String(Math.round(sluzbyMap[mk]||0)),
+            obrat_prislusenstvi: String(Math.round(prislMap[mk]||0)),
+            korunova_motivace: String(Math.round(korunovaMap[mk]||0)),
+          };
+        });
+        return next;
+      });
+      setTimeout(()=>setImportStatus({ok:[...ok], warn:[...warn], diagKeys}), 100);
     } catch(err){
       alert("Chyba při čtení souboru: "+err.message);
     }
@@ -4016,7 +4033,8 @@ function CommissionInput({employees, stores, currentUser, sched, holidays, patte
     {/* Status importu */}
     {importStatus&&<div style={{marginBottom:14,padding:"10px 14px",borderRadius:8,background: importStatus.warn.length?"#fff8e1":"#f0fdf4",border:`1.5px solid ${importStatus.warn.length?"#fbbf24":"#86efac"}`,fontSize:13}}>
       {importStatus.ok.length>0&&<div style={{color:"#166534",fontWeight:600}}>✅ Importováno: {importStatus.ok.join(", ")}</div>}
-      {importStatus.warn.length>0&&<div style={{color:"#92400e",fontWeight:600,marginTop:4}}>⚠️ Nenalezeno v souboru: {importStatus.warn.join(", ")} – zadejte ručně</div>}
+      {importStatus.warn.length>0&&<div style={{color:"#92400e",fontWeight:600,marginTop:4}}>⚠️ Nenalezeno: {importStatus.warn.join(", ")}</div>}
+      {importStatus.warn.length>0&&importStatus.diagKeys&&<div style={{color:"#666",fontSize:11,marginTop:4}}>Klíče v souboru: {importStatus.diagKeys.join(", ")}</div>}
     </div>}
 
     {loadingData
