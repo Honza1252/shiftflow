@@ -3604,7 +3604,7 @@ ${d}${hol?"!":"."}`;
 
       {tab==="provize"&&currentUser.role==="admin"&&<div style={{background:"#fff",borderRadius:10,padding:"24px",boxShadow:"0 1px 4px rgba(0,0,0,0.05)"}}>
         <h2 style={{margin:"0 0 20px 0",fontSize:20,fontWeight:800,color:"#1B4F8A"}}>💰 Provizní modul</h2>
-        <CommissionModule employees={employees} stores={stores} currentUser={currentUser}/>
+        <CommissionModule employees={employees} stores={stores} currentUser={currentUser} sched={sched} holidays={holidays} patterns={patterns}/>
       </div>}
     </div>
 
@@ -3662,20 +3662,24 @@ function calcKoefKraceni(plneni){
   return 0.00;
 }
 
-function calcCommission(emp, settings, allEmpsData){
+function calcCommission(emp, settings, allEmpsData, penetraceOverride){
   // allEmpsData = pole {hodiny, obrat, trzba_pz, trzba_sluzby, obrat_prislusenstvi, korunova_motivace}
   // emp = jeden záznam z toho pole, settings = koeficienty prodejny
+  // penetraceOverride = číslo (koef_prislusenstvi) z commission_penetrace pro daný měsíc/prodejnu (nebo null)
   const s = settings;
   const soucetHodin = allEmpsData.reduce((a,e)=>a+(Number(e.hodiny)||0),0);
   if(!soucetHodin) return null;
   const podil = (Number(emp.hodiny)||0) / soucetHodin;
   const plan = Number(emp.plan_prodejny)||0;
 
+  // koef příslušenství: přednost má měsíční penetrace z importu
+  const koefPrislusenství = penetraceOverride != null ? penetraceOverride : (Number(s.koef_prislusenstvi)||0.1465);
+
   // Plány
   const planObrat = plan * podil;
   const planPz    = plan * (Number(s.koef_pz)||0.025) * podil;
   const planSluzby = plan * (Number(s.koef_sluzby)||0.012) * podil;
-  const planPrislusenství = planObrat * (Number(s.koef_prislusenstvi)||0.1465);
+  const planPrislusenství = planObrat * koefPrislusenství;
 
   // Složka 1 – Obrat
   const hodiny = Number(emp.hodiny)||0;
@@ -3738,78 +3742,153 @@ function PlneniDot({v}){
   return <span style={{display:"inline-block",width:10,height:10,borderRadius:"50%",background:bg,marginRight:5,flexShrink:0}}/>;
 }
 
+// ── Pomocník: spočítej plánované hodiny z rozvrhu ────────────
+// Stejná logika jako SummaryTable v záložce Rozvrh (sloupec Naplánováno)
+function calcPlannedHours(emp, storeId, year, month, sched, holidays, stores, patterns, employees){
+  const dim = getDim(year, month);
+  let planned = 0;
+  const mainEmps = employees.filter(e=>e.active && e.mainStore===storeId);
+  const empIdx = mainEmps.findIndex(e=>e.id===emp.id);
+  for(let d=1; d<=dim; d++){
+    const dow = getDow(year, month, d);
+    const ds = fmtDate(year, month, d);
+    const cell = getSchedCell(sched, emp.id, ds, employees);
+    if(cell?.length){
+      const ws = cell.filter(s=>s.type==="work"&&s.from&&s.to);
+      const vac = cell.find(s=>s.type==="vacation"||s.type==="sick");
+      const oth = cell.find(s=>s.type!=="work"&&s.type!=="vacation"&&s.type!=="sick");
+      if(ws.length){ planned += calcSplitWorked(ws, emp.mainStore, stores); if(vac) planned += (vac.hours||0); }
+      else if(vac||oth) planned += ((vac||oth).hours||0);
+    } else {
+      const hol = holidays.find(h=>h.date===ds);
+      const pc = getPatCell(patterns, storeId, empIdx, new Date(year, month, d));
+      if(pc){
+        const st = typeof pc==="object"?pc.shift||"work":pc;
+        const lId = typeof pc==="object"?(pc.loc||storeId):storeId;
+        const [fr,to] = getEmpShiftTimes(emp, lId, st, dow, stores, typeof pc==="object"?pc:null, hol);
+        if(fr&&to) planned += calcWorked(fr, to, getBreakRules(lId, stores));
+      }
+    }
+  }
+  return Math.round(planned * 10) / 10;
+}
+
+// ── Pomocník: parsování xlsx v prohlížeči přes SheetJS ────────
+// Vrátí { obrat, trzba_pz, trzba_sluzby, obrat_prislusenstvi, korunova_motivace }
+// klíčováno podle jména prodejce (příjmení lowercase)
+async function parseVzorPodklady(file){
+  return new Promise((resolve, reject)=>{
+    const reader = new FileReader();
+    reader.onload = (e)=>{
+      try {
+        const XLSX = window.XLSX;
+        if(!XLSX) { reject(new Error("SheetJS (XLSX) není dostupný")); return; }
+        const data = new Uint8Array(e.target.result);
+        const wb = XLSX.read(data, {type:"array"});
+
+        // Pomocník: načte řádky z listu, vrátí {prijmeni_lower: hodnota}
+        const parseSheet = (sheetName, colIdx)=>{
+          const ws = wb.Sheets[sheetName];
+          if(!ws) return {};
+          const rows = XLSX.utils.sheet_to_json(ws, {header:1, defval:null});
+          const result = {};
+          // Hledáme řádek s "Prodavač" jako záhlaví (řádek 4, index 4)
+          let dataStart = -1;
+          for(let i=0;i<rows.length;i++){
+            if(rows[i] && String(rows[i][0]||"").trim()==="Prodavač"){ dataStart=i+1; break; }
+          }
+          if(dataStart<0) return result;
+          for(let i=dataStart; i<rows.length; i++){
+            const nameRaw = rows[i]?.[0];
+            if(!nameRaw) continue;
+            const nameStr = String(nameRaw).trim();
+            // Jméno formát: "Příjmení Jméno [ID]" – vezmeme první slovo jako příjmení
+            const prijmeni = nameStr.split(" ")[0].toLowerCase();
+            const val = rows[i]?.[colIdx];
+            result[prijmeni] = val != null ? Number(val)||0 : 0;
+          }
+          return result;
+        };
+
+        // Korunová motivace: součet sloupce 1 (přímá provize) + sloupce 2 (fin. podpora)
+        const parseKorunova = ()=>{
+          const ws = wb.Sheets["Korunová motivace"];
+          if(!ws) return {};
+          const rows = XLSX.utils.sheet_to_json(ws, {header:1, defval:null});
+          const result = {};
+          let dataStart = -1;
+          for(let i=0;i<rows.length;i++){
+            if(rows[i] && String(rows[i][0]||"").trim()==="Prodavač"){ dataStart=i+1; break; }
+          }
+          if(dataStart<0) return result;
+          for(let i=dataStart; i<rows.length; i++){
+            const nameRaw = rows[i]?.[0];
+            if(!nameRaw) continue;
+            const prijmeni = String(nameRaw).trim().split(" ")[0].toLowerCase();
+            const v1 = Number(rows[i]?.[1])||0;
+            const v2 = Number(rows[i]?.[2])||0;
+            result[prijmeni] = v1 + v2;
+          }
+          return result;
+        };
+
+        const obratMap       = parseSheet("Obrat Kč", 1);
+        const pzMap          = parseSheet("PZ", 2);           // Prodej v marži = sloupec index 2
+        const sluzbyMap      = parseSheet("Služby", 2);
+        const prislMap       = parseSheet("Příslušenství", 1);
+        const korunovaMap    = parseKorunova();
+
+        resolve({ obratMap, pzMap, sluzbyMap, prislMap, korunovaMap });
+      } catch(err){ reject(err); }
+    };
+    reader.onerror = ()=>reject(new Error("Chyba čtení souboru"));
+    reader.readAsArrayBuffer(file);
+  });
+}
+
 // ── Obrazovka 1: Zadat výsledky ───────────────────────────────
-function CommissionInput({employees, stores, currentUser}){
+function CommissionInput({employees, stores, currentUser, sched, holidays, patterns}){
   const now = new Date();
   const [storeId, setStoreId] = useState(stores[0]?.id||1);
   const [month, setMonth] = useState(now.getMonth()+1);
   const [year, setYear] = useState(now.getFullYear());
   const [planProdejny, setPlanProdejny] = useState("");
   const [rows, setRows] = useState([]);
-  const [settings, setSettings] = useState(null);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [loadingData, setLoadingData] = useState(false);
+  const [importStatus, setImportStatus] = useState(null); // {ok:[], warn:[]}
+  const importRef = useRef(null);
 
-  const storeEmps = employees.filter(e=>e.active && e.mainStore===storeId);
-
-  // Načti data + nastavení při změně prodejny/měsíce/roku
+  // Načti data při změně prodejny/měsíce/roku
   useEffect(()=>{
     if(!storeId||!month||!year) return;
     (async()=>{
       setLoadingData(true);
-      // Nastavení
-      const {data:sD} = await supabase.from("commission_settings").select("*").eq("store_id",storeId).single();
-      const defaultSettings = {
-        koef_pz:0.025, koef_sluzby:0.012, koef_prislusenstvi:0.1465,
-        prumerna_cena_pz: storeId===2?1775:storeId===3?1710:1630,
-        obrat_koef_plny:0.004, obrat_koef_zkraceny:0.003, obrat_strop:3000,
-      };
-      setSettings(sD || defaultSettings);
-
-      // Existující data
+      setImportStatus(null);
       const emps = employees.filter(e=>e.active && e.mainStore===storeId);
+
+      // Existující uložená data
       const {data:commD} = await supabase.from("commission_data")
         .select("*").eq("store_id",storeId).eq("month",month).eq("year",year);
 
-      // Timesheety – hodiny
-      const {data:tsD} = await supabase.from("timesheets")
-        .select("emp_id,year,month,day,arrival,departure,break_from,break_to")
-        .in("emp_id", emps.map(e=>e.id))
-        .eq("year",year).eq("month",month).gt("day",0);
-
-      // Spočítej hodiny z timesheetů
-      const tsHoursMap = {};
-      if(tsD?.length){
-        for(const r of tsD){
-          if(!tsHoursMap[r.emp_id]) tsHoursMap[r.emp_id] = 0;
-          if(r.arrival && r.departure){
-            const [fh,fm]=r.arrival.split(":").map(Number);
-            const [th,tm]=r.departure.split(":").map(Number);
-            let phys=(th*60+tm)-(fh*60+fm);
-            if(r.break_from&&r.break_to){
-              const [bfh,bfm]=r.break_from.split(":").map(Number);
-              const [bth,btm]=r.break_to.split(":").map(Number);
-              phys-=((bth*60+btm)-(bfh*60+bfm));
-            }
-            tsHoursMap[r.emp_id]+= Math.max(0,phys/60);
-          }
-        }
-      }
-
+      // Hodiny z rozvrhu (sloupec Naplánováno)
       const newRows = emps.map(e=>{
-        const saved = commD?.find(d=>d.employee_id===e.id);
-        const tsH = tsHoursMap[e.id]||0;
+        const savedD = commD?.find(d=>d.employee_id===e.id);
+        // Hodiny: přednost mají uložená data, jinak živý výpočet z rozvrhu
+        const schedH = calcPlannedHours(e, storeId, year, month-1, sched, holidays, stores, patterns, employees);
         return {
           employee_id: e.id,
           name: `${e.firstName} ${e.lastName}`.trim(),
-          hodiny: saved ? String(saved.hodiny) : tsH>0 ? String(Math.round(tsH*10)/10) : "",
-          obrat: saved ? String(saved.obrat) : "",
-          trzba_pz: saved ? String(saved.trzba_pz) : "",
-          trzba_sluzby: saved ? String(saved.trzba_sluzby) : "",
-          obrat_prislusenstvi: saved ? String(saved.obrat_prislusenstvi) : "",
-          korunova_motivace: saved ? String(saved.korunova_motivace) : "",
-          plan_prodejny: saved ? String(saved.plan_prodejny) : "",
+          prijmeni: e.firstName.toLowerCase(), // firstName je příjmení dle DB
+          hodiny: savedD ? String(savedD.hodiny) : schedH>0 ? String(schedH) : "",
+          hodiny_source: savedD ? "saved" : schedH>0 ? "rozvrh" : "manual",
+          obrat: savedD ? String(savedD.obrat) : "",
+          trzba_pz: savedD ? String(savedD.trzba_pz) : "",
+          trzba_sluzby: savedD ? String(savedD.trzba_sluzby) : "",
+          obrat_prislusenstvi: savedD ? String(savedD.obrat_prislusenstvi) : "",
+          korunova_motivace: savedD ? String(savedD.korunova_motivace) : "",
+          plan_prodejny: savedD ? String(savedD.plan_prodejny) : "",
         };
       });
       if(newRows.length && newRows[0].plan_prodejny) setPlanProdejny(newRows[0].plan_prodejny);
@@ -3821,6 +3900,39 @@ function CommissionInput({employees, stores, currentUser}){
 
   const updRow=(idx,field,val)=>{
     setRows(prev=>prev.map((r,i)=>i===idx?{...r,[field]:val}:r));
+  };
+
+  // Import Vzor_podklady.xlsx
+  const handleImport = async(e)=>{
+    const file = e.target.files?.[0];
+    if(!file) return;
+    e.target.value = "";
+    setImportStatus(null);
+    try {
+      const {obratMap,pzMap,sluzbyMap,prislMap,korunovaMap} = await parseVzorPodklady(file);
+      const ok = [], warn = [];
+      setRows(prev=>prev.map(r=>{
+        // Párování: hledáme příjmení prodejce v mapě (case-insensitive)
+        const key = r.prijmeni;
+        const matchKey = Object.keys(obratMap).find(k=>k===key || k.startsWith(key) || key.startsWith(k));
+        if(!matchKey){
+          warn.push(r.name);
+          return r;
+        }
+        ok.push(r.name);
+        return {
+          ...r,
+          obrat: String(Math.round(obratMap[matchKey]||0)),
+          trzba_pz: String(Math.round(pzMap[matchKey]||0)),
+          trzba_sluzby: String(Math.round(sluzbyMap[matchKey]||0)),
+          obrat_prislusenstvi: String(Math.round(prislMap[matchKey]||0)),
+          korunova_motivace: String(Math.round(korunovaMap[matchKey]||0)),
+        };
+      }));
+      setImportStatus({ok, warn});
+    } catch(err){
+      alert("Chyba při čtení souboru: "+err.message);
+    }
   };
 
   const handleSave = async()=>{
@@ -3877,7 +3989,21 @@ function CommissionInput({employees, stores, currentUser}){
         <input value={planProdejny} onChange={e=>setPlanProdejny(e.target.value)}
           placeholder="např. 3500000" style={{...inputS,width:160}}/>
       </div>
+      <div>
+        <div style={{fontSize:11,fontWeight:700,color:"#888",marginBottom:4}}>IMPORT DAT</div>
+        <input ref={importRef} type="file" accept=".xlsx" style={{display:"none"}} onChange={handleImport}/>
+        <button onClick={()=>importRef.current?.click()}
+          style={{padding:"8px 16px",borderRadius:7,border:"1.5px solid #1B4F8A",background:"#eef4ff",color:"#1B4F8A",fontWeight:700,fontSize:13,cursor:"pointer",whiteSpace:"nowrap"}}>
+          📂 Nahrát Vzor_podklady.xlsx
+        </button>
+      </div>
     </div>
+
+    {/* Status importu */}
+    {importStatus&&<div style={{marginBottom:14,padding:"10px 14px",borderRadius:8,background: importStatus.warn.length?"#fff8e1":"#f0fdf4",border:`1.5px solid ${importStatus.warn.length?"#fbbf24":"#86efac"}`,fontSize:13}}>
+      {importStatus.ok.length>0&&<div style={{color:"#166534",fontWeight:600}}>✅ Importováno: {importStatus.ok.join(", ")}</div>}
+      {importStatus.warn.length>0&&<div style={{color:"#92400e",fontWeight:600,marginTop:4}}>⚠️ Nenalezeno v souboru: {importStatus.warn.join(", ")} – zadejte ručně</div>}
+    </div>}
 
     {loadingData
       ? <div style={{textAlign:"center",padding:40,color:"#aaa"}}>Načítám data…</div>
@@ -3888,7 +4014,12 @@ function CommissionInput({employees, stores, currentUser}){
             <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
               <thead>
                 <tr>
-                  {["Prodejce","Hodiny","Obrat (Kč)","Tržba PZ (Kč)","Tržba služeb (Kč)","Obrat přísl. (Kč)","Kor. motivace (Kč)"].map(h=>(
+                  <th style={thS}>Prodejce</th>
+                  <th style={{...thS,textAlign:"center"}}>
+                    Hodiny
+                    <div style={{fontSize:10,fontWeight:400,opacity:0.8}}>z rozvrhu</div>
+                  </th>
+                  {["Obrat (Kč)","Tržba PZ (Kč)","Tržba služeb (Kč)","Obrat přísl. (Kč)","Kor. motivace (Kč)"].map(h=>(
                     <th key={h} style={thS}>{h}</th>
                   ))}
                 </tr>
@@ -3896,7 +4027,17 @@ function CommissionInput({employees, stores, currentUser}){
               <tbody>
                 {rows.map((r,i)=><tr key={r.employee_id} style={{background:i%2===0?"#fff":"#f8f9ff"}}>
                   <td style={{padding:"8px 10px",fontWeight:700,color:"#1a1a2e",whiteSpace:"nowrap"}}>{r.name}</td>
-                  {["hodiny","obrat","trzba_pz","trzba_sluzby","obrat_prislusenstvi","korunova_motivace"].map(f=>(
+                  <td style={{padding:"4px 6px"}}>
+                    <div style={{position:"relative"}}>
+                      <input type="number" value={r.hodiny} onChange={e=>updRow(i,"hodiny",e.target.value)}
+                        style={{...inputS,textAlign:"right",
+                          background: r.hodiny_source==="rozvrh"?"#f0fdf4": r.hodiny_source==="saved"?"#f0f9ff":"#fff",
+                          border: r.hodiny_source==="rozvrh"?"1.5px solid #86efac": r.hodiny_source==="saved"?"1.5px solid #93c5fd":"1.5px solid #E8E8F0",
+                        }} min="0"/>
+                      {r.hodiny_source==="rozvrh"&&<span title="Převzato z rozvrhu" style={{position:"absolute",right:6,top:"50%",transform:"translateY(-50%)",fontSize:10,color:"#16a34a",pointerEvents:"none"}}>📅</span>}
+                    </div>
+                  </td>
+                  {["obrat","trzba_pz","trzba_sluzby","obrat_prislusenstvi","korunova_motivace"].map(f=>(
                     <td key={f} style={{padding:"4px 6px"}}>
                       <input type="number" value={r[f]} onChange={e=>updRow(i,f,e.target.value)}
                         style={{...inputS,textAlign:"right"}} min="0"/>
@@ -3906,7 +4047,11 @@ function CommissionInput({employees, stores, currentUser}){
               </tbody>
             </table>
           </div>
-          <div style={{marginTop:16,display:"flex",gap:10,alignItems:"center"}}>
+          <div style={{marginTop:10,fontSize:11,color:"#888",display:"flex",gap:16,flexWrap:"wrap"}}>
+            <span style={{display:"flex",alignItems:"center",gap:4}}><span style={{display:"inline-block",width:12,height:12,borderRadius:3,background:"#f0fdf4",border:"1px solid #86efac"}}/>📅 Hodiny z rozvrhu (lze upravit)</span>
+            <span style={{display:"flex",alignItems:"center",gap:4}}><span style={{display:"inline-block",width:12,height:12,borderRadius:3,background:"#f0f9ff",border:"1px solid #93c5fd"}}/>Hodiny z uloženého záznamu</span>
+          </div>
+          <div style={{marginTop:14,display:"flex",gap:10,alignItems:"center",flexWrap:"wrap"}}>
             <button onClick={handleSave} disabled={saving}
               style={{background:"#1B4F8A",color:"#fff",border:"none",borderRadius:9,padding:"11px 28px",fontSize:14,fontWeight:700,cursor:saving?"not-allowed":"pointer",opacity:saving?0.7:1}}>
               {saving?"Ukládám…":"💾 Uložit a spočítat"}
@@ -3934,6 +4079,10 @@ function CommissionResults({employees, stores}){
       setResults([]);
       const {data:sD} = await supabase.from("commission_settings").select("*").eq("store_id",storeId).single();
       const settings = sD || {koef_pz:0.025,koef_sluzby:0.012,koef_prislusenstvi:0.1465,prumerna_cena_pz:storeId===2?1775:storeId===3?1710:1630,obrat_koef_plny:0.004,obrat_koef_zkraceny:0.003,obrat_strop:3000};
+      // Načti měsíční penetraci z importu (pokud existuje)
+      const {data:penD} = await supabase.from("commission_penetrace")
+        .select("koef_prislusenstvi").eq("store_id",storeId).eq("month",month).single();
+      const penetraceOverride = penD?.koef_prislusenstvi ?? null;
       const {data:commD} = await supabase.from("commission_data")
         .select("*").eq("store_id",storeId).eq("month",month).eq("year",year);
       if(!commD?.length){ setLoading(false); return; }
@@ -3945,7 +4094,8 @@ function CommissionResults({employees, stores}){
       const calcs = dataWithNames.map(d=>({
         name: d.name.trim(),
         data: d,
-        calc: calcCommission(d, settings, commD),
+        calc: calcCommission(d, settings, commD, penetraceOverride),
+        penetraceZdroj: penetraceOverride!=null ? `import (${(penetraceOverride*100).toFixed(2)} %)` : `výchozí (${((Number(settings.koef_prislusenstvi)||0.1465)*100).toFixed(2)} %)`,
       }));
       setResults(calcs);
       setLoading(false);
@@ -4046,6 +4196,7 @@ function CommissionResults({employees, stores}){
               <span><PlneniDot v={0.6}/> 50–79 % oranžová</span>
               <span><PlneniDot v={0.2}/> &lt; 50 % červená</span>
               <span>⚠️ = nejnižší celkové plnění v týmu</span>
+              {results[0]?.penetraceZdroj&&<span style={{marginLeft:"auto",color:"#1B4F8A"}}>📊 Koef. příslušenství: {results[0].penetraceZdroj}</span>}
             </div>
           </div>
     }
@@ -4057,12 +4208,20 @@ function CommissionSettings({stores}){
   const [data, setData] = useState({});
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [importingPenetrace, setImportingPenetrace] = useState(false);
+  const [penetraceStatus, setPenetraceStatus] = useState(null);
+  const penetraceRef = useRef(null);
 
   const DEFAULTS = {
     koef_pz:0.025, koef_sluzby:0.012, koef_prislusenstvi:0.1465,
     obrat_koef_plny:0.004, obrat_koef_zkraceny:0.003, obrat_strop:3000,
   };
   const PZ_DEFAULTS = {1:1630, 2:1775, 3:1710};
+
+  // Mapování názvů prodejen v xlsx → store_id
+  const STORE_NAME_MAP = {
+    "strakonice": 1, "blatná": 2, "blatna": 2, "pelhřimov": 3, "pelhrimov": 3,
+  };
 
   useEffect(()=>{
     (async()=>{
@@ -4101,13 +4260,80 @@ function CommissionSettings({stores}){
     setTimeout(()=>setSaved(false),2500);
   };
 
+  // Import Příslušenství_data.xlsx → uloží penetraci per pobočka+měsíc
+  // Fiskální rok 04/2026–03/2027 → bere data z loňského roku (stejný měsíc 04–03)
+  const handlePenetraceImport = async(e)=>{
+    const file = e.target.files?.[0];
+    if(!file) return;
+    e.target.value = "";
+    setImportingPenetrace(true);
+    setPenetraceStatus(null);
+    try {
+      const XLSX = window.XLSX;
+      if(!XLSX) throw new Error("SheetJS není dostupný");
+      const buf = await file.arrayBuffer();
+      const wb = XLSX.read(new Uint8Array(buf), {type:"array"});
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      const rows = XLSX.utils.sheet_to_json(ws, {header:1, defval:null});
+
+      // Struktura: bloky po ~11 řádcích
+      // Řádek s "Fiskální datum RMD" + číslem měsíce
+      // Pak řádky prodejen (index 0 obsahuje "Prodejna X")
+      // Sloupec L (index 11) = penetrace
+      const saved = [];
+      let currentMonth = null;
+
+      for(let i=0; i<rows.length; i++){
+        const r = rows[i];
+        if(!r) continue;
+        const c0 = String(r[0]||"").trim();
+
+        // Detekce řádku s měsícem
+        if(c0==="Fiskální datum RMD"){
+          const mVal = r[1];
+          if(mVal!=null) currentMonth = Number(mVal);
+          continue;
+        }
+
+        // Detekce řádku s prodejnou
+        if(c0.toLowerCase().startsWith("prodejna") && currentMonth!=null){
+          const storePart = c0.toLowerCase().replace("prodejna","").trim();
+          const storeId = STORE_NAME_MAP[storePart];
+          if(!storeId) continue;
+          const penetrace = r[11];
+          if(penetrace==null||isNaN(Number(penetrace))) continue;
+          const penetraceNum = Number(penetrace);
+          // koef_prislusenstvi = penetrace loňského roku + 0.5 %
+          const koef = Math.round((penetraceNum + 0.005) * 10000) / 10000;
+
+          // Fiskální rok: měsíc 04 = duben 2026, ..., 03 = březen 2027
+          // Ukládáme do commission_settings_monthly (nová tabulka)
+          // nebo aktualizujeme commission_settings pokud je to "aktuální" měsíc
+          // → uložíme do nové tabulky commission_penetrace (month, store_id, koef)
+          const {error} = await supabase.from("commission_penetrace").upsert({
+            store_id: storeId,
+            month: currentMonth,
+            koef_prislusenstvi: koef,
+            penetrace_loni: penetraceNum,
+          },{onConflict:"store_id,month"});
+          if(!error) saved.push(`${c0} (${currentMonth < 10 ? "0"+currentMonth : currentMonth}): ${(penetraceNum*100).toFixed(2)} % → koef ${(koef*100).toFixed(2)} %`);
+        }
+      }
+      setPenetraceStatus({saved});
+      setImportingPenetrace(false);
+    } catch(err){
+      setImportingPenetrace(false);
+      alert("Chyba importu: "+err.message);
+    }
+  };
+
   const inputS={padding:"6px 9px",borderRadius:7,border:"1.5px solid #E8E8F0",fontSize:13,width:120,textAlign:"right"};
   const thS={padding:"9px 10px",textAlign:"left",fontWeight:700,color:"#fff",fontSize:12,background:"#1B4F8A"};
   const tdS={padding:"8px 10px",fontSize:13};
   const fields=[
     {key:"koef_pz",label:"Koef. PZ (výchozí 0.025)",help:"2,5 % z plánu prodejny = plán PZ"},
     {key:"koef_sluzby",label:"Koef. služby (výchozí 0.012)",help:"1,2 % z plánu = plán služeb"},
-    {key:"koef_prislusenstvi",label:"Koef. příslušenství (výchozí 0.1465)",help:"penetrace min. rok + 0,5 %"},
+    {key:"koef_prislusenstvi",label:"Koef. příslušenství (výchozí 0.1465)",help:"penetrace min. rok + 0,5 % · automaticky po importu"},
     {key:"prumerna_cena_pz",label:"Průměrná cena PZ (Kč)",help:"STR 1 630, BL 1 775, PE 1 710"},
     {key:"obrat_koef_plny",label:"Obrat koef. plný úvazek (výchozí 0.004)",help:"0,4 % z obratu"},
     {key:"obrat_koef_zkraceny",label:"Obrat koef. zkrácený úvazek (výchozí 0.003)",help:"0,3 % z obratu"},
@@ -4115,6 +4341,29 @@ function CommissionSettings({stores}){
   ];
 
   return <div>
+    {/* Import penetrace */}
+    <div style={{marginBottom:24,padding:"16px 20px",background:"#f0f9ff",borderRadius:10,border:"1.5px solid #93c5fd"}}>
+      <div style={{fontWeight:700,color:"#1B4F8A",marginBottom:6,fontSize:14}}>📊 Import penetrace příslušenství</div>
+      <div style={{fontSize:13,color:"#555",marginBottom:12,lineHeight:1.6}}>
+        Nahraj soubor <strong>Příslušenství_data.xlsx</strong> jednou ročně. Aplikace z něj automaticky načte
+        koeficient příslušenství pro každou pobočku a každý měsíc fiskálního roku (04/2026–03/2027).
+        Při výpočtu provize se pak správný koeficient použije automaticky.
+      </div>
+      <input ref={penetraceRef} type="file" accept=".xlsx" style={{display:"none"}} onChange={handlePenetraceImport}/>
+      <button onClick={()=>penetraceRef.current?.click()} disabled={importingPenetrace}
+        style={{padding:"9px 20px",borderRadius:7,border:"1.5px solid #1B4F8A",background:"#1B4F8A",color:"#fff",fontWeight:700,fontSize:13,cursor:importingPenetrace?"not-allowed":"pointer",opacity:importingPenetrace?0.7:1}}>
+        {importingPenetrace?"Zpracovávám…":"📂 Nahrát Příslušenství_data.xlsx"}
+      </button>
+      {penetraceStatus&&<div style={{marginTop:12,fontSize:12,color:"#166534",background:"#f0fdf4",borderRadius:7,padding:"10px 14px",border:"1px solid #86efac"}}>
+        <div style={{fontWeight:700,marginBottom:4}}>✅ Importováno {penetraceStatus.saved.length} záznamů:</div>
+        <div style={{maxHeight:120,overflowY:"auto",lineHeight:1.8}}>
+          {penetraceStatus.saved.map((s,i)=><div key={i}>{s}</div>)}
+        </div>
+      </div>}
+    </div>
+
+    {/* Tabulka koeficientů */}
+    <div style={{fontWeight:700,color:"#1a1a2e",marginBottom:10,fontSize:14}}>⚙️ Výchozí koeficienty per pobočka</div>
     <div style={{overflowX:"auto"}}>
       <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
         <thead><tr>
@@ -4146,7 +4395,7 @@ function CommissionSettings({stores}){
 }
 
 // ── Hlavní kontejner provizního modulu ───────────────────────
-function CommissionModule({employees, stores, currentUser}){
+function CommissionModule({employees, stores, currentUser, sched, holidays, patterns}){
   if(currentUser?.role !== "admin") return null;
   const [subTab, setSubTab] = useState("input");
   const subTabs=[
@@ -4161,7 +4410,7 @@ function CommissionModule({employees, stores, currentUser}){
         {t.label}
       </button>)}
     </div>
-    {subTab==="input"    && <CommissionInput employees={employees} stores={stores} currentUser={currentUser}/>}
+    {subTab==="input"    && <CommissionInput employees={employees} stores={stores} currentUser={currentUser} sched={sched} holidays={holidays} patterns={patterns}/>}
     {subTab==="results"  && <CommissionResults employees={employees} stores={stores}/>}
     {subTab==="settings" && <CommissionSettings stores={stores}/>}
   </div>;
