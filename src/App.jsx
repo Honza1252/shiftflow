@@ -4673,10 +4673,9 @@ function CommissionSettings({stores, onSettingsSaved}){
       title: "📊 Plánové koeficienty",
       subtitle: "Určují plán každé složky jako % z plánu prodejny",
       fields: [
-        {key:"koef_pz",            label:"PZ – koef. plánu",           help:"Plán PZ = X % z plánu prodejny",          suffix:"%"},
-        {key:"koef_sluzby",        label:"Služby – koef. plánu",        help:"Plán služeb = X % z plánu prodejny",      suffix:"%"},
-        {key:"koef_prislusenstvi", label:"Příslušenství – koef. plánu", help:"Výchozí; přebíjí ho import penetrace",    suffix:"%"},
-        {key:"prumerna_cena_pz",   label:"Průměrná cena PZ",            help:"STR 1 630, BL 1 775, PE 1 710 Kč",       suffix:"Kč"},
+        {key:"koef_pz",          label:"PZ – koef. plánu",  help:"Plán PZ = X % z plánu prodejny",     suffix:"%"},
+        {key:"koef_sluzby",      label:"Služby – koef. plánu", help:"Plán služeb = X % z plánu prodejny", suffix:"%"},
+        {key:"prumerna_cena_pz", label:"Průměrná cena PZ",   help:"STR 1 630, BL 1 775, PE 1 710 Kč",  suffix:"Kč"},
       ]
     },
     {
@@ -4712,7 +4711,8 @@ function CommissionSettings({stores, onSettingsSaved}){
     },
   ];
 
-  const allMonths = [...new Set(penetraceTable.map(r=>r.month))].sort((a,b)=>a-b);
+  // Měsíce 1–12 jsou fiskální měsíce, hodnoty > 12 jsou roční souhrny (2025 apod.) – skryjeme je
+  const allMonths = [...new Set(penetraceTable.map(r=>r.month))].filter(m=>m>=1&&m<=12).sort((a,b)=>a-b);
 
   return <div>
     {/* Import penetrace */}
