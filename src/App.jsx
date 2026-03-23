@@ -4317,12 +4317,12 @@ function CommissionResults({employees, stores}){
           const koef100   = 1.00; // celkové plnění 100 % → koeficient 100 %
           const provize100= zaklad100 * koef100;
 
-          // Rozklad možného zisku
-          const moznyZProvizi  = Math.round(zaklad100 - (c.provizeObrat + c.provizePz + c.provizeSluzby + c.provizePrislusenství + c.korunovaMot));
-          const moznyZKoef     = Math.round(zaklad100 * koef100 - zaklad100 * c.koef);  // přínos skoku koeficientu
-          // Pozor: moznyZProvizi + moznyZKoef ≠ přesně celkový zisk kvůli zaokrouhlení
-          // Přesné celkové číslo:
-          const moznyZisk = Math.round(Math.max(0, provize100 - c.vyslednaProvize));
+          const zakladAkt = c.provizeObrat + c.provizePz + c.provizeSluzby + c.provizePrislusenství + c.korunovaMot;
+          // Rozklad: přírůstek ze složek (× koef100=1) + skok koeficientu na aktuální základ
+          // moznyZisk = (zaklad100 − zakladAkt)×1.0 + zakladAkt×(1.0 − c.koef)
+          const moznyZProvizi  = Math.round(Math.max(0, zaklad100 - zakladAkt));        // přírůstek provizí ze složek
+          const moznyZKoef     = Math.round(Math.max(0, zakladAkt * (1.0 - c.koef)));  // přínos skoku koeficientu
+          const moznyZisk      = Math.round(Math.max(0, provize100 - c.vyslednaProvize));
 
           const celkPct = Math.round(c.celkPlneni*100);
           const koefPct = Math.round(c.koef*100);
@@ -4492,10 +4492,15 @@ function CommissionSettings({stores, onSettingsSaved}){
   const MONTHS_CZ = ["","Leden","Únor","Březen","Duben","Květen","Červen","Červenec","Srpen","Září","Říjen","Listopad","Prosinec"];
 
   // Převede DB hodnotu na display string (% pole ×100)
-  const dbToDisplay = (key, dbVal) => {
-    const num = Number(dbVal||0);
+  // Pokud je DB hodnota null/undefined/0 pro procentní pole → použij default
+  const dbToDisplay = (key, dbVal, defaultDbVal) => {
+    let num = (dbVal === null || dbVal === undefined) ? defaultDbVal : Number(dbVal);
+    // Pro procentní pole: pokud je 0 a existuje default, použij default
+    if(PCT_FIELDS.has(key) && num === 0 && defaultDbVal) num = defaultDbVal;
     if(PCT_FIELDS.has(key)) return String(Math.round(num * 10000) / 100); // 0.025 → "2.5"
-    return String(num||"");
+    // Pro Kč pole: pokud je 0 a existuje default > 0, použij default
+    if(num === 0 && defaultDbVal) return String(defaultDbVal);
+    return String(num || "");
   };
   // Převede display string na DB hodnotu (% pole ÷100)
   const displayToDB = (key, displayVal) => {
@@ -4512,7 +4517,7 @@ function CommissionSettings({stores, onSettingsSaved}){
       const dbRow = found || {...DEFAULTS_DB, prumerna_cena_pz: PZ_DEFAULTS[s.id]||1630};
       disp[s.id] = {};
       Object.keys(DEFAULTS_DB).forEach(key=>{
-        disp[s.id][key] = dbToDisplay(key, dbRow[key] ?? DEFAULTS_DB[key]);
+        disp[s.id][key] = dbToDisplay(key, dbRow[key], DEFAULTS_DB[key]);
       });
       disp[s.id]["prumerna_cena_pz"] = String(dbRow.prumerna_cena_pz || PZ_DEFAULTS[s.id]||1630);
     });
