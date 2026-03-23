@@ -3776,13 +3776,24 @@ function calcPlannedHours(emp, storeId, year, month, sched, holidays, stores, pa
 // ── Pomocník: parsování xlsx v prohlížeči přes SheetJS ────────
 // Vrátí { obrat, trzba_pz, trzba_sluzby, obrat_prislusenstvi, korunova_motivace }
 // klíčováno podle jména prodejce (příjmení lowercase)
+async function loadXLSX(){
+  if(window.XLSX) return window.XLSX;
+  return new Promise((resolve,reject)=>{
+    const s=document.createElement("script");
+    s.src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js";
+    s.onload=()=>resolve(window.XLSX);
+    s.onerror=()=>reject(new Error("Nepodařilo se načíst SheetJS"));
+    document.head.appendChild(s);
+  });
+}
+
 async function parseVzorPodklady(file){
-  return new Promise((resolve, reject)=>{
+  return new Promise(async(resolve, reject)=>{
+    let XLSX;
+    try { XLSX = await loadXLSX(); } catch(e){ reject(e); return; }
     const reader = new FileReader();
     reader.onload = (e)=>{
       try {
-        const XLSX = window.XLSX;
-        if(!XLSX) { reject(new Error("SheetJS (XLSX) není dostupný")); return; }
         const data = new Uint8Array(e.target.result);
         const wb = XLSX.read(data, {type:"array"});
 
@@ -4269,8 +4280,7 @@ function CommissionSettings({stores}){
     setImportingPenetrace(true);
     setPenetraceStatus(null);
     try {
-      const XLSX = window.XLSX;
-      if(!XLSX) throw new Error("SheetJS není dostupný");
+      const XLSX = await loadXLSX();
       const buf = await file.arrayBuffer();
       const wb = XLSX.read(new Uint8Array(buf), {type:"array"});
       const ws = wb.Sheets[wb.SheetNames[0]];
