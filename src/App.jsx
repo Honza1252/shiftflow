@@ -4258,10 +4258,42 @@ function CommissionResults({employees, stores}){
           if(!c) return null;
 
           const items = [
-            {label:"Záruky (PZ)",   done:c.plneniPz,   provize:c.provizePz,   plan:c.planPz,     actual:r.data.trzba_pz,    chybi:Math.max(0,c.planPz-r.data.trzba_pz),     jednotka:"Kč tržby",  weight:"4×", sazba:0.10},
-            {label:"Obrat",         done:c.plneniObrat, provize:c.provizeObrat,plan:c.planObrat,  actual:r.data.obrat,       chybi:Math.max(0,c.planObrat-r.data.obrat),     jednotka:"Kč",        weight:"1×", sazba:null},
-            {label:"Služby",        done:c.plneniSluzby,provize:c.provizeSluzby,plan:c.planSluzby,actual:r.data.trzba_sluzby,chybi:Math.max(0,c.planSluzby-r.data.trzba_sluzby),jednotka:"Kč tržby",weight:"1×", sazba:0.10},
-            {label:"Příslušenství", done:c.plneniPrislusenství,provize:c.provizePrislusenství,plan:c.planPrislusenství,actual:r.data.obrat_prislusenstvi,chybi:Math.max(0,c.planPrislusenství-r.data.obrat_prislusenstvi),jednotka:"Kč",weight:"1×",sazba:0.038},
+            {
+              label:"Záruky (PZ)", done:c.plneniPz, provize:c.provizePz,
+              plan:c.planPz, actual:r.data.trzba_pz,
+              chybi:Math.max(0,c.planPz-r.data.trzba_pz), jednotka:"Kč tržby", weight:"4×",
+              // možný zisk při splnění: chybějící tržba × sazba PZ (bez stropu)
+              moznyZiskSlozky: Math.max(0, c.planPz - r.data.trzba_pz) * (Number(r.settings?.sazba_pz)||0.10),
+            },
+            {
+              label:"Obrat", done:c.plneniObrat, provize:c.provizeObrat,
+              plan:c.planObrat, actual:r.data.obrat,
+              chybi:Math.max(0,c.planObrat-r.data.obrat), jednotka:"Kč", weight:"1×",
+              // obrat: chybějící obrat × sazba, ale nepřekročit strop
+              moznyZiskSlozky: Math.max(0,
+                Math.min(c.planObrat * (Number(r.settings?.obrat_koef_plny)||0.004), Number(r.settings?.obrat_strop)||3000)
+                - c.provizeObrat
+              ),
+            },
+            {
+              label:"Služby", done:c.plneniSluzby, provize:c.provizeSluzby,
+              plan:c.planSluzby, actual:r.data.trzba_sluzby,
+              chybi:Math.max(0,c.planSluzby-r.data.trzba_sluzby), jednotka:"Kč tržby", weight:"1×",
+              moznyZiskSlozky: Math.min(
+                Math.max(0, c.planSluzby - r.data.trzba_sluzby) * (Number(r.settings?.sazba_sluzby)||0.10),
+                Math.max(0, (Number(r.settings?.strop_sluzby)||1500) - c.provizeSluzby)
+              ),
+            },
+            {
+              label:"Příslušenství", done:c.plneniPrislusenství, provize:c.provizePrislusenství,
+              plan:c.planPrislusenství, actual:r.data.obrat_prislusenstvi,
+              chybi:Math.max(0,c.planPrislusenství-r.data.obrat_prislusenstvi), jednotka:"Kč", weight:"1×",
+              // při 100% splnění sazba4 × plán, minus co už má
+              moznyZiskSlozky: Math.min(
+                Math.max(0, c.planPrislusenství * (Number(r.settings?.sazba_prisl_4)||0.038) - c.provizePrislusenství),
+                Math.max(0, (Number(r.settings?.strop_prislusenstvi)||4000) - c.provizePrislusenství)
+              ),
+            },
           ];
 
           // Výpočet potenciálního zisku při 100% plnění všech složek
@@ -4326,6 +4358,7 @@ function CommissionResults({employees, stores}){
                 {items.map((it,xi)=>{
                   const pct=Math.round(it.done*100);
                   const barColor=pctColor(it.done);
+                  const mozny = Math.round(it.moznyZiskSlozky||0);
                   return <div key={xi} style={{background:"#fff",borderRadius:10,padding:"12px 14px",border:`1px solid ${it.done>=1?"#86efac":it.done>=0.5?"#fed7aa":"#fecaca"}`}}>
                     <div style={{display:"flex",justifyContent:"space-between",marginBottom:6}}>
                       <span style={{fontWeight:700,fontSize:13,color:"#1a1a2e"}}>{it.label}</span>
@@ -4340,19 +4373,27 @@ function CommissionResults({employees, stores}){
                       <span style={{color:"#666"}}>Skutečnost: <strong>{czk(it.actual)}</strong></span>
                       <span style={{color:"#666"}}>Plán: <strong>{czk(it.plan)}</strong></span>
                     </div>
-                    {it.chybi>0&&<div style={{marginTop:4,fontSize:12,color:"#dc2626",fontWeight:600}}>
-                      Chybí: {czk(it.chybi)} {it.jednotka}
-                      {it.sazba&&<span style={{color:"#f97316",fontWeight:700,marginLeft:6}}>→ +{czk(Math.min(it.chybi*it.sazba, it.label==="Záruky (PZ)"?99999:it.label==="Příslušenství"?4000:1500))} provize</span>}
-                    </div>}
-                    {it.chybi===0&&<div style={{marginTop:4,fontSize:12,color:"#16a34a",fontWeight:700}}>✅ Plán splněn!</div>}
+                    {it.chybi>0
+                      ? <div style={{marginTop:4,fontSize:12,color:"#dc2626",fontWeight:600}}>
+                          Chybí: {czk(it.chybi)} {it.jednotka}
+                          {mozny>0&&<span style={{color:"#f97316",fontWeight:700,marginLeft:6}}>→ +{czk(mozny)} provize</span>}
+                        </div>
+                      : <div style={{marginTop:4,fontSize:12,color:"#16a34a",fontWeight:700}}>✅ Plán splněn!</div>
+                    }
                     <div style={{marginTop:4,fontSize:12,color:"#1B4F8A"}}>Provize: <strong>{czk(it.provize)}</strong></div>
                   </div>;
                 })}
+
+                {/* Korunová motivace – kartička */}
+                <div style={{background:"#fff",borderRadius:10,padding:"12px 14px",border:"1px solid #e8e8f0"}}>
+                  <div style={{display:"flex",justifyContent:"space-between",marginBottom:6}}>
+                    <span style={{fontWeight:700,fontSize:13,color:"#1a1a2e"}}>💰 Korunová motivace</span>
+                    <span style={{fontSize:11,color:"#aaa",fontWeight:600}}>mimo plnění</span>
+                  </div>
+                  <div style={{marginTop:4,fontSize:13,color:"#1B4F8A",fontWeight:700}}>{czk(c.korunovaMot)}</div>
+                  <div style={{marginTop:4,fontSize:11,color:"#aaa"}}>Dodavatelské provize · nekrátí se</div>
+                </div>
               </div>
-              {/* Korunová motivace */}
-              {c.korunovaMot>0&&<div style={{fontSize:13,color:"#555",marginBottom:8}}>
-                💰 Korunová motivace: <strong>{czk(c.korunovaMot)}</strong>
-              </div>}
               {/* Motivační banner */}
               {moznyZisk>50&&<div style={{marginBottom:12,padding:"10px 14px",background:"#fef9c3",borderRadius:8,border:"1px solid #fde047",fontSize:13}}>
                 <span style={{fontWeight:700,color:"#854d0e"}}>💡 Splněním plánu ve všech složkách</span>
