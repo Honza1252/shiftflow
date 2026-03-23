@@ -3813,8 +3813,8 @@ async function parseVzorPodklady(file){
             const nameRaw = rows[i]?.[0];
             if(!nameRaw) continue;
             const nameStr = String(nameRaw).trim();
-            // Jméno formát: "Příjmení Jméno [ID]" – vezmeme první slovo jako příjmení
-            const prijmeni = nameStr.split(" ")[0].toLowerCase();
+            // Jméno formát: "Příjmení Jméno [ID]" – vezmeme první slovo jako příjmení, normalizujeme
+            const prijmeni = nameStr.split(" ")[0].normalize("NFC").toLowerCase();
             const val = rows[i]?.[colIdx];
             result[prijmeni] = val != null ? Number(val)||0 : 0;
           }
@@ -3835,7 +3835,7 @@ async function parseVzorPodklady(file){
           for(let i=dataStart; i<rows.length; i++){
             const nameRaw = rows[i]?.[0];
             if(!nameRaw) continue;
-            const prijmeni = String(nameRaw).trim().split(" ")[0].toLowerCase();
+            const prijmeni = String(nameRaw).trim().split(" ")[0].normalize("NFC").toLowerCase();
             const v1 = Number(rows[i]?.[1])||0;
             const v2 = Number(rows[i]?.[2])||0;
             result[prijmeni] = v1 + v2;
@@ -3888,10 +3888,12 @@ function CommissionInput({employees, stores, currentUser, sched, holidays, patte
         const savedD = commD?.find(d=>d.employee_id===e.id);
         // Hodiny: přednost mají uložená data, jinak živý výpočet z rozvrhu
         const schedH = calcPlannedHours(e, storeId, year, month-1, sched, holidays, stores, patterns, employees);
+        // prijmeni: normalizujeme NFD→NFC aby diakritika spolehlivě seděla s xlsx
+        const prijmeniRaw = (e.firstName||"").normalize("NFC").toLowerCase();
         return {
           employee_id: e.id,
           name: `${e.firstName} ${e.lastName}`.trim(),
-          prijmeni: e.firstName.toLowerCase(), // firstName je příjmení dle DB
+          prijmeni: prijmeniRaw,
           hodiny: savedD ? String(savedD.hodiny) : schedH>0 ? String(schedH) : "",
           hodiny_source: savedD ? "saved" : schedH>0 ? "rozvrh" : "manual",
           obrat: savedD ? String(savedD.obrat) : "",
@@ -3922,10 +3924,14 @@ function CommissionInput({employees, stores, currentUser, sched, holidays, patte
     try {
       const {obratMap,pzMap,sluzbyMap,prislMap,korunovaMap} = await parseVzorPodklady(file);
       const ok = [], warn = [];
+      // Normalizační helper – odstraní diakritiku pro fallback porovnání
+      const toAscii = s => s.normalize("NFD").replace(/[\u0300-\u036f]/g,"");
       setRows(prev=>prev.map(r=>{
-        // Párování: hledáme příjmení prodejce v mapě (case-insensitive)
-        const key = r.prijmeni;
-        const matchKey = Object.keys(obratMap).find(k=>k===key || k.startsWith(key) || key.startsWith(k));
+        const key = r.prijmeni; // už NFC lowercase
+        // 1. přesná shoda NFC
+        let matchKey = Object.keys(obratMap).find(k=>k===key);
+        // 2. fallback: ASCII bez diakritiky
+        if(!matchKey) matchKey = Object.keys(obratMap).find(k=>toAscii(k)===toAscii(key));
         if(!matchKey){
           warn.push(r.name);
           return r;
