@@ -3781,7 +3781,16 @@ function calcCommission(emp, settings, allEmpsData, penetraceOverride, globalSet
 
   const korunovaMot = Number(emp.korunova_motivace)||0;
 
-  // Váhy z globálního nastavení
+  // Rozvoz+Admin – platí pro VŠECHNY role
+  const rozv1 = Number(emp.rozvoz1)||0;
+  const rozv2 = Number(emp.rozvoz2)||0;
+  const adminH = Number(emp.admin_prace)||0;
+  const sazbaRoz1  = Number(g.sazba_rozvoz1)||0;
+  const sazbaRoz2  = Number(g.sazba_rozvoz2)||0;
+  const sazbaAdmin = Number(g.sazba_admin)||0;
+  const provizeRozvozAdmin = rozv1*sazbaRoz1 + rozv2*sazbaRoz2 + adminH*sazbaAdmin;
+
+  // Celkové plnění (PZ váha 4×)
   const vahaPz    = Number(g.vaha_pz)||4;
   const vahaObrat = Number(g.vaha_obrat)||1;
   const vahaSluzby= Number(g.vaha_sluzby)||1;
@@ -3790,7 +3799,7 @@ function calcCommission(emp, settings, allEmpsData, penetraceOverride, globalSet
   const celkPlneni = (Math.min(plneniPz,1)*vahaPz + Math.min(plneniObrat,1)*vahaObrat + Math.min(plneniSluzby,1)*vahaSluzby + Math.min(plneniPrislusenství,1)*vahaPrisl) / vahaSouc;
   const koef = calcKoefKraceni(celkPlneni, g.kraceni);
 
-  const zaklad = (provizeObrat + provizePz + provizeSluzby + provizePrislusenství + korunovaMot) * koef;
+  const zaklad = (provizeObrat + provizePz + provizeSluzby + provizePrislusenství + korunovaMot + provizeRozvozAdmin) * koef;
   const vyslednaProvize = zaklad + bonusObrat;
   const hrubaMzda = 22000 + vyslednaProvize;
 
@@ -3800,7 +3809,8 @@ function calcCommission(emp, settings, allEmpsData, penetraceOverride, globalSet
     provizePz, plneniPz, sazbaPz,
     provizeSluzby, plneniSluzby, stropSluzby,
     provizePrislusenství, plneniPrislusenství, stropPrislusenství,
-    korunovaMot, celkPlneni, koef,
+    korunovaMot, rozv1, rozv2, adminH, provizeRozvozAdmin,
+    celkPlneni, koef,
     zaklad, vyslednaProvize, hrubaMzda,
   };
 }
@@ -3815,12 +3825,11 @@ function PlneniDot({v}){
 }
 
 // ── Pomocník: spočítej plánované hodiny z rozvrhu ────────────
-// Přesně stejná logika jako SummaryTable sloupec "Naplánováno"
+// Pro provize: počítáme jen work + vacation + sick, NE dayOff/obstacle
 // POZOR: month je 0-based (stejně jako v JS Date)
 function calcPlannedHours(emp, storeId, year, month, sched, holidays, stores, patterns, employees){
   const dim = getDim(year, month);
   let planned = 0;
-  // empIdx musí být stejný jako v ScheduleView – zahrnuje pouze mainStore zaměstnance
   const mainEmps = employees.filter(e=>e.active && e.mainStore===storeId);
   const empIdx = mainEmps.findIndex(e=>e.id===emp.id);
   for(let d=1; d<=dim; d++){
@@ -3830,16 +3839,18 @@ function calcPlannedHours(emp, storeId, year, month, sched, holidays, stores, pa
     if(cell?.length){
       const ws = cell.filter(s=>s.type==="work"&&s.from&&s.to);
       const vac = cell.find(s=>s.type==="vacation"||s.type==="sick");
-      const oth = cell.find(s=>s.type!=="work"&&s.type!=="vacation"&&s.type!=="sick");
+      // Pro provize: dayOff, obstacle a jiné absence NEPOČÍTÁME
+      // (zaměstnanec nebyl přítomen, neměl příležitost prodávat)
       if(ws.length){
         planned += calcSplitWorked(ws, emp.mainStore, stores);
         if(vac) planned += (vac.hours||0);
-      } else if(vac||oth){
-        planned += ((vac||oth).hours||0);
+      } else if(vac){
+        // Pouze dovolená/nemoc se počítá do hodinového fondu pro provize
+        planned += (vac.hours||0);
       }
-      // Pozor: pokud je cell prázdné pole [], nepočítáme nic (explicitní volno/absence)
+      // dayOff, obstacle → 0 hodin pro provize
     } else {
-      // Ze vzoru – respektuj sváteční čas
+      // Ze vzoru
       const hol = holidays.find(h=>h.date===ds);
       const date = new Date(year, month, d);
       const pc = getPatCell(patterns, storeId, empIdx, date);
@@ -3849,7 +3860,7 @@ function calcPlannedHours(emp, storeId, year, month, sched, holidays, stores, pa
         const [fr,to] = getEmpShiftTimes(emp, lId, st, dow, stores, typeof pc==="object"?pc:null, hol);
         if(fr&&to) planned += calcWorked(fr, to, getBreakRules(lId, stores));
       }
-      // pc===null → vzor říká volno → nepočítáme
+      // pc===null → vzor říká volno → 0
     }
   }
   return Math.round(planned * 10) / 10;
@@ -4699,6 +4710,20 @@ function CommissionResults({employees, stores}){
                   <div style={{marginTop:4,fontSize:13,color:"#1B4F8A",fontWeight:700}}>{czk(c.korunovaMot)}</div>
                   <div style={{marginTop:4,fontSize:11,color:"#aaa"}}>Dodavatelské provize · nekrátí se</div>
                 </div>
+
+                {/* Rozvoz+Admin – zobrazí se jen pokud má hodnotu */}
+                {(c.rozv1>0||c.rozv2>0||c.adminH>0)&&<div style={{background:"#fff",borderRadius:10,padding:"12px 14px",border:"1px solid #e8e8f0"}}>
+                  <div style={{display:"flex",justifyContent:"space-between",marginBottom:6}}>
+                    <span style={{fontWeight:700,fontSize:13,color:"#1a1a2e"}}>🚚 Rozvoz+Admin</span>
+                    <span style={{fontSize:11,color:"#aaa",fontWeight:600}}>mimo krácení</span>
+                  </div>
+                  <div style={{fontSize:12,color:"#888",marginBottom:4}}>
+                    {c.rozv1>0&&<div>Rozvoz 1: <strong>{c.rozv1}×</strong></div>}
+                    {c.rozv2>0&&<div>Rozvoz 2: <strong>{c.rozv2}×</strong></div>}
+                    {c.adminH>0&&<div>Admin práce: <strong>{c.adminH}h</strong></div>}
+                  </div>
+                  <div style={{marginTop:4,fontSize:13,color:"#1B4F8A",fontWeight:700}}>{czk(c.provizeRozvozAdmin)}</div>
+                </div>}
               </div>
               {/* Motivační banner */}
               {moznyZisk>50&&<div style={{marginBottom:12,padding:"14px 16px",background:"#fef9c3",borderRadius:8,border:"1px solid #fde047"}}>
@@ -4722,7 +4747,7 @@ function CommissionResults({employees, stores}){
               {/* Výpočet provize */}
               <div style={{background:"#fff",borderRadius:8,padding:"10px 14px",border:"1px solid #e8e8f0",fontSize:12,color:"#555",lineHeight:2}}>
                 <span style={{fontWeight:700,color:"#1a1a2e"}}>Výpočet: </span>
-                ({czk(c.provizeObrat)} + {czk(c.provizePz)} + {czk(c.provizeSluzby)} + {czk(c.provizePrislusenství)} + {czk(c.korunovaMot)})
+                ({czk(c.provizeObrat)} + {czk(c.provizePz)} + {czk(c.provizeSluzby)} + {czk(c.provizePrislusenství)} + {czk(c.korunovaMot)}{c.provizeRozvozAdmin>0&&` + ${czk(c.provizeRozvozAdmin)} R+A`})
                 × {koefPct} % = {czk(c.zaklad)}
                 {c.bonusObrat>0&&<> + bonus {czk(c.bonusObrat)}</>}
                 {" "}= <strong style={{color:"#1B4F8A"}}>{czk(c.vyslednaProvize)}</strong>
