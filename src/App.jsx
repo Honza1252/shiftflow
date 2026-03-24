@@ -954,7 +954,7 @@ function ScheduleView({storeId,employees,year,month,sched,onCellEdit,actions,hol
     if(cell?.length){
       const workSegs=cell.filter(s=>s.type==="work");
       const vacSeg=cell.find(s=>s.type==="vacation"||s.type==="sick");
-      const otherAbsSeg=cell.find(s=>s.type!=="work"&&s.type!=="vacation"&&s.type!=="sick");
+      const otherAbsSeg=cell.find(s=>s.type!=="work"&&s.type!=="vacation"&&s.type!=="sick"&&s.type!=="dayOff");
       const absSeg=vacSeg||otherAbsSeg;
 
       if(workSegs.length&&vacSeg){
@@ -2259,7 +2259,7 @@ function calcKdpCumulative(emp, toYear, toMonth, sched, holidays, stores, patter
       if(cell?.length){
         const workSegs = cell.filter(s=>s.type==="work" && s.from && s.to);
         const vacSeg   = cell.find(s=>s.type==="vacation"||s.type==="sick");
-        const otherAbs = cell.find(s=>s.type!=="work"&&s.type!=="vacation"&&s.type!=="sick");
+        const otherAbs = cell.find(s=>s.type!=="work"&&s.type!=="vacation"&&s.type!=="sick"&&s.type!=="dayOff");
         if(workSegs.length){ planned += calcSplitWorked(workSegs, emp.mainStore, stores); if(vacSeg) planned += (vacSeg.hours||0); }
         else if(vacSeg||otherAbs){ planned += ((vacSeg||otherAbs).hours||0); }
       } else {
@@ -2335,7 +2335,7 @@ function SummaryTable({storeId, employees, year, month, sched, holidays, stores,
               // Ruční záznam má přednost
               const workSegs = cell.filter(s=>s.type==="work" && s.from && s.to);
               const vacSeg   = cell.find(s=>s.type==="vacation"||s.type==="sick");
-              const otherAbs = cell.find(s=>s.type!=="work"&&s.type!=="vacation"&&s.type!=="sick");
+              const otherAbs = cell.find(s=>s.type!=="work"&&s.type!=="vacation"&&s.type!=="sick"&&s.type!=="dayOff");
 
               if(workSegs.length){
                 // Práce (případně i s dovolenou) – reálné hodiny práce
