@@ -29,6 +29,7 @@ function dbToEmp(r){
     contractHoursWeek: r.contract_hours_week,
     vacHours: r.vac_hours,
     kdpStart: r.kdp_start||0,
+    startDate: r.start_date||null,
     active: r.active,
     customTimes: r.custom_times||{},
   };
@@ -44,6 +45,7 @@ function empToDB(e){
     contract_hours_week: e.contractHoursWeek,
     vac_hours: e.vacHours,
     kdp_start: e.kdpStart||0,
+    start_date: e.startDate||null,
     active: e.active,
     custom_times: e.customTimes||{},
   };
@@ -309,6 +311,46 @@ function getWorkingDays(y,m,holidays){
     if(getDow(y,m,d)<5) c++;
   return c;
 }
+// Vrátí startDate zaměstnance jako Date objekt nebo null
+function empStartDate(emp){
+  if(!emp.startDate) return null;
+  const d = new Date(emp.startDate);
+  return isNaN(d) ? null : d;
+}
+// Vrátí true pokud je zaměstnanec aktivní v daném měsíci (year, month 0-indexed)
+// Stávající zaměstnanci (startDate před APP_START nebo null) → vždy true
+function isEmpActiveInMonth(emp, year, month){
+  const sd = empStartDate(emp);
+  if(!sd) return true;
+  const appStart = new Date(2026,1,1); // APP_START
+  if(sd < appStart) return true; // historické datum = pouze informační
+  // Nový zaměstnanec: aktivní od měsíce nástupu
+  if(year > sd.getFullYear()) return true;
+  if(year === sd.getFullYear() && month >= sd.getMonth()) return true;
+  return false;
+}
+// Vrátí poměrný počet pracovních dní pro nástupní měsíc
+function getWorkingDaysFrom(y, m, fromDate, holidays){
+  let c=0;
+  const startDay = fromDate.getFullYear()===y && fromDate.getMonth()===m ? fromDate.getDate() : 1;
+  for(let d=startDay;d<=getDim(y,m);d++)
+    if(getDow(y,m,d)<5) c++;
+  return c;
+}
+// Fond hodin s ohledem na datum nástupu
+function getEmpFund(emp, year, month, holidays){
+  const sd = empStartDate(emp);
+  const appStart = new Date(2026,1,1);
+  if(!sd || sd < appStart){
+    return getWorkingDays(year, month, holidays) * empContractDay(emp);
+  }
+  // Nástupní měsíc – poměrný fond
+  if(sd.getFullYear()===year && sd.getMonth()===month){
+    return getWorkingDaysFrom(year, month, sd, holidays) * empContractDay(emp);
+  }
+  return getWorkingDays(year, month, holidays) * empContractDay(emp);
+}
+
 // Počet svátků zavřeno v daném měsíci (pro informaci)
 function getHolidayDays(y,m,holidays){
   let c=0;
@@ -485,6 +527,16 @@ function EmployeeForm({initial, stores, onSave, onClose}){
       </div>
       <FInput label="Dovolená (h/rok)" type="number" value={form.vacHours} onChange={v=>upd("vacHours",Number(v))}/>
       <FInput label="Počáteční KDP (hodiny)" type="number" value={form.kdpStart} onChange={v=>upd("kdpStart",Number(v))}/>
+      <div style={{display:"flex",flexDirection:"column",gap:4}}>
+        <FInput label="Datum nástupu" type="date" value={form.startDate||""} onChange={v=>upd("startDate",v||null)}/>
+        <div style={{fontSize:11,color:"#aaa",paddingLeft:2}}>
+          {form.startDate && new Date(form.startDate) < new Date(2026,1,1)
+            ? "ℹ️ Datum před spuštěním aplikace – pouze informační, nemá vliv na rozvrh ani fond."
+            : form.startDate
+              ? "✅ Zaměstnanec se zobrazí až od tohoto data."
+              : "Nevyplněno = zaměstnanec bez omezení (stávající)."}
+        </div>
+      </div>
       {initial.id&&<label style={{display:"flex",alignItems:"center",gap:8,fontSize:13,fontWeight:600,cursor:"pointer",padding:"8px 0"}}>
         <input type="checkbox" checked={form.active} onChange={e=>upd("active",e.target.checked)}/>
         Aktivní zaměstnanec
@@ -741,7 +793,7 @@ function PatternEditor({storeId, employees, patterns, stores, onSave, onClose}){
           return <tr key={emp.id} style={{background:ei%2===0?"#fff":"#fafafe"}}>
             <td style={{padding:"6px 10px",fontWeight:600,fontSize:12,color:C.topbar,borderBottom:`1px solid ${C.border}`,whiteSpace:"nowrap"}}>
               <div style={{display:"flex",alignItems:"center",gap:5}}>
-                {emp.lastName} {emp.firstName}
+                {emp.firstName} {emp.lastName}
                 {isShared&&<span style={{fontSize:9,background:"#e8f0fe",color:"#1565c0",padding:"1px 4px",borderRadius:3,fontWeight:700}}>SD</span>}
                 {hasCustom&&<span style={{fontSize:9,background:"#fff3e0",color:"#e65100",padding:"1px 4px",borderRadius:3,fontWeight:700}}>CT</span>}
               </div>
@@ -808,7 +860,7 @@ function CellEditor({emp, date, year, month, current, viewStoreId, stores, emplo
 
   return <div style={{display:"flex",flexDirection:"column",gap:14}}>
     <div style={{fontSize:13,fontWeight:600,color:"#888"}}>
-      {DOW_LBL[dow]} {date.getDate()}.{month+1}.{year} — <strong style={{color:C.topbar}}>{emp.lastName} {emp.firstName}</strong>
+      {DOW_LBL[dow]} {date.getDate()}.{month+1}.{year} — <strong style={{color:C.topbar}}>{emp.firstName} {emp.lastName}</strong>
     </div>
     {isShared&&<div style={{padding:"8px 12px",background:"#e8f0fe",borderRadius:8,fontSize:12,color:"#1565c0",fontWeight:600}}>
       🔗 Sdílený – edituje vedoucí <strong>{ownerStore?.name}</strong>. Propíše se do: {(emp.extraStores||[]).map(id=>stores.find(s=>s.id===id)?.name).join(", ")}
@@ -875,7 +927,7 @@ function CellEditor({emp, date, year, month, current, viewStoreId, stores, emplo
 
 // ─── SCHEDULE VIEW ───────────────────────────────────────────
 function ScheduleView({storeId,employees,year,month,sched,onCellEdit,actions,holidays,stores,patterns}){
-  const mainEmps=employees.filter(e=>e.active&&e.mainStore===storeId);
+  const mainEmps=employees.filter(e=>e.active&&e.mainStore===storeId&&isEmpActiveInMonth(e,year,month));
 
   // Sdílení zaměstnanci se zobrazí pokud mají v tomto měsíci alespoň jednu směnu (nebo část směny) v této prodejně
   const mirrorEmps=employees.filter(e=>{
@@ -939,6 +991,13 @@ function ScheduleView({storeId,employees,year,month,sched,onCellEdit,actions,hol
   // Vyhodnotí co zobrazit v buňce
   const evalCell=(emp,d)=>{
     if(!isCur(d)) return {bg:"#fafafa",lines:[],hrs:null,txtColor:"#ddd",clickable:false};
+    // Datum nástupu – buňky před nástupem jsou šedé a neklikatelné
+    const sd=empStartDate(emp);
+    const appStart=new Date(2026,1,1);
+    if(sd && sd>=appStart){
+      const cellDate=new Date(d.getFullYear(),d.getMonth(),d.getDate());
+      if(cellDate<sd) return {bg:"#f0f0f0",lines:[""],hrs:null,txtColor:"#ddd",clickable:false};
+    }
     const dow=d.getDay()===0?6:d.getDay()-1;
     const dateStr=ds(d);
     const hol=getHol(d);
@@ -1069,7 +1128,7 @@ function ScheduleView({storeId,employees,year,month,sched,onCellEdit,actions,hol
             return <tr key={emp.id} style={{background:ei%2===0?"#fff":"#fafafe"}}>
               <td style={{padding:"4px 10px",fontSize:12,fontWeight:600,borderBottom:`1px solid ${C.border}`,whiteSpace:"nowrap"}}>
                 <div style={{color:isMirrorRow?"#888":C.topbar,display:"flex",alignItems:"center",gap:4}}>
-                  {emp.lastName} {emp.firstName}
+                  {emp.firstName} {emp.lastName}
                   {isMirrorRow&&<span style={{fontSize:9,background:"#e8f0fe",color:"#1565c0",padding:"1px 4px",borderRadius:3,fontWeight:700}}>SD</span>}
                 </div>
                 <div style={{fontSize:10,color:"#bbb",fontWeight:400}}>{emp.role} · {empContractDay(emp)}h/den</div>
@@ -1297,7 +1356,7 @@ function LoginModal({emp, onClose}){
     const hash = pwd1 ? await sha256hex(pwd1) : null;
     const upsertData = {
       emp_id: emp.id, login: loginVal.trim().toLowerCase(),
-      role, name: (emp.lastName+" "+emp.firstName).trim(),
+      role, name: (emp.firstName+" "+emp.lastName).trim(),
       store_ids: storeIds,
     };
     if(hash) upsertData.password_hash = hash;
@@ -1358,7 +1417,7 @@ function EmployeesView({employees,setEmployees,stores}){
   const [editEmp,setEditEmp]=useState(null);
   const [showNew,setShowNew]=useState(false);
   const [loginEmp,setLoginEmp]=useState(null);
-  const newEmpTemplate={firstName:"",lastName:"",mainStore:1,extraStores:[],role:"",contractHoursDay:8,contractHoursWeek:40,vacHours:160,kdpStart:0,active:true,customTimes:{}};
+  const newEmpTemplate={firstName:"",lastName:"",mainStore:1,extraStores:[],role:"",contractHoursDay:8,contractHoursWeek:40,vacHours:160,kdpStart:0,startDate:"",active:true,customTimes:{}};
 
   return <div>
     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
@@ -1378,9 +1437,15 @@ function EmployeesView({employees,setEmployees,stores}){
             const shared=(emp.extraStores||[]).length>0;
             const hasCT=Object.keys(emp.customTimes||{}).length>0;
             return <tr key={emp.id} style={{background:i%2===0?"#fff":"#fafafe"}}>
-              <td style={{padding:"8px 10px",fontWeight:600,color:C.topbar,borderBottom:`1px solid ${C.border}`}}>{emp.lastName} {emp.firstName}</td>
+              <td style={{padding:"8px 10px",fontWeight:600,color:C.topbar,borderBottom:`1px solid ${C.border}`}}>{emp.firstName} {emp.lastName}</td>
               <td style={{padding:"8px 10px",color:"#666",borderBottom:`1px solid ${C.border}`}}>{emp.role}</td>
-              <td style={{padding:"8px 10px",borderBottom:`1px solid ${C.border}`}}><Badge color="#e8f5e9" textColor="#2e7d32">{empContractDay(emp)}h / {empContractWeek(emp)}h týdně</Badge></td>
+              <td style={{padding:"8px 10px",borderBottom:`1px solid ${C.border}`}}>
+                <Badge color="#e8f5e9" textColor="#2e7d32">{empContractDay(emp)}h / {empContractWeek(emp)}h týdně</Badge>
+                {emp.startDate&&<div style={{fontSize:10,color:"#aaa",marginTop:3}}>
+                  Nástup: <strong style={{color: new Date(emp.startDate)>=new Date(2026,1,1)?"#1565c0":"#bbb"}}>{emp.startDate}</strong>
+                  {new Date(emp.startDate)<new Date(2026,1,1)&&<span style={{color:"#ccc"}}> (inf.)</span>}
+                </div>}
+              </td>
               <td style={{padding:"8px 10px",borderBottom:`1px solid ${C.border}`}}>{stores.find(s=>s.id===emp.mainStore)?.name}</td>
               <td style={{padding:"8px 10px",borderBottom:`1px solid ${C.border}`}}>
                 {shared
@@ -1403,12 +1468,12 @@ function EmployeesView({employees,setEmployees,stores}){
         </table>
       </div>;
     })}
-    <Modal open={!!editEmp} onClose={()=>setEditEmp(null)} title={`Upravit – ${editEmp?.lastName} ${editEmp?.firstName}`} width={600}>
+    <Modal open={!!editEmp} onClose={()=>setEditEmp(null)} title={`Upravit – ${editEmp?.firstName} ${editEmp?.lastName}`} width={600}>
       {editEmp&&<EmployeeForm initial={editEmp} stores={stores}
         onSave={f=>{setEmployees(p=>p.map(e=>e.id===editEmp.id?{...e,...f}:e));setEditEmp(null);}}
         onClose={()=>setEditEmp(null)}/>}
     </Modal>
-    <Modal open={!!loginEmp} onClose={()=>setLoginEmp(null)} title={`Přihlašovací údaje – ${loginEmp?.lastName} ${loginEmp?.firstName}`} width={480}>
+    <Modal open={!!loginEmp} onClose={()=>setLoginEmp(null)} title={`Přihlašovací údaje – ${loginEmp?.firstName} ${loginEmp?.lastName}`} width={480}>
       {loginEmp&&<LoginModal emp={loginEmp} onClose={()=>setLoginEmp(null)}/>}
     </Modal>
     <Modal open={showNew} onClose={()=>setShowNew(false)} title="Přidat zaměstnance" width={600}>
@@ -1450,7 +1515,7 @@ function EmployeesView({employees,setEmployees,stores}){
 function TimesheetView({employee, year, month, holidays, stores, sched, employees, patterns, rows, onRowChange, timesheetData, onKdpPaidChange, canEditKdp=true, tsStatus="draft", onSubmit, onApprove, onReturn, isVedouci=false}){
   const dim = getDim(year, month);
   const brRules = getBreakRules(employee.mainStore, stores);
-  const fund = getWorkingDays(year, month, holidays) * empContractDay(employee);
+  const fund = getEmpFund(employee, year, month, holidays);
   const holidayDays = getHolidayDays(year, month, holidays);
   const upd = (d,f,v) => onRowChange(d,f,v);
   const contractDay = empContractDay(employee);
@@ -1684,7 +1749,7 @@ function TimesheetView({employee, year, month, holidays, stores, sched, employee
     ];
 
     // Řádek 1 – název
-    const r1 = ws.addRow([`Výkaz práce – ${employee.lastName} ${employee.firstName}`]);
+    const r1 = ws.addRow([`Výkaz práce – ${employee.firstName} ${employee.lastName}`]);
     r1.getCell(1).font = {bold:true, size:13};
     ws.mergeCells(1,1,1,13);
 
@@ -1805,7 +1870,7 @@ function TimesheetView({employee, year, month, holidays, stores, sched, employee
     // ── Záhlaví ──
     doc.setFont("helvetica","bold");
     doc.setFontSize(13);
-    doc.text(cz(`Výkaz práce – ${employee.lastName} ${employee.firstName}`), marginL, 14);
+    doc.text(cz(`Výkaz práce – ${employee.firstName} ${employee.lastName}`), marginL, 14);
     doc.setFont("helvetica","normal");
     doc.setFontSize(8);
     doc.text(cz(`${MONTHS[month]} ${year}  |  Fond: ${fund}h  |  Prodejna: ${storeName}  |  Role: ${employee.role}`), marginL, 20);
@@ -1969,7 +2034,7 @@ function TimesheetView({employee, year, month, holidays, stores, sched, employee
     doc.line(podpisX + podpisLabelW + 1, pageH - 14, pageW - marginL, pageH - 14);
     doc.setFontSize(7);
     doc.setTextColor(160,160,160);
-    doc.text(cz(`${employee.lastName} ${employee.firstName}`), podpisX + podpisLabelW + 1, pageH - 10);
+    doc.text(cz(`${employee.firstName} ${employee.lastName}`), podpisX + podpisLabelW + 1, pageH - 10);
 
     doc.save(`Vykaz_${employee.firstName}_${employee.lastName}_${MONTHS[month]}_${year}.pdf`);
   };
@@ -1977,7 +2042,7 @@ function TimesheetView({employee, year, month, holidays, stores, sched, employee
   return <div>
     {/* Hlavička */}
     <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:12,flexWrap:"wrap"}}>
-      <div style={{fontSize:20,fontWeight:800,color:C.topbar}}>{employee.lastName} {employee.firstName}</div>
+      <div style={{fontSize:20,fontWeight:800,color:C.topbar}}>{employee.firstName} {employee.lastName}</div>
       <Badge color="#e3f2fd" textColor="#1565c0">{MONTHS[month]} {year}</Badge>
       <Badge color="#f3e5f5" textColor="#6a1b9a">Fond: {fund}h</Badge>
       {holidayDays>0&&<Badge color="#ffebee" textColor="#c62828">Svátky zavřeno: {holidayDays} dní</Badge>}
@@ -2291,7 +2356,7 @@ function calcKdpCumulative(emp, toYear, toMonth, sched, holidays, stores, patter
 }
 
 function SummaryTable({storeId, employees, year, month, sched, holidays, stores, patterns, timesheetData}){
-  const emps = employees.filter(e=>e.active && e.mainStore===storeId);
+  const emps = employees.filter(e=>e.active && e.mainStore===storeId && isEmpActiveInMonth(e,year,month));
   const dim  = getDim(year, month);
   const wd   = getWorkingDays(year, month, holidays);
 
@@ -2325,7 +2390,7 @@ function SummaryTable({storeId, employees, year, month, sched, holidays, stores,
       </thead>
       <tbody>
         {emps.map((emp, i)=>{
-          const fund = wd * empContractDay(emp);
+          const fund = getEmpFund(emp, year, month, holidays);
 
           // Naplánované hodiny – vzor + ruční změny v rozvrhu
           const mainStoreEmps = employees.filter(e=>e.active&&e.mainStore===storeId);
@@ -2390,7 +2455,7 @@ function SummaryTable({storeId, employees, year, month, sched, holidays, stores,
 
           return <tr key={emp.id} style={{background: i%2===0?"#fff":"#fafafe"}}>
             <td style={{padding:"8px 10px", fontWeight:700, color:C.topbar, borderBottom:`1px solid ${C.border}`, whiteSpace:"nowrap"}}>
-              {emp.lastName} {emp.firstName}
+              {emp.firstName} {emp.lastName}
               <div style={{fontSize:10,color:"#bbb",fontWeight:400}}>{emp.role} · {empContractDay(emp)}h/den · {empContractWeek(emp)}h/týden</div>
             </td>
             <td style={{padding:"8px 10px",textAlign:"center",borderBottom:`1px solid ${C.border}`,color:"#555"}}>{fmtH(fund)}</td>
@@ -2904,7 +2969,7 @@ function MainApp({currentUser, handleLogout}){
   const exportSchedExcel = async () => {
     const storeName = stores.find(s=>s.id===storeId)?.name||"";
     const dim = getDim(year,month);
-    const mainEmps = employees.filter(e=>e.active&&e.mainStore===storeId);
+    const mainEmps = employees.filter(e=>e.active&&e.mainStore===storeId&&isEmpActiveInMonth(e,year,month));
     const wb = new ExcelJS.Workbook();
     const ws = wb.addWorksheet(`${MONTHS[month]} ${year}`);
 
@@ -3003,7 +3068,7 @@ ${d}${hol?"!":"."}`;
       // Radky zamestnancu
       mainEmps.forEach((emp,ri)=>{
         const empIdx=mainEmps.findIndex(e=>e.id===emp.id);
-        const rowCells=[`${emp.lastName} ${emp.firstName}`,emp.role];
+        const rowCells=[`${emp.firstName} ${emp.lastName}`,emp.role];
         const rowColors=[];
         const rowFonts=[];
         for(let di=0;di<7;di++){
@@ -3108,7 +3173,7 @@ ${d}${hol?"!":"."}`;
       const vacLeft=emp.vacHours-vacUsed;
       const altBg=ri%2===0?"FFFFFFFF":"FFF8F9FC";
       const sRow=ws.addRow([
-        `${emp.lastName} ${emp.firstName}`,
+        `${emp.firstName} ${emp.lastName}`,
         fmtH2(fund2), fmtH2(planned),
         (ot>=0?"+":"")+fmtH2(ot),
         fmtHs(kdp),
@@ -3155,7 +3220,7 @@ ${d}${hol?"!":"."}`;
   const exportSchedPdf = () => {
     const storeName = stores.find(s=>s.id===storeId)?.name||"";
     const dim = getDim(year,month);
-    const mainEmps = employees.filter(e=>e.active&&e.mainStore===storeId);
+    const mainEmps = employees.filter(e=>e.active&&e.mainStore===storeId&&isEmpActiveInMonth(e,year,month));
     const doc = new jsPDF({orientation:"portrait",unit:"mm",format:"a4"});
     const pageW=210; const pageH=297;
     const mL=8; const mR=8; const mT=8; const mB=6;
@@ -3308,7 +3373,7 @@ ${d}${hol?"!":"."}`;
         doc.setFillColor(altBg[0],altBg[1],altBg[2]);
         doc.rect(mL, y, nameW, rowH, "F");
         doc.setFont("helvetica","bold"); doc.setFontSize(fNameSize); doc.setTextColor(26,26,46);
-        doc.text(cz(`${emp.lastName} ${emp.firstName}`).substring(0,20), mL+2, y+rowH*0.65);
+        doc.text(cz(`${emp.firstName} ${emp.lastName}`).substring(0,20), mL+2, y+rowH*0.65);
         // 7 dnu
         for(let di=0;di<7;di++){
           const d=wDays[di];
@@ -3416,7 +3481,7 @@ ${d}${hol?"!":"."}`;
       const vacLeft=emp.vacHours-vacUsed;
       const altBg=ri%2===0?[255,255,255]:[248,249,252];
       sx=mL;
-      const vals=[cz(`${emp.lastName} ${emp.firstName}`),fmtH2(fund2),fmtH2(planned),(ot>=0?"+":"")+fmtH2(ot),fmtHs(kdp),fmtH2(emp.vacHours),fmtH2(vacUsed),fmtH2(vacLeft)];
+      const vals=[cz(`${emp.firstName} ${emp.lastName}`),fmtH2(fund2),fmtH2(planned),(ot>=0?"+":"")+fmtH2(ot),fmtHs(kdp),fmtH2(emp.vacHours),fmtH2(vacUsed),fmtH2(vacLeft)];
       const tcs=[[26,26,46],[80,82,100],[26,26,46],ot>0?[46,125,50]:ot<0?[198,40,40]:[120,120,130],kdp>0?[21,101,192]:kdp<0?[198,40,40]:[120,120,130],[80,82,100],[21,101,192],vacLeft>0?[46,125,50]:[198,40,40]];
       sHdrs.forEach((_,hi)=>{
         doc.setFillColor(altBg[0],altBg[1],altBg[2]);
@@ -3436,7 +3501,16 @@ ${d}${hol?"!":"."}`;
     doc.save(`Rozvrh_${storeName}_${MONTHS[month]}_${year}.pdf`);
   };
 
-  const mOpts=MONTHS.map((m,i)=>({value:i,label:m})).filter(o=>!(year===APP_START.year&&o.value<APP_START.month));
+  const _empSd = empStartDate(employee);
+  const _appStart = new Date(2026,1,1);
+  const _empStartYear = _empSd && _empSd>=_appStart ? _empSd.getFullYear() : null;
+  const _empStartMonth = _empSd && _empSd>=_appStart ? _empSd.getMonth() : null;
+  const mOpts=MONTHS.map((m,i)=>({value:i,label:m})).filter(o=>{
+    if(year===APP_START.year && o.value<APP_START.month) return false;
+    if(_empStartYear!==null && year===_empStartYear && o.value<_empStartMonth) return false;
+    if(_empStartYear!==null && year<_empStartYear) return false;
+    return true;
+  });
   const curYear=new Date().getFullYear();
   const yOpts=Array.from({length:curYear+2-APP_START.year+1},(_,i)=>APP_START.year+i).map(y=>({value:y,label:String(y)}));
   const isVedouci = currentUser.role==="admin"||currentUser.role==="vedouci";
@@ -3444,15 +3518,15 @@ ${d}${hol?"!":"."}`;
 
   // Filtruj zaměstnance pro výkaz dle role
   const tsEmpList = (() => {
-    if(currentUser.role==="admin") return employees.filter(e=>e.active);
-    if(currentUser.role==="vedouci") return employees.filter(e=>e.active && e.mainStore===storeId);
+    if(currentUser.role==="admin") return employees.filter(e=>e.active && isEmpActiveInMonth(e,year,month));
+    if(currentUser.role==="vedouci") return employees.filter(e=>e.active && e.mainStore===storeId && isEmpActiveInMonth(e,year,month));
     // Prodavač – jen sám sebe
     const me = employees.find(e=>e.id===currentUser.empId || 
-      (e.lastName+" "+e.firstName).trim().toLowerCase()===currentUser.name?.toLowerCase() ||
+      (e.firstName+" "+e.lastName).trim().toLowerCase()===currentUser.name?.toLowerCase() ||
       e.firstName.toLowerCase()===currentUser.name?.toLowerCase().split(" ")[0]);
     return me ? [me] : [];
   })();
-  const eOpts=[{value:"",label:"— vyberte zaměstnance —"},...tsEmpList.map(e=>({value:e.id,label:`${e.lastName} ${e.firstName}`}))];
+  const eOpts=[{value:"",label:"— vyberte zaměstnance —"},...tsEmpList.map(e=>({value:e.id,label:`${e.firstName} ${e.lastName}`}))];
   const tabs=[
     {key:"schedule",  label:"📅 Rozvrh"},
     {key:"timesheet", label:"📋 Výkaz"},
@@ -3544,7 +3618,7 @@ ${d}${hol?"!":"."}`;
           {/* Prodavač vidí jen sebe – bez selectu */}
           {!isZamestnanec&&<FSel label="Zaměstnanec" value={tsEmp||""} onChange={v=>setTsEmp(v?Number(v):null)} options={eOpts} style={{minWidth:220}}/>}
           {isZamestnanec&&tsEmp&&<div style={{padding:"7px 14px",background:"#f8f9ff",borderRadius:8,border:`1.5px solid ${C.border}`,fontSize:14,fontWeight:600,color:C.topbar}}>
-            👤 {tsEmpList[0]?.lastName} {tsEmpList[0]?.firstName}
+            👤 {tsEmpList[0]?.firstName} {tsEmpList[0]?.lastName}
           </div>}
           <FSel label="Měsíc" value={month} onChange={v=>setMonth(Number(v))} options={mOpts} style={{minWidth:130}}/>
           <FSel label="Rok" value={year} onChange={v=>setYear(Number(v))} options={yOpts} style={{minWidth:90}}/>
@@ -3563,7 +3637,7 @@ ${d}${hol?"!":"."}`;
             <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
               {pending.map(e=><button key={e.id} onClick={()=>setTsEmp(e.id)}
                 style={{padding:"4px 12px",borderRadius:20,background:"#fff",border:"1.5px solid #ffb300",color:"#e65100",fontWeight:600,fontSize:12,cursor:"pointer"}}>
-                {e.lastName} {e.firstName}
+                {e.firstName} {e.lastName}
               </button>)}
             </div>
           </div>;
@@ -3649,7 +3723,7 @@ ${d}${hol?"!":"."}`;
     <Modal open={showResetTsConfirm} onClose={()=>setShowResetTsConfirm(false)} title="Reset výkazu" width={440}>
       <div style={{display:"flex",flexDirection:"column",gap:20}}>
         <div style={{fontSize:15,color:"#333",lineHeight:1.6}}>
-          Opravdu chcete resetovat výkaz zaměstnance <strong>{employees.find(e=>e.id===tsEmp)?.lastName} {employees.find(e=>e.id===tsEmp)?.firstName}</strong> pro{" "}
+          Opravdu chcete resetovat výkaz zaměstnance <strong>{employees.find(e=>e.id===tsEmp)?.firstName} {employees.find(e=>e.id===tsEmp)?.lastName}</strong> pro{" "}
           <strong>{MONTHS[month]} {year}</strong>?
         </div>
         <div style={{padding:"10px 14px",background:"#fff8e1",borderRadius:8,fontSize:13,color:"#e65100",fontWeight:600}}>
