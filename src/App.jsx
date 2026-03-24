@@ -3424,10 +3424,16 @@ ${d}${hol?"!":"."}`;
   const tsEmpList = (() => {
     if(currentUser.role==="admin") return employees.filter(e=>e.active);
     if(currentUser.role==="vedouci") return employees.filter(e=>e.active && e.mainStore===storeId);
-    // Prodavač – jen sám sebe
-    const me = employees.find(e=>e.id===currentUser.empId || 
-      (e.firstName+" "+e.lastName).trim().toLowerCase()===currentUser.name?.toLowerCase() ||
-      e.firstName.toLowerCase()===currentUser.name?.toLowerCase().split(" ")[0]);
+    // Zamestnanec – jen sám sebe, primárně podle empId z app_users
+    const me = employees.find(e=>
+      // 1. Primární: podle ID uloženého v app_users.emp_id
+      (currentUser.empId && e.id===currentUser.empId) ||
+      // 2. Fallback: celé jméno "firstName lastName" nebo "lastName firstName"
+      (currentUser.name && (
+        `${e.firstName} ${e.lastName}`.trim().toLowerCase()===currentUser.name.toLowerCase() ||
+        `${e.lastName} ${e.firstName}`.trim().toLowerCase()===currentUser.name.toLowerCase()
+      ))
+    );
     return me ? [me] : [];
   })();
   const eOpts=[{value:"",label:"— vyberte zaměstnance —"},...tsEmpList.map(e=>({value:e.id,label:`${e.firstName} ${e.lastName}`}))];
@@ -3671,9 +3677,61 @@ function calcKoefKraceni(plneni, kraceni){
   return 0.00;
 }
 
+// Role které se v provizním systému nezobrazují vůbec
+const COMMISSION_HIDDEN_ROLES = new Set(["Admin","Majitel"]);
+// Role se speciálním režimem (bez plánu, bez krácení, provize rovnou 100%)
+const COMMISSION_SPECIAL_ROLES = new Set(["Rozvoz","Účetní","Brigádník"]);
+
 function calcCommission(emp, settings, allEmpsData, penetraceOverride, globalSettings){
   const s = settings;
   const g = globalSettings || {};
+  const empRole = emp.role || "";
+
+  // Speciální režim: Rozvoz, Účetní, Brigádník – bez plánu, bez krácení, 100% koef
+  if(COMMISSION_SPECIAL_ROLES.has(empRole)){
+    const trzba_pz = Number(emp.trzba_pz)||0;
+    const sazbaPz  = Number(s.sazba_pz)||0.10;
+    const provizePz = trzba_pz * sazbaPz;
+
+    const trzba_sluzby = Number(emp.trzba_sluzby)||0;
+    const sazbaSluzby  = Number(s.sazba_sluzby)||0.10;
+    const stropSluzby  = Number(s.strop_sluzby)||1500;
+    const provizeSluzby = Math.min(trzba_sluzby * sazbaSluzby, stropSluzby);
+
+    const obrat_prislusenství = Number(emp.obrat_prislusenstvi)||0;
+    const sazbaPrisl4 = Number(s.sazba_prisl_4)||0.038;
+    const stropPrisl  = Number(s.strop_prislusenstvi)||4000;
+    const provizePrislusenství = Math.min(obrat_prislusenství * sazbaPrisl4, stropPrisl);
+
+    const obrat = Number(emp.obrat)||0;
+    const obratKoef = (Number(emp.hodiny)||0) >= 160 ? (Number(s.obrat_koef_plny)||0.004) : (Number(s.obrat_koef_zkraceny)||0.003);
+    const provizeObrat = Math.min(obrat * obratKoef, Number(s.obrat_strop)||3000);
+
+    const korunovaMot = Number(emp.korunova_motivace)||0;
+
+    // Rozvoz+Admin odměny
+    const rozv1 = Number(emp.rozvoz1)||0;
+    const rozv2 = Number(emp.rozvoz2)||0;
+    const adminH = Number(emp.admin_prace)||0;
+    const sazbaRoz1  = Number(g.sazba_rozvoz1)||0;
+    const sazbaRoz2  = Number(g.sazba_rozvoz2)||0;
+    const sazbaAdmin = Number(g.sazba_admin)||0;
+    const provizeRozvozAdmin = rozv1*sazbaRoz1 + rozv2*sazbaRoz2 + adminH*sazbaAdmin;
+
+    const vyslednaProvize = provizeObrat + provizePz + provizeSluzby + provizePrislusenství + korunovaMot + provizeRozvozAdmin;
+    return {
+      isSpecialRole: true,
+      provizeObrat, plneniObrat:null, bonusObrat:0,
+      provizePz, plneniPz:null, sazbaPz,
+      provizeSluzby, plneniSluzby:null, stropSluzby,
+      provizePrislusenství, plneniPrislusenství:null, stropPrislusenství:stropPrisl,
+      korunovaMot, rozv1, rozv2, adminH, provizeRozvozAdmin,
+      planObrat:null, planPz:null, planSluzby:null, planPrislusenství:null,
+      celkPlneni:1, koef:1, zaklad:vyslednaProvize,
+      vyslednaProvize, hrubaMzda:22000+vyslednaProvize,
+    };
+  }
+
   const soucetHodin = allEmpsData.reduce((a,e)=>a+(Number(e.hodiny)||0),0);
   if(!soucetHodin) return null;
   const podil = (Number(emp.hodiny)||0) / soucetHodin;
@@ -3757,10 +3815,12 @@ function PlneniDot({v}){
 }
 
 // ── Pomocník: spočítej plánované hodiny z rozvrhu ────────────
-// Stejná logika jako SummaryTable v záložce Rozvrh (sloupec Naplánováno)
+// Přesně stejná logika jako SummaryTable sloupec "Naplánováno"
+// POZOR: month je 0-based (stejně jako v JS Date)
 function calcPlannedHours(emp, storeId, year, month, sched, holidays, stores, patterns, employees){
   const dim = getDim(year, month);
   let planned = 0;
+  // empIdx musí být stejný jako v ScheduleView – zahrnuje pouze mainStore zaměstnance
   const mainEmps = employees.filter(e=>e.active && e.mainStore===storeId);
   const empIdx = mainEmps.findIndex(e=>e.id===emp.id);
   for(let d=1; d<=dim; d++){
@@ -3771,17 +3831,25 @@ function calcPlannedHours(emp, storeId, year, month, sched, holidays, stores, pa
       const ws = cell.filter(s=>s.type==="work"&&s.from&&s.to);
       const vac = cell.find(s=>s.type==="vacation"||s.type==="sick");
       const oth = cell.find(s=>s.type!=="work"&&s.type!=="vacation"&&s.type!=="sick");
-      if(ws.length){ planned += calcSplitWorked(ws, emp.mainStore, stores); if(vac) planned += (vac.hours||0); }
-      else if(vac||oth) planned += ((vac||oth).hours||0);
+      if(ws.length){
+        planned += calcSplitWorked(ws, emp.mainStore, stores);
+        if(vac) planned += (vac.hours||0);
+      } else if(vac||oth){
+        planned += ((vac||oth).hours||0);
+      }
+      // Pozor: pokud je cell prázdné pole [], nepočítáme nic (explicitní volno/absence)
     } else {
+      // Ze vzoru – respektuj sváteční čas
       const hol = holidays.find(h=>h.date===ds);
-      const pc = getPatCell(patterns, storeId, empIdx, new Date(year, month, d));
+      const date = new Date(year, month, d);
+      const pc = getPatCell(patterns, storeId, empIdx, date);
       if(pc){
         const st = typeof pc==="object"?pc.shift||"work":pc;
         const lId = typeof pc==="object"?(pc.loc||storeId):storeId;
         const [fr,to] = getEmpShiftTimes(emp, lId, st, dow, stores, typeof pc==="object"?pc:null, hol);
         if(fr&&to) planned += calcWorked(fr, to, getBreakRules(lId, stores));
       }
+      // pc===null → vzor říká volno → nepočítáme
     }
   }
   return Math.round(planned * 10) / 10;
@@ -4278,7 +4346,7 @@ function CommissionResults({employees, stores}){
   const [results, setResults] = useState([]);
   const [loading, setLoading] = useState(false);
   const [expandedRow, setExpandedRow] = useState(null);
-  const [loadTs] = useState(()=>Date.now()); // mění se při remountu = čerstvý fetch
+  const [loadTs] = useState(()=>Date.now());
   const MONTHS_CZ = ["Leden","Únor","Březen","Duben","Květen","Červen","Červenec","Srpen","Září","Říjen","Listopad","Prosinec"];
 
   useEffect(()=>{
@@ -4287,7 +4355,6 @@ function CommissionResults({employees, stores}){
       setLoading(true);
       const {data:sD} = await supabase.from("commission_settings").select("*").eq("store_id",storeId);
       const settings = sD?.[0] || {koef_pz:0.025,koef_sluzby:0.012,koef_prislusenstvi:0.1465,prumerna_cena_pz:storeId===2?1775:storeId===3?1710:1630,obrat_koef_plny:0.004,obrat_koef_zkraceny:0.003,obrat_strop:3000};
-      // Globální nastavení (váhy + krácení)
       const {data:gD} = await supabase.from("commission_global").select("*").single();
       const globalSett = gD || {vaha_pz:4,vaha_obrat:1,vaha_sluzby:1,vaha_prisl:1,kraceni:null};
       const {data:penD} = await supabase.from("commission_penetrace")
@@ -4296,20 +4363,61 @@ function CommissionResults({employees, stores}){
       const {data:commD} = await supabase.from("commission_data")
         .select("*").eq("store_id",storeId).eq("month",month).eq("year",year);
       if(!commD?.length){ setLoading(false); return; }
-      const emps = employees.filter(e=>e.active&&e.mainStore===storeId);
-      const dataWithNames = commD.map(d=>({
-        ...d,
-        name: ((emps.find(e=>e.id===d.employee_id)?.firstName||"")+" "+(emps.find(e=>e.id===d.employee_id)?.lastName||"")).trim(),
-      }));
+
+      // Načti Rozvoz+Admin z výkazů zaměstnanců
+      const empIds = commD.map(d=>d.employee_id);
+      const {data:tsD} = await supabase.from("timesheets")
+        .select("emp_id,day,roz1,roz2,admin")
+        .in("emp_id", empIds).eq("year",year).eq("month",month);
+
+      // Agreguj Rozvoz+Admin per zaměstnanec
+      const rozvozMap = {};
+      (tsD||[]).forEach(r=>{
+        const id = r.emp_id;
+        if(!rozvozMap[id]) rozvozMap[id] = {roz1:0,roz2:0,adminPrace:0};
+        rozvozMap[id].roz1 += Number(r.roz1)||0;
+        rozvozMap[id].roz2 += Number(r.roz2)||0;
+        rozvozMap[id].adminPrace += Number(r.admin)||0;
+      });
+
+      // Filtruj skryté role, přidej role k datům
+      const emps = employees.filter(e=>e.active&&e.mainStore===storeId&&!COMMISSION_HIDDEN_ROLES.has(e.role));
+      const dataWithNames = commD
+        .filter(d=>emps.some(e=>e.id===d.employee_id))
+        .map(d=>{
+          const emp = emps.find(e=>e.id===d.employee_id);
+          const roz = rozvozMap[d.employee_id]||{roz1:0,roz2:0,adminPrace:0};
+          return {
+            ...d,
+            role: emp?.role||"",
+            name: `${emp?.firstName||""} ${emp?.lastName||""}`.trim(),
+            rozvoz1: roz.roz1,
+            rozvoz2: roz.roz2,
+            admin_prace: roz.adminPrace,
+          };
+        });
+
+      // Pro výpočet celkového plnění: speciální role se nepočítají do soucetHodin
+      const normalCommD = commD.filter(d=>{
+        const emp = employees.find(e=>e.id===d.employee_id);
+        return emp && !COMMISSION_HIDDEN_ROLES.has(emp.role) && !COMMISSION_SPECIAL_ROLES.has(emp.role);
+      });
+
       const calcs = dataWithNames.map(d=>({
         name: d.name||`#${d.employee_id}`,
         data: d,
         settings,
         globalSett,
         penetraceOverride,
-        calc: calcCommission(d, settings, commD, penetraceOverride, globalSett),
+        calc: calcCommission(d, settings, normalCommD, penetraceOverride, globalSett),
         penetraceZdroj: penetraceOverride!=null ? `import (${(penetraceOverride*100).toFixed(2)} %)` : `výchozí (${((Number(settings.koef_prislusenstvi)||0.1465)*100).toFixed(2)} %)`,
-      })).sort((a,b)=>(b.calc?.celkPlneni||0)-(a.calc?.celkPlneni||0));
+      })).sort((a,b)=>{
+        // Speciální role vždy na konec
+        const aSpec = COMMISSION_SPECIAL_ROLES.has(a.data.role)?1:0;
+        const bSpec = COMMISSION_SPECIAL_ROLES.has(b.data.role)?1:0;
+        if(aSpec!==bSpec) return aSpec-bSpec;
+        return (b.calc?.celkPlneni||0)-(a.calc?.celkPlneni||0);
+      });
       setResults(calcs);
       setLoading(false);
     })();
@@ -4396,43 +4504,75 @@ function CommissionResults({employees, stores}){
           const c = r.calc;
           const isExp = expandedRow===i;
           if(!c) return null;
+          const isSpecial = COMMISSION_SPECIAL_ROLES.has(r.data?.role||"");
 
+          // ── Speciální role: holé číslo, bez progress barů ──
+          if(isSpecial) return <div key={i} style={{border:"1.5px solid #e8e8f0",borderRadius:12,background:"#fff",overflow:"hidden"}}>
+            <div style={{display:"flex",alignItems:"center",gap:12,padding:"12px 18px",flexWrap:"wrap",cursor:"pointer"}}
+              onClick={()=>setExpandedRow(isExp?null:i)}>
+              <div style={{minWidth:160,display:"flex",alignItems:"center",gap:8}}>
+                <span style={{fontSize:11,background:"#f0f0f0",color:"#666",borderRadius:4,padding:"1px 6px",fontWeight:700}}>{r.data.role}</span>
+                <span style={{fontWeight:800,fontSize:15,color:"#1a1a2e"}}>{r.name}</span>
+              </div>
+              <div style={{flex:1,fontSize:12,color:"#aaa"}}>Bez plánu · koef. 100 %</div>
+              <div style={{textAlign:"center",marginRight:8}}>
+                <div style={{fontSize:10,color:"#aaa",fontWeight:600}}>PROVIZE</div>
+                <div style={{fontSize:16,fontWeight:800,color:"#1B4F8A"}}>{czk(c.vyslednaProvize)}</div>
+              </div>
+              <span style={{fontSize:16,color:"#ccc"}}>{isExp?"▲":"▼"}</span>
+            </div>
+            {isExp&&<div style={{borderTop:"1px solid #e8e8f0",padding:"12px 18px",background:"#fafafe"}}>
+              <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(160px,1fr))",gap:10}}>
+                {[
+                  {label:"Obrat",         val:czk(r.data.obrat||0),              provize:c.provizeObrat},
+                  {label:"Záruky (PZ)",   val:czk(r.data.trzba_pz||0),           provize:c.provizePz},
+                  {label:"Služby",        val:czk(r.data.trzba_sluzby||0),       provize:c.provizeSluzby},
+                  {label:"Příslušenství", val:czk(r.data.obrat_prislusenstvi||0),provize:c.provizePrislusenství},
+                  {label:"Kor. motivace", val:czk(c.korunovaMot||0),             provize:c.korunovaMot},
+                  ...(c.provizeRozvozAdmin>0?[{label:"Rozvoz+Admin",val:`R1: ${c.rozv1}× · R2: ${c.rozv2}× · Admin: ${c.adminH}h`,provize:c.provizeRozvozAdmin}]:[]),
+                ].map((it,xi)=><div key={xi} style={{background:"#fff",borderRadius:8,padding:"10px 12px",border:"1px solid #e8e8f0"}}>
+                  <div style={{fontWeight:700,fontSize:12,color:"#555",marginBottom:4}}>{it.label}</div>
+                  <div style={{fontSize:12,color:"#888"}}>Skutečnost: <strong>{it.val}</strong></div>
+                  <div style={{fontSize:12,color:"#1B4F8A",marginTop:2}}>Provize: <strong>{czk(it.provize)}</strong></div>
+                </div>)}
+              </div>
+            </div>}
+          </div>;
+
+          // ── Normální role: plný výpočet s progress bary ──
           const items = [
             {
               label:"Záruky (PZ)", done:c.plneniPz, provize:c.provizePz,
               plan:c.planPz, actual:r.data.trzba_pz,
-              chybi:Math.max(0,c.planPz-r.data.trzba_pz), jednotka:"Kč tržby", weight:"4×",
-              // možný zisk při splnění: chybějící tržba × sazba PZ (bez stropu)
-              moznyZiskSlozky: Math.max(0, c.planPz - r.data.trzba_pz) * (Number(r.settings?.sazba_pz)||0.10),
+              chybi:Math.max(0,(c.planPz||0)-r.data.trzba_pz), jednotka:"Kč tržby", weight:"4×",
+              moznyZiskSlozky: Math.max(0, (c.planPz||0) - r.data.trzba_pz) * (Number(r.settings?.sazba_pz)||0.10),
             },
             {
               label:"Obrat", done:c.plneniObrat, provize:c.provizeObrat,
               plan:c.planObrat, actual:r.data.obrat,
-              chybi:Math.max(0,c.planObrat-r.data.obrat), jednotka:"Kč", weight:"1×",
-              // obrat: chybějící obrat × sazba, ale nepřekročit strop
+              chybi:Math.max(0,(c.planObrat||0)-r.data.obrat), jednotka:"Kč", weight:"1×",
               moznyZiskSlozky: Math.max(0,
-                Math.min(c.planObrat * (Number(r.settings?.obrat_koef_plny)||0.004), Number(r.settings?.obrat_strop)||3000)
+                Math.min((c.planObrat||0) * (Number(r.settings?.obrat_koef_plny)||0.004), Number(r.settings?.obrat_strop)||3000)
                 - c.provizeObrat
               ),
             },
             {
               label:"Služby", done:c.plneniSluzby, provize:c.provizeSluzby,
               plan:c.planSluzby, actual:r.data.trzba_sluzby,
-              chybi:Math.max(0,c.planSluzby-r.data.trzba_sluzby), jednotka:"Kč tržby", weight:"1×",
+              chybi:Math.max(0,(c.planSluzby||0)-r.data.trzba_sluzby), jednotka:"Kč tržby", weight:"1×",
               moznyZiskSlozky: Math.min(
-                Math.max(0, c.planSluzby - r.data.trzba_sluzby) * (Number(r.settings?.sazba_sluzby)||0.10),
+                Math.max(0, (c.planSluzby||0) - r.data.trzba_sluzby) * (Number(r.settings?.sazba_sluzby)||0.10),
                 Math.max(0, (Number(r.settings?.strop_sluzby)||1500) - c.provizeSluzby)
               ),
             },
             {
               label:"Příslušenství", done:c.plneniPrislusenství, provize:c.provizePrislusenství,
               plan:c.planPrislusenství, actual:r.data.obrat_prislusenstvi,
-              chybi:Math.max(0,c.planPrislusenství-r.data.obrat_prislusenstvi), jednotka:"Kč", weight:"1×",
+              chybi:Math.max(0,(c.planPrislusenství||0)-r.data.obrat_prislusenstvi), jednotka:"Kč", weight:"1×",
               moznyZiskSlozky: Math.min(
-                Math.max(0, c.planPrislusenství * (Number(r.settings?.sazba_prisl_4)||0.038) - c.provizePrislusenství),
+                Math.max(0, (c.planPrislusenství||0) * (Number(r.settings?.sazba_prisl_4)||0.038) - c.provizePrislusenství),
                 Math.max(0, (Number(r.settings?.strop_prislusenstvi)||4000) - c.provizePrislusenství)
               ),
-              // Info o penetraci pro zobrazení v kartičce
               penetraceInfo: r.penetraceOverride != null
                 ? `${(r.penetraceOverride*100).toFixed(2)} % (import)`
                 : `${((Number(r.settings?.koef_prislusenstvi)||0.1465)*100).toFixed(2)} % (výchozí)`,
@@ -4613,13 +4753,15 @@ function CommissionSettings({stores, onSettingsSaved}){
 
   // Globální nastavení (sdílené pro všechny pobočky)
   const [globalSettings, setGlobalSettings] = useState({
-    prislusenství_prirazka: "0.5",  // % přirážka k penetraci loňského roku
+    prislusenství_prirazka: "0.5",
     vaha_pz: "4", vaha_obrat: "1", vaha_sluzby: "1", vaha_prisl: "1",
-    // Tabulka krácení: 6 pásem [od_pct, koef_pct]
     kraceni: [
       {od:0, koef:0}, {od:10, koef:15}, {od:24, koef:30},
       {od:49, koef:50}, {od:79, koef:90}, {od:99, koef:100},
     ],
+    sazba_rozvoz1: "0",   // Kč za jízdu Rozvoz 1
+    sazba_rozvoz2: "0",   // Kč za jízdu Rozvoz 2
+    sazba_admin:   "0",   // Kč za hodinu Admin práce
   });
   const [savingGlobal, setSavingGlobal] = useState(false);
   const [savedGlobal, setSavedGlobal] = useState(false);
@@ -4684,6 +4826,9 @@ function CommissionSettings({stores, onSettingsSaved}){
         vaha_sluzby: String(gD.vaha_sluzby||1),
         vaha_prisl: String(gD.vaha_prisl||1),
         kraceni: gD.kraceni || [{od:0,koef:0},{od:10,koef:15},{od:24,koef:30},{od:49,koef:50},{od:79,koef:90},{od:99,koef:100}],
+        sazba_rozvoz1: String(gD.sazba_rozvoz1||0),
+        sazba_rozvoz2: String(gD.sazba_rozvoz2||0),
+        sazba_admin:   String(gD.sazba_admin||0),
       });
     }
 
@@ -4733,14 +4878,19 @@ function CommissionSettings({stores, onSettingsSaved}){
 
   const handleSaveGlobal = async()=>{
     setSavingGlobal(true);
+    const prirazkaDisplay = globalSettings.prislusenství_prirazka;
+    const prirazkaDB = (prirazkaDisplay===""||prirazkaDisplay==null) ? 0.005 : Number(prirazkaDisplay)/100;
     await supabase.from("commission_global").upsert({
       id:1,
-      prislusenství_prirazka: (Number(globalSettings.prislusenství_prirazka)||0.5)/100,
+      prislusenství_prirazka: prirazkaDB,
       vaha_pz: Number(globalSettings.vaha_pz)||4,
       vaha_obrat: Number(globalSettings.vaha_obrat)||1,
       vaha_sluzby: Number(globalSettings.vaha_sluzby)||1,
       vaha_prisl: Number(globalSettings.vaha_prisl)||1,
       kraceni: globalSettings.kraceni,
+      sazba_rozvoz1: Number(globalSettings.sazba_rozvoz1)||0,
+      sazba_rozvoz2: Number(globalSettings.sazba_rozvoz2)||0,
+      sazba_admin:   Number(globalSettings.sazba_admin)||0,
     },{onConflict:"id"});
     setSavingGlobal(false); setSavedGlobal(true); setTimeout(()=>setSavedGlobal(false),2500);
     if(onSettingsSaved) onSettingsSaved();
@@ -4762,6 +4912,9 @@ function CommissionSettings({stores, onSettingsSaved}){
       vaha_sluzby: Number(globalSettings.vaha_sluzby)||1,
       vaha_prisl: Number(globalSettings.vaha_prisl)||1,
       kraceni: globalSettings.kraceni,
+      sazba_rozvoz1: Number(globalSettings.sazba_rozvoz1)||0,
+      sazba_rozvoz2: Number(globalSettings.sazba_rozvoz2)||0,
+      sazba_admin:   Number(globalSettings.sazba_admin)||0,
     },{onConflict:"id"});
     // 2) Přepočítej koeficienty v commission_penetrace
     for(const rec of penetraceTable){
@@ -5009,6 +5162,28 @@ function CommissionSettings({stores, onSettingsSaved}){
           </table>
         </div>
       </div>
+
+      {/* Sazby Rozvoz+Admin – speciální role */}
+      <div style={{padding:"0 16px 16px",borderTop:"1px solid #e8e8f0",paddingTop:14}}>
+        <div style={{fontWeight:700,color:"#1a1a2e",marginBottom:8,fontSize:13}}>🚚 Odměny Rozvoz+Admin (pro role: Rozvoz, Účetní, Brigádník)</div>
+        <div style={{fontSize:11,color:"#888",marginBottom:10}}>Fixní sazby – Rozvoz 1 a 2 v Kč/jízda, Admin v Kč/hodinu. Hodnoty se načítají automaticky z výkazu zaměstnance.</div>
+        <div style={{display:"flex",gap:20,flexWrap:"wrap"}}>
+          {[
+            {key:"sazba_rozvoz1", label:"Rozvoz 1", jednotka:"Kč/jízda"},
+            {key:"sazba_rozvoz2", label:"Rozvoz 2", jednotka:"Kč/jízda"},
+            {key:"sazba_admin",   label:"Admin práce", jednotka:"Kč/hodinu"},
+          ].map(f=><div key={f.key}>
+            <div style={{fontSize:11,fontWeight:700,color:"#888",marginBottom:4}}>{f.label.toUpperCase()}</div>
+            <div style={{display:"flex",alignItems:"center",gap:6}}>
+              <input type="number" step="1" min="0" value={globalSettings[f.key]||"0"}
+                onChange={e=>updGlobal(f.key,e.target.value)}
+                style={{...inputS,width:100}}/>
+              <span style={{fontSize:12,color:"#888"}}>{f.jednotka}</span>
+            </div>
+          </div>)}
+        </div>
+      </div>
+
       <div style={{padding:"0 16px 16px",display:"flex",gap:10,alignItems:"center"}}>
         <button onClick={handleSaveGlobal} disabled={savingGlobal}
           style={{background:"#1B4F8A",color:"#fff",border:"none",borderRadius:9,padding:"10px 24px",fontSize:14,fontWeight:700,cursor:savingGlobal?"not-allowed":"pointer",opacity:savingGlobal?0.7:1}}>
