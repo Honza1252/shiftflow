@@ -979,14 +979,15 @@ function ScheduleView({storeId,employees,year,month,sched,onCellEdit,actions,hol
         const patWasWork=patternDay!==null;
         const dovH=absSeg.hours||0;
         const dovLabel=`${TYPE_SHORT[absSeg.type]||"–"}${dovH>0?` ${dovH%1===0?dovH:dovH.toFixed(1)}h`:""}`;
-        if(patWasWork){
-          // Změna oproti vzoru → žlutě
+        const isAbsType=absSeg.type==="ocr"||absSeg.type==="obstacle";
+        if(patWasWork && !isAbsType){
+          // Změna oproti vzoru → žlutě (jen pro práci→volno/nemoc/dovolená)
           bg=C.modified;
           lines=[dovLabel];
         } else {
-          // Volno ze vzoru → barva typu + "DOV Xh" + "V" pod tím
+          // OČR/Překážka nebo vzor byl volno → vždy barva typu
           bg=TYPE_META[absSeg.type]?.color||C.dayOff;
-          lines=[dovLabel,"V"];
+          lines=patWasWork?[dovLabel]:[dovLabel,"V"];
         }
         txtColor=TYPE_META[absSeg.type]?.text||"#333";
       } else if(workSegs.length){
