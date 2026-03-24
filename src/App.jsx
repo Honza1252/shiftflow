@@ -2507,8 +2507,8 @@ function LoginScreen({onLogin}){
 function MainApp({currentUser, handleLogout}){
   const [tab,setTab]=useState("schedule");
   const [storeId,setStoreId]=useState(currentUser?.storeIds?.[0]??1);
-  const [year,setYear]=useState(2026);
-  const [month,setMonth]=useState(3);
+  const [year,setYear]=useState(new Date().getFullYear());
+  const [month,setMonth]=useState(new Date().getMonth());
 
   // ─── DATA STATE ──────────────────────────────────────────────
   const [employees,setEmployees]=useState(INIT_EMPS);
