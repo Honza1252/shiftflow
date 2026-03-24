@@ -740,7 +740,7 @@ function PatternEditor({storeId, employees, patterns, stores, onSave, onClose}){
           return <tr key={emp.id} style={{background:ei%2===0?"#fff":"#fafafe"}}>
             <td style={{padding:"6px 10px",fontWeight:600,fontSize:12,color:C.topbar,borderBottom:`1px solid ${C.border}`,whiteSpace:"nowrap"}}>
               <div style={{display:"flex",alignItems:"center",gap:5}}>
-                {emp.firstName} {emp.lastName}
+                {emp.lastName} {emp.firstName}
                 {isShared&&<span style={{fontSize:9,background:"#e8f0fe",color:"#1565c0",padding:"1px 4px",borderRadius:3,fontWeight:700}}>SD</span>}
                 {hasCustom&&<span style={{fontSize:9,background:"#fff3e0",color:"#e65100",padding:"1px 4px",borderRadius:3,fontWeight:700}}>CT</span>}
               </div>
@@ -807,7 +807,7 @@ function CellEditor({emp, date, year, month, current, viewStoreId, stores, emplo
 
   return <div style={{display:"flex",flexDirection:"column",gap:14}}>
     <div style={{fontSize:13,fontWeight:600,color:"#888"}}>
-      {DOW_LBL[dow]} {date.getDate()}.{month+1}.{year} — <strong style={{color:C.topbar}}>{emp.firstName} {emp.lastName}</strong>
+      {DOW_LBL[dow]} {date.getDate()}.{month+1}.{year} — <strong style={{color:C.topbar}}>{emp.lastName} {emp.firstName}</strong>
     </div>
     {isShared&&<div style={{padding:"8px 12px",background:"#e8f0fe",borderRadius:8,fontSize:12,color:"#1565c0",fontWeight:600}}>
       🔗 Sdílený – edituje vedoucí <strong>{ownerStore?.name}</strong>. Propíše se do: {(emp.extraStores||[]).map(id=>stores.find(s=>s.id===id)?.name).join(", ")}
@@ -955,9 +955,13 @@ function ScheduleView({storeId,employees,year,month,sched,onCellEdit,actions,hol
       const workSegs=cell.filter(s=>s.type==="work");
       const vacSeg=cell.find(s=>s.type==="vacation"||s.type==="sick");
       const otherAbsSeg=cell.find(s=>s.type!=="work"&&s.type!=="vacation"&&s.type!=="sick"&&s.type!=="dayOff");
+      const dayOffSeg=cell.find(s=>s.type==="dayOff");
       const absSeg=vacSeg||otherAbsSeg;
 
-      if(workSegs.length&&vacSeg){
+      if(!workSegs.length&&!vacSeg&&!otherAbsSeg&&dayOffSeg){
+        // Explicitně uložené Volno → zelená + V
+        bg=C.dayOff; lines=["V"]; txtColor="#81c784";
+      } else if(workSegs.length&&vacSeg){
         // Práce + Dovolená/Nemoc – zobraz práci a DOV Xh
         const totalH=calcSplitWorked(workSegs,emp.mainStore,stores);
         lines=workSegs.map(seg=>{
@@ -1063,7 +1067,7 @@ function ScheduleView({storeId,employees,year,month,sched,onCellEdit,actions,hol
             return <tr key={emp.id} style={{background:ei%2===0?"#fff":"#fafafe"}}>
               <td style={{padding:"4px 10px",fontSize:12,fontWeight:600,borderBottom:`1px solid ${C.border}`,whiteSpace:"nowrap"}}>
                 <div style={{color:isMirrorRow?"#888":C.topbar,display:"flex",alignItems:"center",gap:4}}>
-                  {emp.firstName} {emp.lastName}
+                  {emp.lastName} {emp.firstName}
                   {isMirrorRow&&<span style={{fontSize:9,background:"#e8f0fe",color:"#1565c0",padding:"1px 4px",borderRadius:3,fontWeight:700}}>SD</span>}
                 </div>
                 <div style={{fontSize:10,color:"#bbb",fontWeight:400}}>{emp.role} · {empContractDay(emp)}h/den</div>
@@ -1291,7 +1295,7 @@ function LoginModal({emp, onClose}){
     const hash = pwd1 ? await sha256hex(pwd1) : null;
     const upsertData = {
       emp_id: emp.id, login: loginVal.trim().toLowerCase(),
-      role, name: (emp.firstName+" "+emp.lastName).trim(),
+      role, name: (emp.lastName+" "+emp.firstName).trim(),
       store_ids: storeIds,
     };
     if(hash) upsertData.password_hash = hash;
@@ -1372,7 +1376,7 @@ function EmployeesView({employees,setEmployees,stores}){
             const shared=(emp.extraStores||[]).length>0;
             const hasCT=Object.keys(emp.customTimes||{}).length>0;
             return <tr key={emp.id} style={{background:i%2===0?"#fff":"#fafafe"}}>
-              <td style={{padding:"8px 10px",fontWeight:600,color:C.topbar,borderBottom:`1px solid ${C.border}`}}>{emp.firstName} {emp.lastName}</td>
+              <td style={{padding:"8px 10px",fontWeight:600,color:C.topbar,borderBottom:`1px solid ${C.border}`}}>{emp.lastName} {emp.firstName}</td>
               <td style={{padding:"8px 10px",color:"#666",borderBottom:`1px solid ${C.border}`}}>{emp.role}</td>
               <td style={{padding:"8px 10px",borderBottom:`1px solid ${C.border}`}}><Badge color="#e8f5e9" textColor="#2e7d32">{empContractDay(emp)}h / {empContractWeek(emp)}h týdně</Badge></td>
               <td style={{padding:"8px 10px",borderBottom:`1px solid ${C.border}`}}>{stores.find(s=>s.id===emp.mainStore)?.name}</td>
@@ -1397,12 +1401,12 @@ function EmployeesView({employees,setEmployees,stores}){
         </table>
       </div>;
     })}
-    <Modal open={!!editEmp} onClose={()=>setEditEmp(null)} title={`Upravit – ${editEmp?.firstName} ${editEmp?.lastName}`} width={600}>
+    <Modal open={!!editEmp} onClose={()=>setEditEmp(null)} title={`Upravit – ${editEmp?.lastName} ${editEmp?.firstName}`} width={600}>
       {editEmp&&<EmployeeForm initial={editEmp} stores={stores}
         onSave={f=>{setEmployees(p=>p.map(e=>e.id===editEmp.id?{...e,...f}:e));setEditEmp(null);}}
         onClose={()=>setEditEmp(null)}/>}
     </Modal>
-    <Modal open={!!loginEmp} onClose={()=>setLoginEmp(null)} title={`Přihlašovací údaje – ${loginEmp?.firstName} ${loginEmp?.lastName}`} width={480}>
+    <Modal open={!!loginEmp} onClose={()=>setLoginEmp(null)} title={`Přihlašovací údaje – ${loginEmp?.lastName} ${loginEmp?.firstName}`} width={480}>
       {loginEmp&&<LoginModal emp={loginEmp} onClose={()=>setLoginEmp(null)}/>}
     </Modal>
     <Modal open={showNew} onClose={()=>setShowNew(false)} title="Přidat zaměstnance" width={600}>
@@ -1678,7 +1682,7 @@ function TimesheetView({employee, year, month, holidays, stores, sched, employee
     ];
 
     // Řádek 1 – název
-    const r1 = ws.addRow([`Výkaz práce – ${employee.firstName} ${employee.lastName}`]);
+    const r1 = ws.addRow([`Výkaz práce – ${employee.lastName} ${employee.firstName}`]);
     r1.getCell(1).font = {bold:true, size:13};
     ws.mergeCells(1,1,1,13);
 
@@ -1799,7 +1803,7 @@ function TimesheetView({employee, year, month, holidays, stores, sched, employee
     // ── Záhlaví ──
     doc.setFont("helvetica","bold");
     doc.setFontSize(13);
-    doc.text(cz(`Výkaz práce – ${employee.firstName} ${employee.lastName}`), marginL, 14);
+    doc.text(cz(`Výkaz práce – ${employee.lastName} ${employee.firstName}`), marginL, 14);
     doc.setFont("helvetica","normal");
     doc.setFontSize(8);
     doc.text(cz(`${MONTHS[month]} ${year}  |  Fond: ${fund}h  |  Prodejna: ${storeName}  |  Role: ${employee.role}`), marginL, 20);
@@ -1963,7 +1967,7 @@ function TimesheetView({employee, year, month, holidays, stores, sched, employee
     doc.line(podpisX + podpisLabelW + 1, pageH - 14, pageW - marginL, pageH - 14);
     doc.setFontSize(7);
     doc.setTextColor(160,160,160);
-    doc.text(cz(`${employee.firstName} ${employee.lastName}`), podpisX + podpisLabelW + 1, pageH - 10);
+    doc.text(cz(`${employee.lastName} ${employee.firstName}`), podpisX + podpisLabelW + 1, pageH - 10);
 
     doc.save(`Vykaz_${employee.firstName}_${employee.lastName}_${MONTHS[month]}_${year}.pdf`);
   };
@@ -1971,7 +1975,7 @@ function TimesheetView({employee, year, month, holidays, stores, sched, employee
   return <div>
     {/* Hlavička */}
     <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:12,flexWrap:"wrap"}}>
-      <div style={{fontSize:20,fontWeight:800,color:C.topbar}}>{employee.firstName} {employee.lastName}</div>
+      <div style={{fontSize:20,fontWeight:800,color:C.topbar}}>{employee.lastName} {employee.firstName}</div>
       <Badge color="#e3f2fd" textColor="#1565c0">{MONTHS[month]} {year}</Badge>
       <Badge color="#f3e5f5" textColor="#6a1b9a">Fond: {fund}h</Badge>
       {holidayDays>0&&<Badge color="#ffebee" textColor="#c62828">Svátky zavřeno: {holidayDays} dní</Badge>}
@@ -2384,7 +2388,7 @@ function SummaryTable({storeId, employees, year, month, sched, holidays, stores,
 
           return <tr key={emp.id} style={{background: i%2===0?"#fff":"#fafafe"}}>
             <td style={{padding:"8px 10px", fontWeight:700, color:C.topbar, borderBottom:`1px solid ${C.border}`, whiteSpace:"nowrap"}}>
-              {emp.firstName} {emp.lastName}
+              {emp.lastName} {emp.firstName}
               <div style={{fontSize:10,color:"#bbb",fontWeight:400}}>{emp.role} · {empContractDay(emp)}h/den · {empContractWeek(emp)}h/týden</div>
             </td>
             <td style={{padding:"8px 10px",textAlign:"center",borderBottom:`1px solid ${C.border}`,color:"#555"}}>{fmtH(fund)}</td>
@@ -2997,7 +3001,7 @@ ${d}${hol?"!":"."}`;
       // Radky zamestnancu
       mainEmps.forEach((emp,ri)=>{
         const empIdx=mainEmps.findIndex(e=>e.id===emp.id);
-        const rowCells=[`${emp.firstName} ${emp.lastName}`,emp.role];
+        const rowCells=[`${emp.lastName} ${emp.firstName}`,emp.role];
         const rowColors=[];
         const rowFonts=[];
         for(let di=0;di<7;di++){
@@ -3102,7 +3106,7 @@ ${d}${hol?"!":"."}`;
       const vacLeft=emp.vacHours-vacUsed;
       const altBg=ri%2===0?"FFFFFFFF":"FFF8F9FC";
       const sRow=ws.addRow([
-        `${emp.firstName} ${emp.lastName}`,
+        `${emp.lastName} ${emp.firstName}`,
         fmtH2(fund2), fmtH2(planned),
         (ot>=0?"+":"")+fmtH2(ot),
         fmtHs(kdp),
@@ -3302,7 +3306,7 @@ ${d}${hol?"!":"."}`;
         doc.setFillColor(altBg[0],altBg[1],altBg[2]);
         doc.rect(mL, y, nameW, rowH, "F");
         doc.setFont("helvetica","bold"); doc.setFontSize(fNameSize); doc.setTextColor(26,26,46);
-        doc.text(cz(`${emp.firstName} ${emp.lastName}`).substring(0,20), mL+2, y+rowH*0.65);
+        doc.text(cz(`${emp.lastName} ${emp.firstName}`).substring(0,20), mL+2, y+rowH*0.65);
         // 7 dnu
         for(let di=0;di<7;di++){
           const d=wDays[di];
@@ -3410,7 +3414,7 @@ ${d}${hol?"!":"."}`;
       const vacLeft=emp.vacHours-vacUsed;
       const altBg=ri%2===0?[255,255,255]:[248,249,252];
       sx=mL;
-      const vals=[cz(`${emp.firstName} ${emp.lastName}`),fmtH2(fund2),fmtH2(planned),(ot>=0?"+":"")+fmtH2(ot),fmtHs(kdp),fmtH2(emp.vacHours),fmtH2(vacUsed),fmtH2(vacLeft)];
+      const vals=[cz(`${emp.lastName} ${emp.firstName}`),fmtH2(fund2),fmtH2(planned),(ot>=0?"+":"")+fmtH2(ot),fmtHs(kdp),fmtH2(emp.vacHours),fmtH2(vacUsed),fmtH2(vacLeft)];
       const tcs=[[26,26,46],[80,82,100],[26,26,46],ot>0?[46,125,50]:ot<0?[198,40,40]:[120,120,130],kdp>0?[21,101,192]:kdp<0?[198,40,40]:[120,120,130],[80,82,100],[21,101,192],vacLeft>0?[46,125,50]:[198,40,40]];
       sHdrs.forEach((_,hi)=>{
         doc.setFillColor(altBg[0],altBg[1],altBg[2]);
@@ -3442,11 +3446,11 @@ ${d}${hol?"!":"."}`;
     if(currentUser.role==="vedouci") return employees.filter(e=>e.active && e.mainStore===storeId);
     // Prodavač – jen sám sebe
     const me = employees.find(e=>e.id===currentUser.empId || 
-      (e.firstName+" "+e.lastName).trim().toLowerCase()===currentUser.name?.toLowerCase() ||
+      (e.lastName+" "+e.firstName).trim().toLowerCase()===currentUser.name?.toLowerCase() ||
       e.firstName.toLowerCase()===currentUser.name?.toLowerCase().split(" ")[0]);
     return me ? [me] : [];
   })();
-  const eOpts=[{value:"",label:"— vyberte zaměstnance —"},...tsEmpList.map(e=>({value:e.id,label:`${e.firstName} ${e.lastName}`}))];
+  const eOpts=[{value:"",label:"— vyberte zaměstnance —"},...tsEmpList.map(e=>({value:e.id,label:`${e.lastName} ${e.firstName}`}))];
   const tabs=[
     {key:"schedule",  label:"📅 Rozvrh"},
     {key:"timesheet", label:"📋 Výkaz"},
@@ -3538,7 +3542,7 @@ ${d}${hol?"!":"."}`;
           {/* Prodavač vidí jen sebe – bez selectu */}
           {!isZamestnanec&&<FSel label="Zaměstnanec" value={tsEmp||""} onChange={v=>setTsEmp(v?Number(v):null)} options={eOpts} style={{minWidth:220}}/>}
           {isZamestnanec&&tsEmp&&<div style={{padding:"7px 14px",background:"#f8f9ff",borderRadius:8,border:`1.5px solid ${C.border}`,fontSize:14,fontWeight:600,color:C.topbar}}>
-            👤 {tsEmpList[0]?.firstName} {tsEmpList[0]?.lastName}
+            👤 {tsEmpList[0]?.lastName} {tsEmpList[0]?.firstName}
           </div>}
           <FSel label="Měsíc" value={month} onChange={v=>setMonth(Number(v))} options={mOpts} style={{minWidth:130}}/>
           <FSel label="Rok" value={year} onChange={v=>setYear(Number(v))} options={yOpts} style={{minWidth:90}}/>
@@ -3557,7 +3561,7 @@ ${d}${hol?"!":"."}`;
             <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
               {pending.map(e=><button key={e.id} onClick={()=>setTsEmp(e.id)}
                 style={{padding:"4px 12px",borderRadius:20,background:"#fff",border:"1.5px solid #ffb300",color:"#e65100",fontWeight:600,fontSize:12,cursor:"pointer"}}>
-                {e.firstName} {e.lastName}
+                {e.lastName} {e.firstName}
               </button>)}
             </div>
           </div>;
@@ -3643,7 +3647,7 @@ ${d}${hol?"!":"."}`;
     <Modal open={showResetTsConfirm} onClose={()=>setShowResetTsConfirm(false)} title="Reset výkazu" width={440}>
       <div style={{display:"flex",flexDirection:"column",gap:20}}>
         <div style={{fontSize:15,color:"#333",lineHeight:1.6}}>
-          Opravdu chcete resetovat výkaz zaměstnance <strong>{employees.find(e=>e.id===tsEmp)?.firstName} {employees.find(e=>e.id===tsEmp)?.lastName}</strong> pro{" "}
+          Opravdu chcete resetovat výkaz zaměstnance <strong>{employees.find(e=>e.id===tsEmp)?.lastName} {employees.find(e=>e.id===tsEmp)?.firstName}</strong> pro{" "}
           <strong>{MONTHS[month]} {year}</strong>?
         </div>
         <div style={{padding:"10px 14px",background:"#fff8e1",borderRadius:8,fontSize:13,color:"#e65100",fontWeight:600}}>
