@@ -59,7 +59,7 @@ function holidayToDB(h){
 const APP_START = {year:2026, month:2}; // brezen 2026 (month 0-indexed) – začátek systému
 const C = {
   work:"#ffffff", dayOff:"#E8F5E9", vacation:"#E3F2FD", sick:"#F5F5F5",
-  obstacle:"#FFF3E0", holidayOpen:"#F1F8E9", holidayClose:"#FFEBEE",
+  ocr:"#FFF9C4", obstacle:"#FFF3E0", holidayOpen:"#F1F8E9", holidayClose:"#FFEBEE",
   modified:"#FFFDE7", mirror:"#F0F4FF", otherStore:"#EDEDF5",
   border:"#E8E8F0", bg:"#F7F8FC", topbar:"#1a1a2e",
 };
@@ -68,11 +68,12 @@ const TYPE_META = {
   dayOff:      { label:"Volno",           color:C.dayOff,      text:"#2e7d32" },
   vacation:    { label:"Dovolena",        color:C.vacation,    text:"#1565c0" },
   sick:        { label:"Nemoc",           color:C.sick,        text:"#616161" },
+  ocr:         { label:"OČR",            color:C.ocr,         text:"#f57f17" },
   obstacle:    { label:"Překážka",        color:C.obstacle,    text:"#e65100" },
   holidayOpen: { label:"Svátek otevřeno", color:C.holidayOpen, text:"#33691e" },
   holidayClose:{ label:"Svátek zavřeno",  color:C.holidayClose,text:"#b71c1c" },
 };
-const TYPE_SHORT = { vacation:"DOV", sick:"NEM", dayOff:"V", obstacle:"PŘE", holidayOpen:"SV.O", holidayClose:"SV.Z" };
+const TYPE_SHORT = { vacation:"DOV", sick:"NEM", dayOff:"V", ocr:"OČR", obstacle:"PŘE", holidayOpen:"SV.O", holidayClose:"SV.Z" };
 const STORE_SHORT = {1:"ST", 2:"BL", 3:"PE"};
 
 // Převod české diakritiky na ASCII pro PDF export (jsPDF helvetica nepodporuje Unicode)
