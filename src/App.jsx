@@ -530,7 +530,7 @@ function EmployeeForm({initial, stores, onSave, onClose}){
       <div style={{display:"flex",flexDirection:"column",gap:4}}>
         <FInput label="Datum nástupu" type="date" value={form.startDate||""} onChange={v=>upd("startDate",v||null)}/>
         <div style={{fontSize:11,color:"#aaa",paddingLeft:2}}>
-          {form.startDate && form.startDate<"2026-02-01"
+          {form.startDate && new Date(form.startDate) < new Date(2026,1,1)
             ? "ℹ️ Datum před spuštěním aplikace – pouze informační, nemá vliv na rozvrh ani fond."
             : form.startDate
               ? "✅ Zaměstnanec se zobrazí až od tohoto data."
@@ -1442,8 +1442,8 @@ function EmployeesView({employees,setEmployees,stores}){
               <td style={{padding:"8px 10px",borderBottom:`1px solid ${C.border}`}}>
                 <Badge color="#e8f5e9" textColor="#2e7d32">{empContractDay(emp)}h / {empContractWeek(emp)}h týdně</Badge>
                 {emp.startDate&&<div style={{fontSize:10,color:"#aaa",marginTop:3}}>
-                  Nástup: <strong style={{color: emp.startDate>="2026-02-01"?"#1565c0":"#bbb"}}>{emp.startDate}</strong>
-                  {emp.startDate<"2026-02-01"&&<span style={{color:"#ccc"}}> (inf.)</span>}
+                  Nástup: <strong style={{color: new Date(emp.startDate)>=new Date(2026,1,1)?"#1565c0":"#bbb"}}>{emp.startDate}</strong>
+                  {new Date(emp.startDate)<new Date(2026,1,1)&&<span style={{color:"#ccc"}}> (inf.)</span>}
                 </div>}
               </td>
               <td style={{padding:"8px 10px",borderBottom:`1px solid ${C.border}`}}>{stores.find(s=>s.id===emp.mainStore)?.name}</td>
@@ -3501,16 +3501,7 @@ ${d}${hol?"!":"."}`;
     doc.save(`Rozvrh_${storeName}_${MONTHS[month]}_${year}.pdf`);
   };
 
-  const _empSd = empStartDate(employee);
-  const _appStart = new Date(2026,1,1);
-  const _empStartYear = _empSd && _empSd>=_appStart ? _empSd.getFullYear() : null;
-  const _empStartMonth = _empSd && _empSd>=_appStart ? _empSd.getMonth() : null;
-  const mOpts=MONTHS.map((m,i)=>({value:i,label:m})).filter(o=>{
-    if(year===APP_START.year && o.value<APP_START.month) return false;
-    if(_empStartYear!==null && year===_empStartYear && o.value<_empStartMonth) return false;
-    if(_empStartYear!==null && year<_empStartYear) return false;
-    return true;
-  });
+  const mOpts=MONTHS.map((m,i)=>({value:i,label:m})).filter(o=>!(year===APP_START.year&&o.value<APP_START.month));
   const curYear=new Date().getFullYear();
   const yOpts=Array.from({length:curYear+2-APP_START.year+1},(_,i)=>APP_START.year+i).map(y=>({value:y,label:String(y)}));
   const isVedouci = currentUser.role==="admin"||currentUser.role==="vedouci";
