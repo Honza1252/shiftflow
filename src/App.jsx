@@ -1030,19 +1030,12 @@ function ScheduleView({storeId,employees,year,month,sched,onCellEdit,actions,hol
         hrs=totalH>0?totalH:null;
         bg=C.modified;
       } else if(absSeg){
-        // Čistá absence (dovolená/nemoc/jiné)
+        // Čistá absence – vždy barva dle typu (dovolená=modrá, nemoc=šedá atd.)
         const patWasWork=patternDay!==null;
         const dovH=absSeg.hours||0;
         const dovLabel=`${TYPE_SHORT[absSeg.type]||"–"}${dovH>0?` ${dovH%1===0?dovH:dovH.toFixed(1)}h`:""}`;
-        if(patWasWork){
-          // Změna oproti vzoru → žlutě
-          bg=C.modified;
-          lines=[dovLabel];
-        } else {
-          // Volno ze vzoru → barva typu + "DOV Xh" + "V" pod tím
-          bg=TYPE_META[absSeg.type]?.color||C.dayOff;
-          lines=[dovLabel,"V"];
-        }
+        bg=TYPE_META[absSeg.type]?.color||C.dayOff;
+        lines=patWasWork?[dovLabel]:[dovLabel,"V"];
         txtColor=TYPE_META[absSeg.type]?.text||"#333";
       } else if(workSegs.length){
         const totalH=calcSplitWorked(workSegs,emp.mainStore,stores);
