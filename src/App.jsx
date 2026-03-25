@@ -964,7 +964,7 @@ function ScheduleView({storeId,employees,year,month,sched,onCellEdit,actions,hol
   const isCur=d=>d.getMonth()===month&&d.getFullYear()===year;
   const ds=d=>fmtDate(d.getFullYear(),d.getMonth(),d.getDate());
   const getHol=d=>isCur(d)?holidays.find(h=>h.date===ds(d)):null;
-  const isAct=d=>actions.some(a=>{const s=ds(d);return s>=a.from&&s<=a.to;});
+  const isAct=d=>isCur(d)&&actions.some(a=>{const s=ds(d);return s>=a.from&&s<=a.to;});
   const isBlatna=storeId===2;
 
   // Pomocná: získá co vzor říká pro zaměstnance v daný den (from, to, loc) nebo null
@@ -1109,7 +1109,7 @@ function ScheduleView({storeId,employees,year,month,sched,onCellEdit,actions,hol
               const cur=isCur(d),dow=d.getDay()===0?6:d.getDay()-1,isWE=dow>=5;
               const hol=getHol(d),act=isAct(d);
               const dc=!cur?"#ddd":act?"#c62828":hol?(hol.open?"#33691e":"#b71c1c"):isWE?"#bbb":"#1a1a2e";
-              return <th key={di} style={{padding:"4px 3px",textAlign:"center",borderBottom:`2px solid ${C.border}`,minWidth:72,background:!cur?"#fafafa":isWE?"#fff8f8":"transparent"}}>
+              return <th key={di} style={{padding:"4px 3px",textAlign:"center",borderBottom:`2px solid ${C.border}`,minWidth:72,background:!cur?"#fafafa":act?"#fff0f0":isWE?"#fff8f8":"transparent"}}>
                 <div style={{fontSize:10,color:cur?(isWE?"#ccc":"#bbb"):"#ddd"}}>{DOW_LBL[dow]}</div>
                 <div style={{fontSize:13,fontWeight:800,color:dc}}>{d.getDate()}.</div>
                 {hol&&cur&&<div style={{fontSize:8,color:hol.open?"#558b2f":"#c62828",fontWeight:700,overflow:"hidden",whiteSpace:"nowrap",maxWidth:70}}>{hol.name}</div>}
@@ -1149,7 +1149,7 @@ function SettingsView({holidays,setHolidays,actions,setActions,stores,setStores,
   const [section,setSection]=useState("pattern");
   const [editHol,setEditHol]=useState(null);
   const [showActModal,setShowActModal]=useState(false);
-  const [newAct,setNewAct]=useState({name:"",month:0,from:"",to:""});
+  const [newAct,setNewAct]=useState({name:"",month:new Date().getMonth(),year:new Date().getFullYear(),from:"",to:""});
   const [editPatStore,setEditPatStore]=useState(null);
   const [editBreakStore,setEditBreakStore]=useState(null);
 
@@ -1290,11 +1290,12 @@ function SettingsView({holidays,setHolidays,actions,setActions,stores,setStores,
         {actions.length===0&&<div style={{color:"#bbb",padding:"24px 0",textAlign:"center"}}>Zatím žádné akce.</div>}
         {MONTHS.map((mn,mi)=>{
           const ma=actions.filter(a=>a.month===mi); if(!ma.length) return null;
+          const maByYear=[...ma].sort((a,b)=>(a.year||0)-(b.year||0));
           return <div key={mi} style={{marginBottom:14}}>
             <div style={{fontSize:11,fontWeight:800,color:"#aaa",textTransform:"uppercase",letterSpacing:"0.07em",marginBottom:6}}>{mn}</div>
             {ma.map((a,ai)=><div key={ai} style={{display:"flex",alignItems:"center",gap:10,marginBottom:6,padding:"10px 14px",background:"#fff5f5",border:"1.5px solid #ffcdd2",borderRadius:8}}>
               <span>🎯</span><span style={{flex:1,fontWeight:700,color:"#c62828",fontSize:13}}>{a.name}</span>
-              <span style={{fontSize:12,color:"#aaa"}}>{a.from} – {a.to}</span>
+              <span style={{fontSize:12,color:"#aaa"}}>{a.year&&` ${a.year} · `}{a.from} – {a.to}</span>
               <Btn small variant="danger" onClick={()=>setActions(ac=>ac.filter(x=>x!==a))}>✕</Btn>
             </div>)}
           </div>;
@@ -1303,6 +1304,7 @@ function SettingsView({holidays,setHolidays,actions,setActions,stores,setStores,
           <div style={{display:"flex",flexDirection:"column",gap:14}}>
             <FInput label="Název" value={newAct.name} onChange={v=>setNewAct(a=>({...a,name:v}))} placeholder="Jarní výprodej..."/>
             <FSel label="Měsíc" value={newAct.month} onChange={v=>setNewAct(a=>({...a,month:Number(v)}))} options={MONTHS.map((m,i)=>({value:i,label:m}))}/>
+            <FInput label="Rok" type="number" value={newAct.year||new Date().getFullYear()} onChange={v=>setNewAct(a=>({...a,year:Number(v)}))}/>
             <div style={{display:"flex",gap:8}}>
               <FInput label="Od" type="date" value={newAct.from} onChange={v=>setNewAct(a=>({...a,from:v}))} style={{flex:1}}/>
               <FInput label="Do" type="date" value={newAct.to}   onChange={v=>setNewAct(a=>({...a,to:v}))}   style={{flex:1}}/>
@@ -3584,7 +3586,10 @@ ${d}${hol?"!":"."}`;
           <Badge color="#e3f2fd" textColor="#1565c0">{MONTHS[month]} {year}</Badge>
           <Badge color="#f3e5f5" textColor="#6a1b9a">{getWorkingDays(year,month,holidays)} prac. dní · {getWorkingDays(year,month,holidays)*8}h fond</Badge>
           {getHolidayDays(year,month,holidays)>0&&<Badge color="#ffebee" textColor="#c62828">🗓️ {getHolidayDays(year,month,holidays)} svátek zavřeno</Badge>}
-          {actions.filter(a=>a.month===month).map(a=><Badge key={a.id} color="#FFCDD2" textColor="#c62828">🎯 {a.name}</Badge>)}
+          {actions.filter(a=>{
+            const mFrom=fmtDate(year,month,1), mTo=fmtDate(year,month,getDim(year,month));
+            return a.from<=mTo && a.to>=mFrom;
+          }).map(a=><Badge key={a.id||a.name} color="#FFCDD2" textColor="#c62828">🎯 {a.name}</Badge>)}
         </div>
         <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:14,padding:"8px 14px",background:"#fff",borderRadius:8,border:`1px solid ${C.border}`,alignItems:"center"}}>
           {Object.entries(TYPE_META).map(([k,v])=><Badge key={k} color={v.color} textColor={v.text}>{v.label}</Badge>)}
