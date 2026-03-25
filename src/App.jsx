@@ -28,7 +28,7 @@ function dbToEmp(r){
     contractHoursDay: r.contract_hours_day,
     contractHoursWeek: r.contract_hours_week,
     vacHours: r.vac_hours,
-    vacAdjustment: Number(r.vac_adjustment||0),
+    vacAdjustment: r.vac_adjustment||0,
     kpdStart: r.kpd_start||0,
     startDate: r.start_date||null,
     active: r.active,
@@ -77,7 +77,7 @@ const TYPE_META = {
   holidayOpen: { label:"Svátek otevřeno", color:C.holidayOpen, text:"#33691e" },
   holidayClose:{ label:"Svátek zavřeno",  color:C.holidayClose,text:"#b71c1c" },
 };
-const TYPE_SHORT = { vacation:"DOV", sick:"NEM", dayOff:"V", ocr:"OČR", obstacle:"PŘE", holidayOpen:"SV.O", holidayClose:"SV.Z" };
+const TYPE_SHORT = { vacation:"DOV", sick:"NEM", dayOff:"V", obstacle:"PŘE", holidayOpen:"SV.O", holidayClose:"SV.Z" };
 const STORE_SHORT = {1:"ST", 2:"BL", 3:"PE"};
 
 // Převod české diakritiky na ASCII pro PDF export (jsPDF helvetica nepodporuje Unicode)
@@ -323,13 +323,11 @@ function empStartDate(emp){
   return isNaN(d) ? null : d;
 }
 // Vrátí true pokud je zaměstnanec aktivní v daném měsíci (year, month 0-indexed)
-// Stávající zaměstnanci (startDate před APP_START nebo null) → vždy true
 function isEmpActiveInMonth(emp, year, month){
   const sd = empStartDate(emp);
   if(!sd) return true;
-  const appStart = new Date(2026,1,1); // APP_START
-  if(sd < appStart) return true; // historické datum = pouze informační
-  // Nový zaměstnanec: aktivní od měsíce nástupu
+  const appStart = new Date(2026,1,1);
+  if(sd < appStart) return true;
   if(year > sd.getFullYear()) return true;
   if(year === sd.getFullYear() && month >= sd.getMonth()) return true;
   return false;
@@ -349,7 +347,6 @@ function getEmpFund(emp, year, month, holidays){
   if(!sd || sd < appStart){
     return getWorkingDays(year, month, holidays) * empContractDay(emp);
   }
-  // Nástupní měsíc – poměrný fond
   if(sd.getFullYear()===year && sd.getMonth()===month){
     return getWorkingDaysFrom(year, month, sd, holidays) * empContractDay(emp);
   }
@@ -530,41 +527,14 @@ function EmployeeForm({initial, stores, onSave, onClose}){
           </button>)}
         </div>
       </div>
-      <div style={{display:"flex",flexDirection:"column",gap:6}}>
-        <div style={{display:"flex",gap:10,alignItems:"flex-end"}}>
-          <FInput label="Dovolená (h/rok)" type="number" value={form.vacHours} onChange={v=>upd("vacHours",Number(v))} style={{flex:1}}/>
-          <div style={{display:"flex",flexDirection:"column",gap:4,flex:1}}>
-            <FLabel>Korekce (jednorázová)</FLabel>
-            <div style={{display:"flex",gap:6,alignItems:"center"}}>
-              <input type="number" value={form._vacCorr||""} placeholder="např. +10 nebo -20"
-                onChange={e=>upd("_vacCorr",e.target.value)}
-                style={{padding:"7px 10px",border:`1.5px solid ${C.border}`,borderRadius:7,fontSize:13,width:140,outline:"none"}}/>
-              <Btn small onClick={()=>{
-                const delta=Number(form._vacCorr||0);
-                if(!delta) return;
-                upd("vacAdjustment",(form.vacAdjustment||0)+delta);
-                upd("_vacCorr","");
-              }}>Přičíst</Btn>
-            </div>
-          </div>
-        </div>
-        {(form.vacAdjustment||0)!==0&&<div style={{fontSize:11,color:"#1565c0",padding:"4px 10px",background:"#e8f0fe",borderRadius:6}}>
-          Kumulativní korekce: <strong>{(form.vacAdjustment||0)>0?"+":""}{form.vacAdjustment}h</strong>
-          &nbsp;→ Celkový nárok: <strong>{(form.vacHours||0)+(form.vacAdjustment||0)}h</strong>
-          <button onClick={()=>upd("vacAdjustment",0)} style={{marginLeft:10,border:"none",background:"none",color:"#c62828",cursor:"pointer",fontSize:11,fontWeight:700}}>Resetovat korekci</button>
-        </div>}
+      <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
+        <FInput label="Dovolená (h/rok)" type="number" value={form.vacHours} onChange={v=>upd("vacHours",Number(v))} style={{flex:1}}/>
+        <FInput label="Korekce dovolené (h)" type="number" value={form.vacAdjustment||0} onChange={v=>upd("vacAdjustment",Number(v))} style={{flex:1}}/>
       </div>
+      <div style={{fontSize:11,color:"#888",marginTop:-8}}>Celkový nárok: <strong>{(Number(form.vacHours)||0)+(Number(form.vacAdjustment)||0)}h</strong></div>
       <FInput label="Počáteční KPD (hodiny)" type="number" value={form.kpdStart} onChange={v=>upd("kpdStart",Number(v))}/>
-      <div style={{display:"flex",flexDirection:"column",gap:4}}>
-        <FInput label="Datum nástupu" type="date" value={form.startDate||""} onChange={v=>upd("startDate",v||null)}/>
-        <div style={{fontSize:11,color:"#aaa",paddingLeft:2}}>
-          {form.startDate && new Date(form.startDate) < new Date(2026,1,1)
-            ? "ℹ️ Datum před spuštěním aplikace – pouze informační, nemá vliv na rozvrh ani fond."
-            : form.startDate
-              ? "✅ Zaměstnanec se zobrazí až od tohoto data."
-              : "Nevyplněno = zaměstnanec bez omezení (stávající)."}
-        </div>
-      </div>
+      <FInput label="Datum nástupu" type="date" value={form.startDate||""} onChange={v=>upd("startDate",v||null)}/>
+      <div style={{fontSize:11,color:"#888",marginTop:-8}}>Pouze u nových zaměstnanců nastoupivších po spuštění aplikace. Před tímto datem se nezobrazuje.</div>
       {initial.id&&<label style={{display:"flex",alignItems:"center",gap:8,fontSize:13,fontWeight:600,cursor:"pointer",padding:"8px 0"}}>
         <input type="checkbox" checked={form.active} onChange={e=>upd("active",e.target.checked)}/>
         Aktivní zaměstnanec
@@ -821,7 +791,7 @@ function PatternEditor({storeId, employees, patterns, stores, onSave, onClose}){
           return <tr key={emp.id} style={{background:ei%2===0?"#fff":"#fafafe"}}>
             <td style={{padding:"6px 10px",fontWeight:600,fontSize:12,color:C.topbar,borderBottom:`1px solid ${C.border}`,whiteSpace:"nowrap"}}>
               <div style={{display:"flex",alignItems:"center",gap:5}}>
-                {emp.firstName} {emp.lastName}
+                {emp.lastName} {emp.firstName}
                 {isShared&&<span style={{fontSize:9,background:"#e8f0fe",color:"#1565c0",padding:"1px 4px",borderRadius:3,fontWeight:700}}>SD</span>}
                 {hasCustom&&<span style={{fontSize:9,background:"#fff3e0",color:"#e65100",padding:"1px 4px",borderRadius:3,fontWeight:700}}>CT</span>}
               </div>
@@ -888,7 +858,7 @@ function CellEditor({emp, date, year, month, current, viewStoreId, stores, emplo
 
   return <div style={{display:"flex",flexDirection:"column",gap:14}}>
     <div style={{fontSize:13,fontWeight:600,color:"#888"}}>
-      {DOW_LBL[dow]} {date.getDate()}.{month+1}.{year} — <strong style={{color:C.topbar}}>{emp.firstName} {emp.lastName}</strong>
+      {DOW_LBL[dow]} {date.getDate()}.{month+1}.{year} — <strong style={{color:C.topbar}}>{emp.lastName} {emp.firstName}</strong>
     </div>
     {isShared&&<div style={{padding:"8px 12px",background:"#e8f0fe",borderRadius:8,fontSize:12,color:"#1565c0",fontWeight:600}}>
       🔗 Sdílený – edituje vedoucí <strong>{ownerStore?.name}</strong>. Propíše se do: {(emp.extraStores||[]).map(id=>stores.find(s=>s.id===id)?.name).join(", ")}
@@ -1019,7 +989,6 @@ function ScheduleView({storeId,employees,year,month,sched,onCellEdit,actions,hol
   // Vyhodnotí co zobrazit v buňce
   const evalCell=(emp,d)=>{
     if(!isCur(d)) return {bg:"#fafafa",lines:[],hrs:null,txtColor:"#ddd",clickable:false};
-    // Datum nástupu – buňky před nástupem jsou šedé a neklikatelné
     const sd=empStartDate(emp);
     const appStart=new Date(2026,1,1);
     if(sd && sd>=appStart){
@@ -1047,7 +1016,6 @@ function ScheduleView({storeId,employees,year,month,sched,onCellEdit,actions,hol
       const absSeg=vacSeg||otherAbsSeg;
 
       if(!workSegs.length&&!vacSeg&&!otherAbsSeg&&dayOffSeg){
-        // Explicitně uložené Volno → zelená + V
         bg=C.dayOff; lines=["V"]; txtColor="#81c784";
       } else if(workSegs.length&&vacSeg){
         // Práce + Dovolená/Nemoc – zobraz práci a DOV Xh
@@ -1066,15 +1034,14 @@ function ScheduleView({storeId,employees,year,month,sched,onCellEdit,actions,hol
         const patWasWork=patternDay!==null;
         const dovH=absSeg.hours||0;
         const dovLabel=`${TYPE_SHORT[absSeg.type]||"–"}${dovH>0?` ${dovH%1===0?dovH:dovH.toFixed(1)}h`:""}`;
-        const isAbsType=absSeg.type==="ocr"||absSeg.type==="obstacle";
-        if(patWasWork && !isAbsType){
-          // Změna oproti vzoru → žlutě (jen pro práci→volno/nemoc/dovolená)
+        if(patWasWork){
+          // Změna oproti vzoru → žlutě
           bg=C.modified;
           lines=[dovLabel];
         } else {
-          // OČR/Překážka nebo vzor byl volno → vždy barva typu
+          // Volno ze vzoru → barva typu + "DOV Xh" + "V" pod tím
           bg=TYPE_META[absSeg.type]?.color||C.dayOff;
-          lines=patWasWork?[dovLabel]:[dovLabel,"V"];
+          lines=[dovLabel,"V"];
         }
         txtColor=TYPE_META[absSeg.type]?.text||"#333";
       } else if(workSegs.length){
@@ -1156,7 +1123,7 @@ function ScheduleView({storeId,employees,year,month,sched,onCellEdit,actions,hol
             return <tr key={emp.id} style={{background:ei%2===0?"#fff":"#fafafe"}}>
               <td style={{padding:"4px 10px",fontSize:12,fontWeight:600,borderBottom:`1px solid ${C.border}`,whiteSpace:"nowrap"}}>
                 <div style={{color:isMirrorRow?"#888":C.topbar,display:"flex",alignItems:"center",gap:4}}>
-                  {emp.firstName} {emp.lastName}
+                  {emp.lastName} {emp.firstName}
                   {isMirrorRow&&<span style={{fontSize:9,background:"#e8f0fe",color:"#1565c0",padding:"1px 4px",borderRadius:3,fontWeight:700}}>SD</span>}
                 </div>
                 <div style={{fontSize:10,color:"#bbb",fontWeight:400}}>{emp.role} · {empContractDay(emp)}h/den</div>
@@ -1384,7 +1351,7 @@ function LoginModal({emp, onClose}){
     const hash = pwd1 ? await sha256hex(pwd1) : null;
     const upsertData = {
       emp_id: emp.id, login: loginVal.trim().toLowerCase(),
-      role, name: (emp.firstName+" "+emp.lastName).trim(),
+      role, name: (emp.lastName+" "+emp.firstName).trim(),
       store_ids: storeIds,
     };
     if(hash) upsertData.password_hash = hash;
@@ -1445,7 +1412,7 @@ function EmployeesView({employees,setEmployees,stores}){
   const [editEmp,setEditEmp]=useState(null);
   const [showNew,setShowNew]=useState(false);
   const [loginEmp,setLoginEmp]=useState(null);
-  const newEmpTemplate={firstName:"",lastName:"",mainStore:1,extraStores:[],role:"",contractHoursDay:8,contractHoursWeek:40,vacHours:160,vacAdjustment:0,kpdStart:0,startDate:"",active:true,customTimes:{}};
+  const newEmpTemplate={firstName:"",lastName:"",mainStore:1,extraStores:[],role:"",contractHoursDay:8,contractHoursWeek:40,vacHours:160,kpdStart:0,active:true,customTimes:{}};
 
   return <div>
     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
@@ -1465,15 +1432,9 @@ function EmployeesView({employees,setEmployees,stores}){
             const shared=(emp.extraStores||[]).length>0;
             const hasCT=Object.keys(emp.customTimes||{}).length>0;
             return <tr key={emp.id} style={{background:i%2===0?"#fff":"#fafafe"}}>
-              <td style={{padding:"8px 10px",fontWeight:600,color:C.topbar,borderBottom:`1px solid ${C.border}`}}>{emp.firstName} {emp.lastName}</td>
+              <td style={{padding:"8px 10px",fontWeight:600,color:C.topbar,borderBottom:`1px solid ${C.border}`}}>{emp.lastName} {emp.firstName}</td>
               <td style={{padding:"8px 10px",color:"#666",borderBottom:`1px solid ${C.border}`}}>{emp.role}</td>
-              <td style={{padding:"8px 10px",borderBottom:`1px solid ${C.border}`}}>
-                <Badge color="#e8f5e9" textColor="#2e7d32">{empContractDay(emp)}h / {empContractWeek(emp)}h týdně</Badge>
-                {emp.startDate&&<div style={{fontSize:10,color:"#aaa",marginTop:3}}>
-                  Nástup: <strong style={{color: new Date(emp.startDate)>=new Date(2026,1,1)?"#1565c0":"#bbb"}}>{emp.startDate}</strong>
-                  {new Date(emp.startDate)<new Date(2026,1,1)&&<span style={{color:"#ccc"}}> (inf.)</span>}
-                </div>}
-              </td>
+              <td style={{padding:"8px 10px",borderBottom:`1px solid ${C.border}`}}><Badge color="#e8f5e9" textColor="#2e7d32">{empContractDay(emp)}h / {empContractWeek(emp)}h týdně</Badge></td>
               <td style={{padding:"8px 10px",borderBottom:`1px solid ${C.border}`}}>{stores.find(s=>s.id===emp.mainStore)?.name}</td>
               <td style={{padding:"8px 10px",borderBottom:`1px solid ${C.border}`}}>
                 {shared
@@ -1485,12 +1446,7 @@ function EmployeesView({employees,setEmployees,stores}){
                   ?<Badge color="#fff3e0" textColor="#e65100">{Object.keys(emp.customTimes||{}).map(id=>STORE_SHORT[id]).join(", ")}</Badge>
                   :<span style={{color:"#ddd"}}>—</span>}
               </td>
-              <td style={{padding:"8px 10px",borderBottom:`1px solid ${C.border}`}}>
-                {emp.vacHours}h/rok
-                {(emp.vacAdjustment||0)!==0&&<span style={{fontSize:10,color:(emp.vacAdjustment||0)>0?"#2e7d32":"#c62828",fontWeight:700,marginLeft:4}}>
-                  {(emp.vacAdjustment||0)>0?"+":""}{emp.vacAdjustment}h → {empVacTotal(emp)}h
-                </span>}
-              </td>
+              <td style={{padding:"8px 10px",borderBottom:`1px solid ${C.border}`}}>{emp.vacHours}h/rok</td>
               <td style={{padding:"8px 10px",borderBottom:`1px solid ${C.border}`}}><Badge color={emp.active?"#e8f5e9":"#ffebee"} textColor={emp.active?"#2e7d32":"#c62828"}>{emp.active?"Aktivní":"Neaktivní"}</Badge></td>
               <td style={{padding:"8px 10px",borderBottom:`1px solid ${C.border}`,whiteSpace:"nowrap"}}>
                 <Btn small variant="secondary" onClick={()=>setEditEmp(emp)} style={{marginRight:6}}>Upravit</Btn>
@@ -1501,12 +1457,12 @@ function EmployeesView({employees,setEmployees,stores}){
         </table>
       </div>;
     })}
-    <Modal open={!!editEmp} onClose={()=>setEditEmp(null)} title={`Upravit – ${editEmp?.firstName} ${editEmp?.lastName}`} width={600}>
+    <Modal open={!!editEmp} onClose={()=>setEditEmp(null)} title={`Upravit – ${editEmp?.lastName} ${editEmp?.firstName}`} width={600}>
       {editEmp&&<EmployeeForm initial={editEmp} stores={stores}
         onSave={f=>{setEmployees(p=>p.map(e=>e.id===editEmp.id?{...e,...f}:e));setEditEmp(null);}}
         onClose={()=>setEditEmp(null)}/>}
     </Modal>
-    <Modal open={!!loginEmp} onClose={()=>setLoginEmp(null)} title={`Přihlašovací údaje – ${loginEmp?.firstName} ${loginEmp?.lastName}`} width={480}>
+    <Modal open={!!loginEmp} onClose={()=>setLoginEmp(null)} title={`Přihlašovací údaje – ${loginEmp?.lastName} ${loginEmp?.firstName}`} width={480}>
       {loginEmp&&<LoginModal emp={loginEmp} onClose={()=>setLoginEmp(null)}/>}
     </Modal>
     <Modal open={showNew} onClose={()=>setShowNew(false)} title="Přidat zaměstnance" width={600}>
@@ -1545,7 +1501,7 @@ function EmployeesView({employees,setEmployees,stores}){
 }
 
 // ─── TIMESHEET ───────────────────────────────────────────────
-function TimesheetView({employee, year, month, holidays, stores, sched, employees, patterns, rows, onRowChange, timesheetData, onKdpPaidChange, canEditKpd=true, tsStatus="draft", onSubmit, onApprove, onReturn, isVedouci=false}){
+function TimesheetView({employee, year, month, holidays, stores, sched, employees, patterns, rows, onRowChange, timesheetData, onKdpPaidChange, canEditKdp=true, tsStatus="draft", onSubmit, onApprove, onReturn, isVedouci=false}){
   const dim = getDim(year, month);
   const brRules = getBreakRules(employee.mainStore, stores);
   const fund = getEmpFund(employee, year, month, holidays);
@@ -1640,7 +1596,7 @@ function TimesheetView({employee, year, month, holidays, stores, sched, employee
     const dow = getDow(year, month, d);
     const hol = holidays.find(h=>h.date===fmtDate(year,month,d));
     const patHours = getPatternShiftHours(d);
-    // Svátek – jen pokud měl zaměstnanec naplánovanou směnu (vzor nebo ruční), jinak volno
+    // Svátek – jen pokud měl zaměstnanec naplánovanou směnu, jinak volno
     if(hol){
       const sd = getScheduleForDay(d);
       const hasShift = patHours > 0 || sd?.type === "work";
@@ -1728,8 +1684,7 @@ function TimesheetView({employee, year, month, holidays, stores, sched, employee
       case "sick":          sc  = schedVacH||patHours; break;
       case "holidayClose":  hcc = holCloseH; break;
       case "holidayOpen":   hoc = worked; wc = worked; break;
-      case "ocr":           oc  = schedVacH||patHours; break;
-      case "obstacle":      otc = schedVacH||patHours; break;
+      case "ocr":           oc  = patHours; break;
       case "other":         otc = worked||patHours; break;
       case "dayOff":        wc  = worked; break;
       default:              wc  = worked;
@@ -1758,12 +1713,12 @@ function TimesheetView({employee, year, month, holidays, stores, sched, employee
   const prevMonthY = month===0?year-1:year;
   const prevMonthM = month===0?11:month-1;
   const isFirstMonth = year===APP_START.year && month===APP_START.month;
-  const kpdVstup = isFirstMonth
+  const kdpVstup = isFirstMonth
     ? (employee.kpdStart||0)
     : calcKpdCumulative(employee, prevMonthY, prevMonthM, sched, holidays, stores, patterns, employees, timesheetData);
   const tsKeyThis = `${employee.id}-${year}-${month+1}`;
   const kpdPaidThis = Number(timesheetData?.[tsKeyThis]?.kpdPaid || 0);
-  const kpdVystup = kpdVstup + overtime - kpdPaidThis;
+  const kdpVystup = kdpVstup + overtime - kpdPaidThis;
 
   // ── Export Excel s barvami (ExcelJS) ──
   const exportExcel = async () => {
@@ -1782,7 +1737,7 @@ function TimesheetView({employee, year, month, holidays, stores, sched, employee
     ];
 
     // Řádek 1 – název
-    const r1 = ws.addRow([`Výkaz práce – ${employee.firstName} ${employee.lastName}`]);
+    const r1 = ws.addRow([`Výkaz práce – ${employee.lastName} ${employee.firstName}`]);
     r1.getCell(1).font = {bold:true, size:13};
     ws.mergeCells(1,1,1,13);
 
@@ -1869,9 +1824,9 @@ function TimesheetView({employee, year, month, holidays, stores, sched, employee
       ["Rozvoz 2", totRoz2>0?`${totRoz2}×`:"—"],
       ["Stravenky", tix>0?`${tix} ks`:"—"],
       [],
-      ["KPD vstup", fmtHsign(kpdVstup)],
+      ["KPD vstup", fmtHsign(kdpVstup)],
       ["KPD proplaceno", kpdPaidThis>0?`${kpdPaidThis}h`:"—"],
-      ["KPD výstup", fmtHsign(kpdVystup)],
+      ["KPD výstup", fmtHsign(kdpVystup)],
     ];
     sumRows.forEach(r=>{
       const row = ws.addRow(r);
@@ -1903,7 +1858,7 @@ function TimesheetView({employee, year, month, holidays, stores, sched, employee
     // ── Záhlaví ──
     doc.setFont("helvetica","bold");
     doc.setFontSize(13);
-    doc.text(cz(`Výkaz práce – ${employee.firstName} ${employee.lastName}`), marginL, 14);
+    doc.text(cz(`Výkaz práce – ${employee.lastName} ${employee.firstName}`), marginL, 14);
     doc.setFont("helvetica","normal");
     doc.setFontSize(8);
     doc.text(cz(`${MONTHS[month]} ${year}  |  Fond: ${fund}h  |  Prodejna: ${storeName}  |  Role: ${employee.role}`), marginL, 20);
@@ -2034,24 +1989,24 @@ function TimesheetView({employee, year, month, holidays, stores, sched, employee
     const ky = sy + 1 + (tileH+tileGap)*2 + 6;
     doc.setFont("helvetica","bold"); doc.setFontSize(8.5);
     doc.setTextColor(26,26,46);
-    doc.text(cz("KPD – Konto pracovni doby"), marginL, ky);
+    doc.text(cz("KPD – Konto presc. hodin"), marginL, ky);
 
-    const kpdTiles = [
-      { label:"KPD vstup (z min. mes.)", val:fmtHsign(kpdVstup),   bg:[232,234,246], tc:[57,73,171]  },
+    const kdpTiles = [
+      { label:"KPD vstup (z min. mes.)", val:fmtHsign(kdpVstup),   bg:[232,234,246], tc:[57,73,171]  },
       { label:"Presc. tento mesic",       val:fmtHsign(overtime),   bg:overtime>=0?[232,245,233]:[255,235,238], tc:overtime>=0?[46,125,50]:[198,40,40] },
       { label:"KPD proplaceno",            val:kpdPaidThis>0?`${kpdPaidThis}h`:"— (nic)", bg:[255,243,224], tc:[230,81,0] },
-      { label:"KPD vystup (pristi mes.)", val:fmtHsign(kpdVystup),  bg:kpdVystup>=0?[227,242,253]:[255,235,238], tc:kpdVystup>=0?[21,101,192]:[198,40,40] },
+      { label:"KPD vystup (pristi mes.)", val:fmtHsign(kdpVystup),  bg:kdpVystup>=0?[227,242,253]:[255,235,238], tc:kdpVystup>=0?[21,101,192]:[198,40,40] },
     ];
-    const kpdTileW = (usableW - 3*tileGap) / 4;
-    kpdTiles.forEach((t, i)=>{
-      const tx = marginL + i*(kpdTileW+tileGap);
+    const kdpTileW = (usableW - 3*tileGap) / 4;
+    kdpTiles.forEach((t, i)=>{
+      const tx = marginL + i*(kdpTileW+tileGap);
       doc.setFillColor(...t.bg);
-      doc.roundedRect(tx, ky+2, kpdTileW, tileH+2, 1, 1, "F");
+      doc.roundedRect(tx, ky+2, kdpTileW, tileH+2, 1, 1, "F");
       doc.setFont("helvetica","normal"); doc.setFontSize(5.5);
       doc.setTextColor(...t.tc);
-      doc.text(cz(t.label).toUpperCase(), tx+kpdTileW/2, ky+6, {align:"center"});
+      doc.text(cz(t.label).toUpperCase(), tx+kdpTileW/2, ky+6, {align:"center"});
       doc.setFont("helvetica","bold"); doc.setFontSize(10);
-      doc.text(cz(t.val), tx+kpdTileW/2, ky+12, {align:"center"});
+      doc.text(cz(t.val), tx+kdpTileW/2, ky+12, {align:"center"});
     });
 
     // ── Podpis – pravý dolní roh ──
@@ -2067,7 +2022,7 @@ function TimesheetView({employee, year, month, holidays, stores, sched, employee
     doc.line(podpisX + podpisLabelW + 1, pageH - 14, pageW - marginL, pageH - 14);
     doc.setFontSize(7);
     doc.setTextColor(160,160,160);
-    doc.text(cz(`${employee.firstName} ${employee.lastName}`), podpisX + podpisLabelW + 1, pageH - 10);
+    doc.text(cz(`${employee.lastName} ${employee.firstName}`), podpisX + podpisLabelW + 1, pageH - 10);
 
     doc.save(`Vykaz_${employee.firstName}_${employee.lastName}_${MONTHS[month]}_${year}.pdf`);
   };
@@ -2075,7 +2030,7 @@ function TimesheetView({employee, year, month, holidays, stores, sched, employee
   return <div>
     {/* Hlavička */}
     <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:12,flexWrap:"wrap"}}>
-      <div style={{fontSize:20,fontWeight:800,color:C.topbar}}>{employee.firstName} {employee.lastName}</div>
+      <div style={{fontSize:20,fontWeight:800,color:C.topbar}}>{employee.lastName} {employee.firstName}</div>
       <Badge color="#e3f2fd" textColor="#1565c0">{MONTHS[month]} {year}</Badge>
       <Badge color="#f3e5f5" textColor="#6a1b9a">Fond: {fund}h</Badge>
       {holidayDays>0&&<Badge color="#ffebee" textColor="#c62828">Svátky zavřeno: {holidayDays} dní</Badge>}
@@ -2273,12 +2228,12 @@ function TimesheetView({employee, year, month, holidays, stores, sched, employee
       </div>
       {/* KPD sekce */}
       <div style={{borderTop:`2px solid ${C.border}`,padding:"14px 16px",background:"#f0f4ff"}}>
-        <div style={{fontSize:12,fontWeight:800,color:C.topbar,marginBottom:10,textTransform:"uppercase",letterSpacing:"0.06em"}}>📈 KPD – Konto pracovní doby</div>
+        <div style={{fontSize:12,fontWeight:800,color:C.topbar,marginBottom:10,textTransform:"uppercase",letterSpacing:"0.06em"}}>📈 KPD – Konto přesčasových hodin</div>
         <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))",gap:10,alignItems:"end"}}>
           {/* KPD vstup */}
           <div style={{background:"#e8eaf6",borderRadius:8,padding:"10px 12px",textAlign:"center"}}>
             <div style={{fontSize:9,fontWeight:700,color:"#3949ab",textTransform:"uppercase",marginBottom:4}}>KPD vstup (z min. měsíce)</div>
-            <div style={{fontSize:18,fontWeight:800,color:kpdVstup>=0?"#3949ab":"#c62828"}}>{fmtHsign(kpdVstup)}</div>
+            <div style={{fontSize:18,fontWeight:800,color:kdpVstup>=0?"#3949ab":"#c62828"}}>{fmtHsign(kdpVstup)}</div>
           </div>
           {/* Přesčas tento měsíc – odkaz na stávající hodnotu */}
           <div style={{background:overtime>=0?"#e8f5e9":"#ffebee",borderRadius:8,padding:"10px 12px",textAlign:"center"}}>
@@ -2288,7 +2243,7 @@ function TimesheetView({employee, year, month, holidays, stores, sched, employee
           {/* KPD proplaceno – editovatelné pro vedoucího, read-only pro prodavače */}
           <div style={{background:"#fff3e0",borderRadius:8,padding:"10px 12px",textAlign:"center"}}>
             <div style={{fontSize:9,fontWeight:700,color:"#e65100",textTransform:"uppercase",marginBottom:6}}>KPD proplaceno (vedoucí)</div>
-            {canEditKpd
+            {canEditKdp
               ? <select
                   value={kpdPaidThis}
                   onChange={e=>onKdpPaidChange(Number(e.target.value))}
@@ -2304,10 +2259,10 @@ function TimesheetView({employee, year, month, holidays, stores, sched, employee
             }
           </div>
           {/* KPD výstup */}
-          <div style={{background:kpdVystup>=0?"#e3f2fd":"#ffebee",borderRadius:8,padding:"10px 12px",textAlign:"center",border:`2px solid ${kpdVystup>=0?"#90caf9":"#ef9a9a"}`}}>
-            <div style={{fontSize:9,fontWeight:700,color:kpdVystup>=0?"#1565c0":"#c62828",textTransform:"uppercase",marginBottom:4}}>KPD výstup (do příštího měsíce)</div>
-            <div style={{fontSize:20,fontWeight:800,color:kpdVystup>=0?"#1565c0":"#c62828"}}>{fmtHsign(kpdVystup)}</div>
-            <div style={{fontSize:9,color:"#aaa",marginTop:2}}>= vstup {fmtHsign(kpdVstup)} + přesčas {fmtHsign(overtime)}{kpdPaidThis>0?` − proplaceno ${kpdPaidThis}h`:""}</div>
+          <div style={{background:kdpVystup>=0?"#e3f2fd":"#ffebee",borderRadius:8,padding:"10px 12px",textAlign:"center",border:`2px solid ${kdpVystup>=0?"#90caf9":"#ef9a9a"}`}}>
+            <div style={{fontSize:9,fontWeight:700,color:kdpVystup>=0?"#1565c0":"#c62828",textTransform:"uppercase",marginBottom:4}}>KPD výstup (do příštího měsíce)</div>
+            <div style={{fontSize:20,fontWeight:800,color:kdpVystup>=0?"#1565c0":"#c62828"}}>{fmtHsign(kdpVystup)}</div>
+            <div style={{fontSize:9,color:"#aaa",marginTop:2}}>= vstup {fmtHsign(kdpVstup)} + přesčas {fmtHsign(overtime)}{kpdPaidThis>0?` − proplaceno ${kpdPaidThis}h`:""}</div>
           </div>
         </div>
       </div>
@@ -2345,12 +2300,14 @@ function TimesheetView({employee, year, month, holidays, stores, sched, employee
 // Vypočítá kumulativní KPD pro zaměstnance k danému měsíci (včetně).
 // Prochází všechny měsíce od APP_START do (year,month) a sčítá přesčas − proplaceno.
 function calcKpdCumulative(emp, toYear, toMonth, sched, holidays, stores, patterns, employees, timesheetData){
-  let kpd = emp.kpdStart || 0;
-  // Startuj od data nástupu zaměstnance (pokud je po APP_START), jinak od APP_START
-  const empSd = empStartDate(emp);
-  const appStartDate = new Date(APP_START.year, APP_START.month, 1);
-  const startFrom = (empSd && empSd > appStartDate) ? empSd : appStartDate;
-  let y = startFrom.getFullYear(), m = startFrom.getMonth();
+  let kdp = emp.kpdStart || 0;
+  // Začni od data nástupu zaměstnance (pokud je novější než APP_START)
+  let y = APP_START.year, m = APP_START.month;
+  if(emp.startDate){
+    const sd = new Date(emp.startDate);
+    const sy = sd.getFullYear(), sm = sd.getMonth();
+    if(sy > y || (sy === y && sm > m)){ y = sy; m = sm; }
+  }
   while(y < toYear || (y === toYear && m <= toMonth)){
     const dim = getDim(y, m);
     const wd  = getWorkingDays(y, m, holidays);
@@ -2385,11 +2342,11 @@ function calcKpdCumulative(emp, toYear, toMonth, sched, holidays, stores, patter
     const tsKey = `${emp.id}-${y}-${m+1}`;
     const tsMonth = timesheetData?.[tsKey] || {};
     const paid = Number(tsMonth.kpdPaid || 0);
-    kpd += overtime - paid;
+    kdp += overtime - paid;
     // posun na další měsíc
     if(m===11){y++;m=0;}else{m++;}
   }
-  return kpd;
+  return kdp;
 }
 
 function SummaryTable({storeId, employees, year, month, sched, holidays, stores, patterns, timesheetData}){
@@ -2481,25 +2438,25 @@ function SummaryTable({storeId, employees, year, month, sched, holidays, stores,
 
           const overtime   = planned - fund;
           const beforeStart = year<APP_START.year||(year===APP_START.year&&month<APP_START.month);
-          const kpd        = beforeStart ? null : calcKpdCumulative(emp, year, month, sched, holidays, stores, patterns, employees, timesheetData);
+          const kdp        = beforeStart ? null : calcKpdCumulative(emp, year, month, sched, holidays, stores, patterns, employees, timesheetData);
           const kpdPaid    = 0;
-          const kpdBalance = kpd!==null ? kpd : null;
-          const vacLeft    = empVacTotal(emp) - vacUsed;
-          const kpdFmt = v => v===null?"—":(v>0?"+":v<0?"-":"")+fmtH(Math.abs(v));
-          const kpdStyle = v => v===null
+          const kdpBalance = kdp!==null ? kdp : null;
+          const vacNarok = (emp.vacHours||0)+(emp.vacAdjustment||0); const vacLeft    = vacNarok - vacUsed;
+          const kdpFmt = v => v===null?"—":(v>0?"+":v<0?"-":"")+fmtH(Math.abs(v));
+          const kdpStyle = v => v===null
             ? {padding:"8px 10px",textAlign:"center",borderBottom:`1px solid ${C.border}`,color:"#ccc"}
             : colStyle(v,"#1565c0","#c62828");
 
           return <tr key={emp.id} style={{background: i%2===0?"#fff":"#fafafe"}}>
             <td style={{padding:"8px 10px", fontWeight:700, color:C.topbar, borderBottom:`1px solid ${C.border}`, whiteSpace:"nowrap"}}>
-              {emp.firstName} {emp.lastName}
+              {emp.lastName} {emp.firstName}
               <div style={{fontSize:10,color:"#bbb",fontWeight:400}}>{emp.role} · {empContractDay(emp)}h/den · {empContractWeek(emp)}h/týden</div>
             </td>
             <td style={{padding:"8px 10px",textAlign:"center",borderBottom:`1px solid ${C.border}`,color:"#555"}}>{fmtH(fund)}</td>
             <td style={{padding:"8px 10px",textAlign:"center",borderBottom:`1px solid ${C.border}`,color:"#1a1a2e",fontWeight:600}}>{fmtH(planned)}</td>
             <td style={colStyle(overtime)}>{overtime>0?"+":""}{fmtH(overtime)}</td>
-            <td style={kpdStyle(kpd)}>{kpdFmt(kpd)}</td>
-            <td style={{padding:"8px 10px",textAlign:"center",borderBottom:`1px solid ${C.border}`,color:"#555"}}>{fmtH(empVacTotal(emp))}</td>
+            <td style={kdpStyle(kdp)}>{kdpFmt(kdp)}</td>
+            <td style={{padding:"8px 10px",textAlign:"center",borderBottom:`1px solid ${C.border}`,color:"#555"}}>{fmtH((emp.vacHours||0)+(emp.vacAdjustment||0))}</td>
             <td style={{padding:"8px 10px",textAlign:"center",borderBottom:`1px solid ${C.border}`,color:"#1565c0",fontWeight:600}}>{fmtH(vacUsed)}</td>
             <td style={colStyle(vacLeft, "#2e7d32", "#c62828")}>{fmtH(vacLeft)}</td>
           </tr>;
@@ -2609,8 +2566,10 @@ function LoginScreen({onLogin}){
 function MainApp({currentUser, handleLogout}){
   const [tab,setTab]=useState("schedule");
   const [storeId,setStoreId]=useState(currentUser?.storeIds?.[0]??1);
-  const [year,setYear]=useState(new Date().getFullYear());
-  const [month,setMonth]=useState(new Date().getMonth());
+  // Výchozí měsíc = aktuální
+  const _now = new Date();
+  const [year,setYear]=useState(_now.getFullYear());
+  const [month,setMonth]=useState(_now.getMonth());
 
   // ─── DATA STATE ──────────────────────────────────────────────
   const [employees,setEmployees]=useState(INIT_EMPS);
@@ -3105,7 +3064,7 @@ ${d}${hol?"!":"."}`;
       // Radky zamestnancu
       mainEmps.forEach((emp,ri)=>{
         const empIdx=mainEmps.findIndex(e=>e.id===emp.id);
-        const rowCells=[`${emp.firstName} ${emp.lastName}`,emp.role];
+        const rowCells=[`${emp.lastName} ${emp.firstName}`,emp.role];
         const rowColors=[];
         const rowFonts=[];
         for(let di=0;di<7;di++){
@@ -3194,7 +3153,7 @@ ${d}${hol?"!":"."}`;
         if(cell?.length){
           const ws2=cell.filter(s=>s.type==="work"&&s.from&&s.to);
           const vac=cell.find(s=>s.type==="vacation"||s.type==="sick");
-          const oth=cell.find(s=>s.type!=="work"&&s.type!=="vacation"&&s.type!=="sick");
+          const oth=cell.find(s=>s.type!=="work"&&s.type!=="vacation"&&s.type!=="sick"&&s.type!=="dayOff");
           if(ws2.length){ planned+=calcSplitWorked(ws2,emp.mainStore,stores); if(vac) planned+=(vac.hours||0); }
           else if(vac||oth) planned+=((vac||oth).hours||0);
           for(const seg of cell) if(seg.type==="vacation") vacUsed+=(seg.hours||0);
@@ -3206,15 +3165,15 @@ ${d}${hol?"!":"."}`;
       }
       const fund2=wd2*empContractDay(emp);
       const ot=planned-fund2;
-      const kpd=calcKpdCumulative(emp,year,month,sched,holidays,stores,patterns,employees,timesheetData);
-      const vacLeft=empVacTotal(emp)-vacUsed;
+      const kdp=calcKpdCumulative(emp,year,month,sched,holidays,stores,patterns,employees,timesheetData);
+      const vacLeft=(emp.vacHours||0)+(emp.vacAdjustment||0)-vacUsed;
       const altBg=ri%2===0?"FFFFFFFF":"FFF8F9FC";
       const sRow=ws.addRow([
-        `${emp.firstName} ${emp.lastName}`,
+        `${emp.lastName} ${emp.firstName}`,
         fmtH2(fund2), fmtH2(planned),
         (ot>=0?"+":"")+fmtH2(ot),
-        fmtHs(kpd),
-        fmtH2(empVacTotal(emp)), fmtH2(vacUsed), fmtH2(vacLeft),
+        fmtHs(kdp),
+        fmtH2((emp.vacHours||0)+(emp.vacAdjustment||0)), fmtH2(vacUsed), fmtH2(vacLeft),
       ]);
       sRow.height=13;
       sRow.eachCell((cell,cn)=>{
@@ -3222,13 +3181,13 @@ ${d}${hol?"!":"."}`;
         cell.alignment={horizontal:cn===1?"left":"center",vertical:"middle"};
         cell.border={bottom:{style:"hair",color:{argb:"FFD8DAE8"}}};
         const otColor=ot>0?"FF2E7D32":ot<0?"FFC62828":"FF888888";
-        const kpdColor=kpd>0?"FF1565C0":kpd<0?"FFC62828":"FF888888";
+        const kdpColor=kdp>0?"FF1565C0":kdp<0?"FFC62828":"FF888888";
         const vacColor=vacLeft>0?"FF2E7D32":"FFC62828";
         if(cn===1) cell.font={bold:true,size:9};
         else if(cn===2) cell.font={size:8,color:{argb:"FF555577"}};
         else if(cn===3) cell.font={size:8,bold:true};
         else if(cn===4) cell.font={size:8,bold:true,color:{argb:otColor}};
-        else if(cn===5) cell.font={size:8,bold:true,color:{argb:kpdColor}};
+        else if(cn===5) cell.font={size:8,bold:true,color:{argb:kdpColor}};
         else if(cn===6) cell.font={size:8,color:{argb:"FF555577"}};
         else if(cn===7) cell.font={size:8,color:{argb:"FF1565C0"}};
         else if(cn===8) cell.font={size:8,bold:true,color:{argb:vacColor}};
@@ -3410,7 +3369,7 @@ ${d}${hol?"!":"."}`;
         doc.setFillColor(altBg[0],altBg[1],altBg[2]);
         doc.rect(mL, y, nameW, rowH, "F");
         doc.setFont("helvetica","bold"); doc.setFontSize(fNameSize); doc.setTextColor(26,26,46);
-        doc.text(cz(`${emp.firstName} ${emp.lastName}`).substring(0,20), mL+2, y+rowH*0.65);
+        doc.text(cz(`${emp.lastName} ${emp.firstName}`).substring(0,20), mL+2, y+rowH*0.65);
         // 7 dnu
         for(let di=0;di<7;di++){
           const d=wDays[di];
@@ -3502,7 +3461,7 @@ ${d}${hol?"!":"."}`;
         if(cell?.length){
           const ws=cell.filter(s=>s.type==="work"&&s.from&&s.to);
           const vac=cell.find(s=>s.type==="vacation"||s.type==="sick");
-          const oth=cell.find(s=>s.type!=="work"&&s.type!=="vacation"&&s.type!=="sick");
+          const oth=cell.find(s=>s.type!=="work"&&s.type!=="vacation"&&s.type!=="sick"&&s.type!=="dayOff");
           if(ws.length){ planned+=calcSplitWorked(ws,emp.mainStore,stores); if(vac) planned+=(vac.hours||0); }
           else if(vac||oth) planned+=((vac||oth).hours||0);
           for(const seg of cell) if(seg.type==="vacation") vacUsed+=(seg.hours||0);
@@ -3514,12 +3473,12 @@ ${d}${hol?"!":"."}`;
       }
       const fund2=wd*empContractDay(emp);
       const ot=planned-fund2;
-      const kpd=calcKpdCumulative(emp,year,month,sched,holidays,stores,patterns,employees,timesheetData);
-      const vacLeft=empVacTotal(emp)-vacUsed;
+      const kdp=calcKpdCumulative(emp,year,month,sched,holidays,stores,patterns,employees,timesheetData);
+      const vacLeft=(emp.vacHours||0)+(emp.vacAdjustment||0)-vacUsed;
       const altBg=ri%2===0?[255,255,255]:[248,249,252];
       sx=mL;
-      const vals=[cz(`${emp.firstName} ${emp.lastName}`),fmtH2(fund2),fmtH2(planned),(ot>=0?"+":"")+fmtH2(ot),fmtHs(kpd),fmtH2(empVacTotal(emp)),fmtH2(vacUsed),fmtH2(vacLeft)];
-      const tcs=[[26,26,46],[80,82,100],[26,26,46],ot>0?[46,125,50]:ot<0?[198,40,40]:[120,120,130],kpd>0?[21,101,192]:kpd<0?[198,40,40]:[120,120,130],[80,82,100],[21,101,192],vacLeft>0?[46,125,50]:[198,40,40]];
+      const vals=[cz(`${emp.lastName} ${emp.firstName}`),fmtH2(fund2),fmtH2(planned),(ot>=0?"+":"")+fmtH2(ot),fmtHs(kdp),fmtH2(empVacTotal(emp)),fmtH2(vacUsed),fmtH2(vacLeft)];
+      const tcs=[[26,26,46],[80,82,100],[26,26,46],ot>0?[46,125,50]:ot<0?[198,40,40]:[120,120,130],kdp>0?[21,101,192]:kdp<0?[198,40,40]:[120,120,130],[80,82,100],[21,101,192],vacLeft>0?[46,125,50]:[198,40,40]];
       sHdrs.forEach((_,hi)=>{
         doc.setFillColor(altBg[0],altBg[1],altBg[2]);
         doc.rect(sx,sy,sColW[hi],sRowH,"F");
@@ -3548,17 +3507,24 @@ ${d}${hol?"!":"."}`;
   const tsEmpList = (() => {
     if(currentUser.role==="admin") return employees.filter(e=>e.active && isEmpActiveInMonth(e,year,month));
     if(currentUser.role==="vedouci") return employees.filter(e=>e.active && e.mainStore===storeId && isEmpActiveInMonth(e,year,month));
-    // Prodavač – jen sám sebe
-    const me = employees.find(e=>e.id===currentUser.empId || 
-      (e.firstName+" "+e.lastName).trim().toLowerCase()===currentUser.name?.toLowerCase() ||
-      e.firstName.toLowerCase()===currentUser.name?.toLowerCase().split(" ")[0]);
+    // Zamestnanec – jen sám sebe, primárně podle empId z app_users
+    const me = employees.find(e=>
+      // 1. Primární: podle ID uloženého v app_users.emp_id
+      (currentUser.empId && e.id===currentUser.empId) ||
+      // 2. Fallback: celé jméno "firstName lastName" nebo "lastName firstName"
+      (currentUser.name && (
+        `${e.lastName} ${e.firstName}`.trim().toLowerCase()===currentUser.name.toLowerCase() ||
+        `${e.lastName} ${e.firstName}`.trim().toLowerCase()===currentUser.name.toLowerCase()
+      ))
+    );
     return me ? [me] : [];
   })();
-  const eOpts=[{value:"",label:"— vyberte zaměstnance —"},...tsEmpList.map(e=>({value:e.id,label:`${e.firstName} ${e.lastName}`}))];
+  const eOpts=[{value:"",label:"— vyberte zaměstnance —"},...tsEmpList.map(e=>({value:e.id,label:`${e.lastName} ${e.firstName}`}))];
   const tabs=[
     {key:"schedule",  label:"📅 Rozvrh"},
     {key:"timesheet", label:"📋 Výkaz"},
     ...(isVedouci?[{key:"employees",label:"👥 Zaměstnanci"},{key:"settings",label:"⚙️ Nastavení"}]:[]),
+    ...(currentUser.role==="admin"?[{key:"provize",label:"💰 Provize"}]:[]),
   ];
 
 
@@ -3646,7 +3612,7 @@ ${d}${hol?"!":"."}`;
           {/* Prodavač vidí jen sebe – bez selectu */}
           {!isZamestnanec&&<FSel label="Zaměstnanec" value={tsEmp||""} onChange={v=>setTsEmp(v?Number(v):null)} options={eOpts} style={{minWidth:220}}/>}
           {isZamestnanec&&tsEmp&&<div style={{padding:"7px 14px",background:"#f8f9ff",borderRadius:8,border:`1.5px solid ${C.border}`,fontSize:14,fontWeight:600,color:C.topbar}}>
-            👤 {tsEmpList[0]?.firstName} {tsEmpList[0]?.lastName}
+            👤 {tsEmpList[0]?.lastName} {tsEmpList[0]?.firstName}
           </div>}
           <FSel label="Měsíc" value={month} onChange={v=>setMonth(Number(v))} options={mOpts} style={{minWidth:130}}/>
           <FSel label="Rok" value={year} onChange={v=>setYear(Number(v))} options={yOpts} style={{minWidth:90}}/>
@@ -3665,7 +3631,7 @@ ${d}${hol?"!":"."}`;
             <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
               {pending.map(e=><button key={e.id} onClick={()=>setTsEmp(e.id)}
                 style={{padding:"4px 12px",borderRadius:20,background:"#fff",border:"1.5px solid #ffb300",color:"#e65100",fontWeight:600,fontSize:12,cursor:"pointer"}}>
-                {e.firstName} {e.lastName}
+                {e.lastName} {e.firstName}
               </button>)}
             </div>
           </div>;
@@ -3695,7 +3661,7 @@ ${d}${hol?"!":"."}`;
             rows={getTimesheetRows(tsEmp,year,month+1)}
             onRowChange={isLocked?null:(day,field,value)=>updTimesheetRow(tsEmp,year,month+1,day,field,value)}
             timesheetData={timesheetData}
-            canEditKpd={isVedouci}
+            canEditKdp={isVedouci}
             tsStatus={tsStatus}
             isVedouci={isVedouci}
             onSubmit={handleSubmit}
@@ -3724,6 +3690,11 @@ ${d}${hol?"!":"."}`;
                 stores={stores} setStores={setStoresDB} employees={employees} patterns={patterns} setPatterns={setPatternsDB}/></>
           : <div style={{textAlign:"center",padding:"60px 0",color:"#bbb",fontSize:16}}>🔒 Přístup pouze pro vedoucí</div>}
       </div>}
+
+      {tab==="provize"&&currentUser.role==="admin"&&<div style={{background:"#fff",borderRadius:10,padding:"24px",boxShadow:"0 1px 4px rgba(0,0,0,0.05)"}}>
+        <h2 style={{margin:"0 0 20px 0",fontSize:20,fontWeight:800,color:"#1B4F8A"}}>💰 Provizní modul</h2>
+        <CommissionModule employees={employees} stores={stores} currentUser={currentUser} sched={sched} holidays={holidays} patterns={patterns}/>
+      </div>}
     </div>
 
     {editCell&&<Modal open={!!editCell} onClose={()=>setEditCell(null)} title="Upravit směnu" width={520}>
@@ -3751,7 +3722,7 @@ ${d}${hol?"!":"."}`;
     <Modal open={showResetTsConfirm} onClose={()=>setShowResetTsConfirm(false)} title="Reset výkazu" width={440}>
       <div style={{display:"flex",flexDirection:"column",gap:20}}>
         <div style={{fontSize:15,color:"#333",lineHeight:1.6}}>
-          Opravdu chcete resetovat výkaz zaměstnance <strong>{employees.find(e=>e.id===tsEmp)?.firstName} {employees.find(e=>e.id===tsEmp)?.lastName}</strong> pro{" "}
+          Opravdu chcete resetovat výkaz zaměstnance <strong>{employees.find(e=>e.id===tsEmp)?.lastName} {employees.find(e=>e.id===tsEmp)?.firstName}</strong> pro{" "}
           <strong>{MONTHS[month]} {year}</strong>?
         </div>
         <div style={{padding:"10px 14px",background:"#fff8e1",borderRadius:8,fontSize:13,color:"#e65100",fontWeight:600}}>
@@ -3763,6 +3734,1645 @@ ${d}${hol?"!":"."}`;
         </div>
       </div>
     </Modal>
+  </div>;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// PROVIZNÍ MODUL – viditelný POUZE pro roli admin
+// ═══════════════════════════════════════════════════════════════
+
+// ── Výpočetní jádro ──────────────────────────────────────────
+function calcKoefKraceni(plneni, kraceni){
+  // kraceni = [{od: 0-1, koef: 0-1}] seřazeno od největšího
+  if(kraceni && kraceni.length){
+    const sorted = [...kraceni].sort((a,b)=>b.od-a.od);
+    for(const r of sorted){
+      if(plneni >= r.od/100) return r.koef/100;
+    }
+    return 0;
+  }
+  // Výchozí tabulka (fallback)
+  if(plneni>=0.99) return 1.00;
+  if(plneni>=0.79) return 0.90;
+  if(plneni>=0.49) return 0.50;
+  if(plneni>=0.24) return 0.30;
+  if(plneni>=0.10) return 0.15;
+  return 0.00;
+}
+
+// Role které se v provizním systému nezobrazují vůbec
+const COMMISSION_HIDDEN_ROLES = new Set(["Admin","Majitel"]);
+// Role se speciálním režimem (bez plánu, bez krácení, provize rovnou 100%)
+const COMMISSION_SPECIAL_ROLES = new Set(["Rozvoz","Účetní","Brigádník"]);
+
+function calcCommission(emp, settings, allEmpsData, penetraceOverride, globalSettings){
+  const s = settings;
+  const g = globalSettings || {};
+  const empRole = emp.role || "";
+
+  // Speciální režim: Rozvoz, Účetní, Brigádník – bez plánu, bez krácení, 100% koef
+  if(COMMISSION_SPECIAL_ROLES.has(empRole)){
+    const trzba_pz = Number(emp.trzba_pz)||0;
+    const sazbaPz  = Number(s.sazba_pz)||0.10;
+    const provizePz = trzba_pz * sazbaPz;
+
+    const trzba_sluzby = Number(emp.trzba_sluzby)||0;
+    const sazbaSluzby  = Number(s.sazba_sluzby)||0.10;
+    const stropSluzby  = Number(s.strop_sluzby)||1500;
+    const provizeSluzby = Math.min(trzba_sluzby * sazbaSluzby, stropSluzby);
+
+    const obrat_prislusenství = Number(emp.obrat_prislusenstvi)||0;
+    const sazbaPrisl4 = Number(s.sazba_prisl_4)||0.038;
+    const stropPrisl  = Number(s.strop_prislusenstvi)||4000;
+    const provizePrislusenství = Math.min(obrat_prislusenství * sazbaPrisl4, stropPrisl);
+
+    const obrat = Number(emp.obrat)||0;
+    const obratKoef = (Number(emp.hodiny)||0) >= 160 ? (Number(s.obrat_koef_plny)||0.004) : (Number(s.obrat_koef_zkraceny)||0.003);
+    const provizeObrat = Math.min(obrat * obratKoef, Number(s.obrat_strop)||3000);
+
+    const korunovaMot = Number(emp.korunova_motivace)||0;
+
+    // Rozvoz+Admin odměny
+    const rozv1 = Number(emp.rozvoz1)||0;
+    const rozv2 = Number(emp.rozvoz2)||0;
+    const adminH = Number(emp.admin_prace)||0;
+    const sazbaRoz1  = Number(g.sazba_rozvoz1)||0;
+    const sazbaRoz2  = Number(g.sazba_rozvoz2)||0;
+    const sazbaAdmin = Number(g.sazba_admin)||0;
+    const provizeRozvozAdmin = rozv1*sazbaRoz1 + rozv2*sazbaRoz2 + adminH*sazbaAdmin;
+
+    const vyslednaProvize = provizeObrat + provizePz + provizeSluzby + provizePrislusenství + korunovaMot + provizeRozvozAdmin;
+    return {
+      isSpecialRole: true,
+      provizeObrat, plneniObrat:null, bonusObrat:0,
+      provizePz, plneniPz:null, sazbaPz,
+      provizeSluzby, plneniSluzby:null, stropSluzby,
+      provizePrislusenství, plneniPrislusenství:null, stropPrislusenství:stropPrisl,
+      korunovaMot, rozv1, rozv2, adminH, provizeRozvozAdmin,
+      planObrat:null, planPz:null, planSluzby:null, planPrislusenství:null,
+      celkPlneni:1, koef:1, zaklad:vyslednaProvize,
+      vyslednaProvize, hrubaMzda:22000+vyslednaProvize,
+    };
+  }
+
+  const soucetHodin = allEmpsData.reduce((a,e)=>a+(Number(e.hodiny)||0),0);
+  if(!soucetHodin) return null;
+  const podil = (Number(emp.hodiny)||0) / soucetHodin;
+  const plan = Number(emp.plan_prodejny)||0;
+
+  const koefPrislusenství = penetraceOverride != null ? penetraceOverride : (Number(s.koef_prislusenstvi)||0.1465);
+
+  const planObrat = plan * podil;
+  const planPz    = plan * (Number(s.koef_pz)||0.025) * podil;
+  const planSluzby = plan * (Number(s.koef_sluzby)||0.012) * podil;
+  const planPrislusenství = planObrat * koefPrislusenství;
+
+  const hodiny = Number(emp.hodiny)||0;
+  const obratKoef = hodiny >= 160 ? (Number(s.obrat_koef_plny)||0.004) : (Number(s.obrat_koef_zkraceny)||0.003);
+  const obrat = Number(emp.obrat)||0;
+  const provizeObratRaw = obrat * obratKoef;
+  const provizeObrat = Math.min(provizeObratRaw, Number(s.obrat_strop)||3000);
+  const plneniObrat = planObrat > 0 ? obrat / planObrat : 0;
+  const bonusObrat110 = Number(s.bonus_obrat_110)||500;
+  const bonusObrat120 = Number(s.bonus_obrat_120)||1000;
+  const bonusObrat = plneniObrat >= 1.2 ? bonusObrat120 : plneniObrat >= 1.1 ? bonusObrat110 : 0;
+
+  const trzba_pz = Number(emp.trzba_pz)||0;
+  const sazbaPz = Number(s.sazba_pz)||0.10;
+  const provizePz = trzba_pz * sazbaPz;
+  const plneniPz = planPz > 0 ? trzba_pz / planPz : 0;
+
+  const trzba_sluzby = Number(emp.trzba_sluzby)||0;
+  const sazbaSluzby = Number(s.sazba_sluzby)||0.10;
+  const stropSluzby = Number(s.strop_sluzby)||1500;
+  const provizeSluzby = Math.min(trzba_sluzby * sazbaSluzby, stropSluzby);
+  const plneniSluzby = planSluzby > 0 ? trzba_sluzby / planSluzby : 0;
+
+  const obrat_prislusenství = Number(emp.obrat_prislusenstvi)||0;
+  const plneniPrislusenství = planPrislusenství > 0 ? obrat_prislusenství / planPrislusenství : 0;
+  const stropPrislusenství = Number(s.strop_prislusenstvi)||4000;
+  const sazbaPrisl1 = Number(s.sazba_prisl_1)||0.01;
+  const sazbaPrisl2 = Number(s.sazba_prisl_2)||0.02;
+  const sazbaPrisl3 = Number(s.sazba_prisl_3)||0.03;
+  const sazbaPrisl4 = Number(s.sazba_prisl_4)||0.038;
+  let sazbaPrisl = 0;
+  if(plneniPrislusenství >= 1.00)      sazbaPrisl = sazbaPrisl4;
+  else if(plneniPrislusenství >= 0.61) sazbaPrisl = sazbaPrisl3;
+  else if(plneniPrislusenství >= 0.26) sazbaPrisl = sazbaPrisl2;
+  else if(plneniPrislusenství >= 0.11) sazbaPrisl = sazbaPrisl1;
+  const provizePrislusenství = Math.min(obrat_prislusenství * sazbaPrisl, stropPrislusenství);
+
+  const korunovaMot = Number(emp.korunova_motivace)||0;
+
+  // Rozvoz+Admin – platí pro VŠECHNY role
+  const rozv1 = Number(emp.rozvoz1)||0;
+  const rozv2 = Number(emp.rozvoz2)||0;
+  const adminH = Number(emp.admin_prace)||0;
+  const sazbaRoz1  = Number(g.sazba_rozvoz1)||0;
+  const sazbaRoz2  = Number(g.sazba_rozvoz2)||0;
+  const sazbaAdmin = Number(g.sazba_admin)||0;
+  const provizeRozvozAdmin = rozv1*sazbaRoz1 + rozv2*sazbaRoz2 + adminH*sazbaAdmin;
+
+  // Celkové plnění (PZ váha 4×)
+  const vahaPz    = Number(g.vaha_pz)||4;
+  const vahaObrat = Number(g.vaha_obrat)||1;
+  const vahaSluzby= Number(g.vaha_sluzby)||1;
+  const vahaPrisl = Number(g.vaha_prisl)||1;
+  const vahaSouc  = vahaPz + vahaObrat + vahaSluzby + vahaPrisl;
+  const celkPlneni = (Math.min(plneniPz,1)*vahaPz + Math.min(plneniObrat,1)*vahaObrat + Math.min(plneniSluzby,1)*vahaSluzby + Math.min(plneniPrislusenství,1)*vahaPrisl) / vahaSouc;
+  const koef = calcKoefKraceni(celkPlneni, g.kraceni);
+
+  const zaklad = (provizeObrat + provizePz + provizeSluzby + provizePrislusenství + korunovaMot + provizeRozvozAdmin) * koef;
+  const vyslednaProvize = zaklad + bonusObrat;
+  const hrubaMzda = 22000 + vyslednaProvize;
+
+  return {
+    planObrat, planPz, planSluzby, planPrislusenství,
+    provizeObrat, plneniObrat, bonusObrat,
+    provizePz, plneniPz, sazbaPz,
+    provizeSluzby, plneniSluzby, stropSluzby,
+    provizePrislusenství, plneniPrislusenství, stropPrislusenství,
+    korunovaMot, rozv1, rozv2, adminH, provizeRozvozAdmin,
+    celkPlneni, koef,
+    zaklad, vyslednaProvize, hrubaMzda,
+  };
+}
+
+function pct(v){ return `${Math.round((v||0)*100)} %`; }
+function czk(v){ return `${Math.round(v||0).toLocaleString("cs-CZ")} Kč`; }
+
+function PlneniDot({v}){
+  const pv = (v||0);
+  const bg = pv >= 0.8 ? "#16a34a" : pv >= 0.5 ? "#f97316" : "#dc2626";
+  return <span style={{display:"inline-block",width:10,height:10,borderRadius:"50%",background:bg,marginRight:5,flexShrink:0}}/>;
+}
+
+// ── Pomocník: spočítej plánované hodiny z rozvrhu ────────────
+// Pro provize: počítáme jen work + vacation + sick, NE dayOff/obstacle
+// POZOR: month je 0-based (stejně jako v JS Date)
+function calcPlannedHours(emp, storeId, year, month, sched, holidays, stores, patterns, employees){
+  const dim = getDim(year, month);
+  let planned = 0;
+  const mainEmps = employees.filter(e=>e.active && e.mainStore===storeId);
+  const empIdx = mainEmps.findIndex(e=>e.id===emp.id);
+  for(let d=1; d<=dim; d++){
+    const dow = getDow(year, month, d);
+    const ds = fmtDate(year, month, d);
+    const cell = getSchedCell(sched, emp.id, ds, employees);
+    if(cell?.length){
+      const ws = cell.filter(s=>s.type==="work"&&s.from&&s.to);
+      const vac = cell.find(s=>s.type==="vacation"||s.type==="sick");
+      // Pro provize: dayOff, obstacle a jiné absence NEPOČÍTÁME
+      // (zaměstnanec nebyl přítomen, neměl příležitost prodávat)
+      if(ws.length){
+        planned += calcSplitWorked(ws, emp.mainStore, stores);
+        if(vac) planned += (vac.hours||0);
+      } else if(vac){
+        // Pouze dovolená/nemoc se počítá do hodinového fondu pro provize
+        planned += (vac.hours||0);
+      }
+      // dayOff, obstacle → 0 hodin pro provize
+    } else {
+      // Ze vzoru
+      const hol = holidays.find(h=>h.date===ds);
+      const date = new Date(year, month, d);
+      const pc = getPatCell(patterns, storeId, empIdx, date);
+      if(pc){
+        const st = typeof pc==="object"?pc.shift||"work":pc;
+        const lId = typeof pc==="object"?(pc.loc||storeId):storeId;
+        const [fr,to] = getEmpShiftTimes(emp, lId, st, dow, stores, typeof pc==="object"?pc:null, hol);
+        if(fr&&to) planned += calcWorked(fr, to, getBreakRules(lId, stores));
+      }
+      // pc===null → vzor říká volno → 0
+    }
+  }
+  return Math.round(planned * 10) / 10;
+}
+
+// ── Pomocník: parsování xlsx v prohlížeči přes SheetJS ────────
+// Vrátí { obrat, trzba_pz, trzba_sluzby, obrat_prislusenstvi, korunova_motivace }
+// klíčováno podle jména prodejce (příjmení lowercase)
+async function loadXLSX(){
+  if(window.XLSX) return window.XLSX;
+  return new Promise((resolve,reject)=>{
+    const s=document.createElement("script");
+    s.src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js";
+    s.onload=()=>resolve(window.XLSX);
+    s.onerror=()=>reject(new Error("Nepodařilo se načíst SheetJS"));
+    document.head.appendChild(s);
+  });
+}
+
+async function parseVzorPodklady(file){
+  return new Promise(async(resolve, reject)=>{
+    let XLSX;
+    try { XLSX = await loadXLSX(); } catch(e){ reject(e); return; }
+    const reader = new FileReader();
+    reader.onload = (e)=>{
+      try {
+        const data = new Uint8Array(e.target.result);
+        const wb = XLSX.read(data, {type:"array"});
+
+        // Načte řádky, vrátí mapu: "id_XXXX" → hodnota, + příjmení NFC + ASCII fallback
+        // Detekce dat: řádek kde col[0] obsahuje [číselné ID]
+        const norm = s => String(s||"").trim().normalize("NFC").toLowerCase();
+        const toAscii = s => norm(s).normalize("NFD").replace(/[\u0300-\u036f]/g,"");
+
+        const parseSheet = (sheetName, colIdx)=>{
+          const ws = wb.Sheets[sheetName];
+          if(!ws) return {};
+          const rows = XLSX.utils.sheet_to_json(ws, {header:1, defval:null});
+          const result = {};
+          for(let i=0; i<rows.length; i++){
+            const nameRaw = rows[i]?.[0];
+            if(!nameRaw) continue;
+            const nameStr = String(nameRaw).trim();
+            const idM = nameStr.match(/\[(\d+)\]/);
+            if(!idM) continue; // přeskočíme řádky bez [ID] (záhlaví, součty)
+            const val = rows[i]?.[colIdx];
+            const numVal = (val != null && !isNaN(Number(val))) ? Number(val) : 0;
+            result[`id_${idM[1]}`] = numVal;
+            result[norm(nameStr.split(" ")[0])] = numVal;
+            result[toAscii(nameStr.split(" ")[0])] = numVal;
+          }
+          return result;
+        };
+
+        const parseKorunova = ()=>{
+          const ws = wb.Sheets["Korunová motivace"];
+          if(!ws) return {};
+          const rows = XLSX.utils.sheet_to_json(ws, {header:1, defval:null});
+          const result = {};
+          for(let i=0; i<rows.length; i++){
+            const nameRaw = rows[i]?.[0];
+            if(!nameRaw) continue;
+            const nameStr = String(nameRaw).trim();
+            const idM = nameStr.match(/\[(\d+)\]/);
+            if(!idM) continue;
+            const total = (Number(rows[i]?.[1])||0) + (Number(rows[i]?.[2])||0);
+            result[`id_${idM[1]}`] = total;
+            result[norm(nameStr.split(" ")[0])] = total;
+            result[toAscii(nameStr.split(" ")[0])] = total;
+          }
+          return result;
+        };
+
+        const obratMap    = parseSheet("Obrat Kč", 1);
+        const pzMap       = parseSheet("PZ", 2);
+        const sluzbyMap   = parseSheet("Služby", 2);
+        const prislMap    = parseSheet("Příslušenství", 1);
+        const korunovaMap = parseKorunova();
+
+        resolve({ obratMap, pzMap, sluzbyMap, prislMap, korunovaMap });
+      } catch(err){ reject(err); }
+    };
+    reader.onerror = ()=>reject(new Error("Chyba čtení souboru"));
+    reader.readAsArrayBuffer(file);
+  });
+}
+
+// ── Obrazovka 1: Zadat výsledky ───────────────────────────────
+function CommissionInput({employees, stores, currentUser, sched, holidays, patterns}){
+  const now = new Date();
+  const ALL_STORES = 0; // speciální hodnota pro "Všechny prodejny"
+  const [storeId, setStoreId] = useState(ALL_STORES);
+  const [month, setMonth] = useState(now.getMonth()+1);
+  const [year, setYear] = useState(now.getFullYear());
+  // planyPoboček: { storeId: "číslo jako string" }
+  const [planyPoboček, setPlanyPoboček] = useState({});
+  const [rows, setRows] = useState([]); // pro single-store pohled
+  const [saving, setSaving] = useState(false);
+  const [savingPlans, setSavingPlans] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [savedPlans, setSavedPlans] = useState(false);
+  const [loadingData, setLoadingData] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const [importStatus, setImportStatus] = useState(null);
+  const importRef = useRef(null);
+  const MONTHS_CZ = ["Leden","Únor","Březen","Duben","Květen","Červen","Červenec","Srpen","Září","Říjen","Listopad","Prosinec"];
+  const inputS = {padding:"6px 9px",borderRadius:7,border:"1.5px solid #E8E8F0",fontSize:13,width:"100%",boxSizing:"border-box"};
+  const thS = {padding:"8px 10px",textAlign:"left",fontWeight:700,color:"#fff",fontSize:12,whiteSpace:"nowrap",background:"#1B4F8A"};
+
+  // Načti plány pro všechny pobočky při změně měsíce/roku
+  useEffect(()=>{
+    (async()=>{
+      // Načti existující plány z DB (každá prodejna má svůj plán)
+      const {data:planD} = await supabase.from("commission_store_plans")
+        .select("*").eq("month",month).eq("year",year);
+      const pm = {};
+      stores.forEach(s=>{ pm[s.id] = ""; });
+      (planD||[]).forEach(r=>{ pm[r.store_id] = String(r.plan_prodejny||""); });
+      setPlanyPoboček(pm);
+    })();
+  },[month,year]);
+
+  // Načti data pro single-store pohled
+  useEffect(()=>{
+    if(storeId===ALL_STORES) { setRows([]); return; }
+    if(!month||!year) return;
+    (async()=>{
+      setLoadingData(true); setImportStatus(null);
+      const emps = employees.filter(e=>e.active && e.mainStore===storeId);
+      const {data:commD} = await supabase.from("commission_data")
+        .select("*").eq("store_id",storeId).eq("month",month).eq("year",year);
+      const newRows = emps.map(e=>{
+        const savedD = commD?.find(d=>d.employee_id===e.id);
+        const schedH = calcPlannedHours(e, storeId, year, month-1, sched, holidays, stores, patterns, employees);
+        const prijmeniSrc = (e.lastName && e.lastName.trim()) ? e.lastName : e.firstName;
+        return {
+          employee_id: e.id,
+          name: `${e.lastName} ${e.firstName}`.trim(),
+          prijmeni: prijmeniSrc.normalize("NFC").toLowerCase(),
+          prijmeniFallback: ((e.lastName&&e.lastName.trim())?e.firstName:"").normalize("NFC").toLowerCase(),
+          locked: savedD?.locked===true,
+          hodiny: savedD ? String(savedD.hodiny) : schedH>0 ? String(schedH) : "",
+          hodiny_source: savedD ? "saved" : schedH>0 ? "rozvrh" : "manual",
+          obrat: savedD ? String(savedD.obrat) : "",
+          trzba_pz: savedD ? String(savedD.trzba_pz) : "",
+          trzba_sluzby: savedD ? String(savedD.trzba_sluzby) : "",
+          obrat_prislusenstvi: savedD ? String(savedD.obrat_prislusenstvi) : "",
+          korunova_motivace: savedD ? String(savedD.korunova_motivace) : "",
+        };
+      });
+      setRows(newRows);
+      setLoadingData(false);
+    })();
+  },[storeId, month, year]);
+
+  const updRow=(idx,field,val)=>{
+    setRows(prev=>prev.map((r,i)=>i===idx?{...r,[field]:val}:r));
+  };
+
+  const isLocked = storeId!==ALL_STORES && rows.length>0 && rows.every(r=>r.locked);
+
+  // Ulož plány poboček (vždy editovatelné, nezávisle na zamčení)
+  const handleSavePlans = async()=>{
+    setSavingPlans(true);
+    for(const s of stores){
+      const plan = Number(planyPoboček[s.id])||0;
+      if(!plan) continue;
+      await supabase.from("commission_store_plans").upsert(
+        {store_id:s.id, month, year, plan_prodejny:plan},
+        {onConflict:"store_id,month,year"}
+      );
+    }
+    setSavingPlans(false); setSavedPlans(true); setTimeout(()=>setSavedPlans(false),2500);
+  };
+
+  // Ulož aktuální prodejnu ručně
+  const handleSave = async()=>{
+    const plan = Number(planyPoboček[storeId])||0;
+    if(!plan){ alert("Zadejte Plán prodejny!"); return; }
+    setSaving(true);
+    for(const r of rows){
+      const {error} = await supabase.from("commission_data").upsert({
+        store_id:storeId, employee_id:r.employee_id, month, year,
+        plan_prodejny:plan,
+        hodiny:Number(r.hodiny)||0, obrat:Number(r.obrat)||0,
+        trzba_pz:Number(r.trzba_pz)||0, trzba_sluzby:Number(r.trzba_sluzby)||0,
+        obrat_prislusenstvi:Number(r.obrat_prislusenstvi)||0,
+        korunova_motivace:Number(r.korunova_motivace)||0,
+      },{onConflict:"store_id,employee_id,month,year"});
+      if(!error){
+        await supabase.from("commission_data")
+          .update({locked:true})
+          .eq("store_id",storeId).eq("employee_id",r.employee_id)
+          .eq("month",month).eq("year",year);
+      }
+    }
+    setSaving(false); setSaved(true); setTimeout(()=>setSaved(false),2500);
+    setRows(prev=>prev.map(r=>({...r,locked:true})));
+  };
+
+  const handleUnlock = async()=>{
+    if(!window.confirm("Opravdu odemknout data pro úpravy?")) return;
+    for(const r of rows){
+      await supabase.from("commission_data")
+        .update({locked:false})
+        .eq("store_id",storeId).eq("employee_id",r.employee_id).eq("month",month).eq("year",year);
+    }
+    setRows(prev=>prev.map(r=>({...r,locked:false})));
+  };
+
+  // Hromadný import – vždy pro všechny pobočky
+  const handleImportAndSave = async(file)=>{
+    try {
+      setImporting(true);
+      // Zkontroluj jestli jsou zadané plány
+      const missingPlans = stores.filter(s=>!Number(planyPoboček[s.id]));
+      if(missingPlans.length){
+        const names = missingPlans.map(s=>s.name).join(", ");
+        if(!window.confirm(`Chybí plán pro: ${names}\nPokračovat bez nich?`)) { setImporting(false); return; }
+      }
+
+      const {obratMap,pzMap,sluzbyMap,prislMap,korunovaMap} = await parseVzorPodklady(file);
+      const toAsciiStr = s => String(s||"").normalize("NFC").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"");
+      const findKey = (r,map)=>{
+        for(const p of [r.prijmeni,r.prijmeniFallback].filter(Boolean)){
+          if(p in map) return p;
+          const asc=toAsciiStr(p);
+          const found=Object.keys(map).find(k=>toAsciiStr(k)===asc);
+          if(found) return found;
+        }
+        return null;
+      };
+
+      const ok=[], warn=[], statByStore={};
+      stores.forEach(s=>{ statByStore[s.id]={name:s.name, count:0}; });
+      const diagKeys=Object.keys(obratMap).filter(k=>!k.startsWith("id_")).sort();
+
+      const allActiveEmps = employees.filter(e=>e.active);
+      const importRows = allActiveEmps.map(e=>{
+        const prijmeniSrc = (e.lastName&&e.lastName.trim()) ? e.lastName : e.firstName;
+        const fakeRow = {
+          prijmeni: prijmeniSrc.normalize("NFC").toLowerCase(),
+          prijmeniFallback: ((e.lastName&&e.lastName.trim())?e.firstName:"").normalize("NFC").toLowerCase(),
+        };
+        const mk = findKey(fakeRow, obratMap);
+        const schedH = calcPlannedHours(e, e.mainStore, year, month-1, sched, holidays, stores, patterns, employees);
+        const plan = Number(planyPoboček[e.mainStore])||0;
+        if(!mk){ warn.push(`${e.lastName} ${e.firstName}`.trim()); return null; }
+        ok.push(`${e.lastName} ${e.firstName}`.trim());
+        if(statByStore[e.mainStore]) statByStore[e.mainStore].count++;
+        return {
+          store_id:e.mainStore, employee_id:e.id, month, year,
+          plan_prodejny:plan,
+          hodiny:schedH>0?schedH:0,
+          obrat:Math.round(obratMap[mk]||0),
+          trzba_pz:Math.round(pzMap[mk]||0),
+          trzba_sluzby:Math.round(sluzbyMap[mk]||0),
+          obrat_prislusenstvi:Math.round(prislMap[mk]||0),
+          korunova_motivace:Math.round(korunovaMap[mk]||0),
+          // locked se nastaví separátním updatem po uložení dat
+        };
+      }).filter(Boolean);
+
+      // Ulož plány poboček do commission_store_plans
+      for(const s of stores){
+        const plan = Number(planyPoboček[s.id])||0;
+        if(!plan) continue;
+        await supabase.from("commission_store_plans").upsert(
+          {store_id:s.id, month, year, plan_prodejny:plan},
+          {onConflict:"store_id,month,year"}
+        );
+      }
+
+      // Ulož výsledky všech zaměstnanců – sekvenčně pro spolehlivost
+      const dbErrors = [];
+      for(const ur of importRows){
+        const {error} = await supabase.from("commission_data")
+          .upsert(ur, {onConflict:"store_id,employee_id,month,year"});
+        if(error){
+          dbErrors.push(`emp${ur.employee_id}(store${ur.store_id}): ${error.message}`);
+        } else {
+          // Pokus o nastavení locked – ignoruj chybu pokud sloupec neexistuje
+          await supabase.from("commission_data")
+            .update({locked:true})
+            .eq("store_id",ur.store_id).eq("employee_id",ur.employee_id)
+            .eq("month",ur.month).eq("year",ur.year);
+        }
+      }
+
+      // Přenačti aktuálně zobrazené rows
+      if(storeId!==ALL_STORES){
+        const {data:freshD} = await supabase.from("commission_data")
+          .select("*").eq("store_id",storeId).eq("month",month).eq("year",year);
+        setRows(prev=>prev.map(r=>{
+          const d=freshD?.find(x=>x.employee_id===r.employee_id);
+          if(!d) return r;
+          return {...r, hodiny:String(d.hodiny), obrat:String(d.obrat),
+            trzba_pz:String(d.trzba_pz), trzba_sluzby:String(d.trzba_sluzby),
+            obrat_prislusenstvi:String(d.obrat_prislusenstvi),
+            korunova_motivace:String(d.korunova_motivace), locked:true};
+        }));
+      }
+
+      const statStr = Object.values(statByStore).filter(s=>s.count>0).map(s=>`${s.name}: ${s.count}`).join(", ");
+      setImportStatus({ok, warn, diagKeys,
+        info:`Uloženo ${importRows.length} zaměstnanců – ${statStr}`,
+        dbErrors: dbErrors.length ? dbErrors : null,
+      });
+      setImporting(false);
+    } catch(err){ setImporting(false); alert("Chyba importu: "+err.message); }
+  };
+
+  const handleImport = async(e)=>{
+    const file=e.target.files?.[0]; if(!file) return;
+    e.target.value="";
+    await handleImportAndSave(file);
+  };
+
+  // ── RENDER ──────────────────────────────────────────────────
+  return <div>
+    {/* Selektory */}
+    <div style={{display:"flex",gap:12,flexWrap:"wrap",marginBottom:16,alignItems:"flex-end"}}>
+      <div>
+        <div style={{fontSize:11,fontWeight:700,color:"#888",marginBottom:4}}>POBOČKA</div>
+        <select value={storeId} onChange={e=>setStoreId(Number(e.target.value))}
+          style={{...inputS,width:"auto",minWidth:150}}>
+          <option value={ALL_STORES}>📋 Všechny prodejny</option>
+          {stores.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}
+        </select>
+      </div>
+      <div>
+        <div style={{fontSize:11,fontWeight:700,color:"#888",marginBottom:4}}>MĚSÍC</div>
+        <select value={month} onChange={e=>setMonth(Number(e.target.value))}
+          style={{...inputS,width:"auto",minWidth:120}}>
+          {MONTHS_CZ.map((m,i)=><option key={i+1} value={i+1}>{m}</option>)}
+        </select>
+      </div>
+      <div>
+        <div style={{fontSize:11,fontWeight:700,color:"#888",marginBottom:4}}>ROK</div>
+        <select value={year} onChange={e=>setYear(Number(e.target.value))}
+          style={{...inputS,width:"auto",minWidth:90}}>
+          {[2025,2026,2027].map(y=><option key={y} value={y}>{y}</option>)}
+        </select>
+      </div>
+    </div>
+
+    {/* Plány poboček – vždy editovatelné */}
+    <div style={{marginBottom:16,padding:"14px 16px",background:"#f8f9ff",borderRadius:10,border:"1.5px solid #e8e8f0"}}>
+      <div style={{fontWeight:700,color:"#1a1a2e",marginBottom:10,fontSize:13}}>
+        📋 Plán prodejny na {MONTHS_CZ[month-1]} {year}
+        <span style={{fontSize:11,fontWeight:400,color:"#888",marginLeft:8}}>— zadej pro každou prodejnu zvlášť</span>
+      </div>
+      <div style={{display:"flex",gap:16,flexWrap:"wrap",alignItems:"flex-end"}}>
+        {stores.map(s=>(
+          <div key={s.id}>
+            <div style={{fontSize:11,fontWeight:700,color:"#888",marginBottom:4}}>{s.name.toUpperCase()}</div>
+            <div style={{display:"flex",alignItems:"center",gap:6}}>
+              <input type="number" min="0" placeholder="např. 3500000"
+                value={planyPoboček[s.id]||""}
+                onChange={e=>setPlanyPoboček(prev=>({...prev,[s.id]:e.target.value}))}
+                style={{...inputS,width:150,border:planyPoboček[s.id]?"1.5px solid #86efac":"1.5px solid #E8E8F0"}}/>
+              <span style={{fontSize:12,color:"#888"}}>Kč</span>
+            </div>
+          </div>
+        ))}
+        <div style={{display:"flex",gap:8,alignItems:"center"}}>
+          <button onClick={handleSavePlans} disabled={savingPlans}
+            style={{padding:"8px 18px",borderRadius:7,background:"#1B4F8A",color:"#fff",border:"none",fontWeight:700,fontSize:13,cursor:savingPlans?"not-allowed":"pointer",opacity:savingPlans?0.7:1}}>
+            {savingPlans?"Ukládám…":"💾 Uložit plány"}
+          </button>
+          {savedPlans&&<span style={{color:"#16a34a",fontWeight:700,fontSize:13}}>✅ Plány uloženy!</span>}
+        </div>
+      </div>
+    </div>
+
+    {/* Import – vždy viditelný */}
+    <div style={{marginBottom:16,padding:"12px 16px",background:"#f0f9ff",borderRadius:10,border:"1.5px solid #93c5fd",display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}}>
+      <div style={{flex:1}}>
+        <div style={{fontWeight:700,color:"#1B4F8A",fontSize:13}}>📂 Hromadný import dat</div>
+        <div style={{fontSize:12,color:"#555",marginTop:2}}>
+          Nahraje výsledky pro <strong>všechny prodejny najednou</strong>. Plány musí být uloženy výše.
+        </div>
+      </div>
+      <input ref={importRef} type="file" accept=".xlsx" style={{display:"none"}} onChange={handleImport}/>
+      <button onClick={()=>importRef.current?.click()} disabled={importing}
+        style={{padding:"9px 20px",borderRadius:7,border:"1.5px solid #1B4F8A",background:importing?"#e0e7ff":"#eef4ff",color:"#1B4F8A",fontWeight:700,fontSize:13,cursor:importing?"not-allowed":"pointer",whiteSpace:"nowrap"}}>
+        {importing?"⏳ Nahrávám…":"📂 Nahrát Vzor_podklady.xlsx"}
+      </button>
+    </div>
+
+    {/* Status importu */}
+    {importStatus&&<div style={{marginBottom:14,padding:"10px 14px",borderRadius:8,
+      background:importStatus.warn.length?"#fff8e1":"#f0fdf4",
+      border:`1.5px solid ${importStatus.warn.length?"#fbbf24":"#86efac"}`,fontSize:13}}>
+      {importStatus.info&&<div style={{color:"#166534",fontWeight:700,marginBottom:4}}>✅ {importStatus.info}</div>}
+      {importStatus.ok.length>0&&<div style={{color:"#166534"}}>Nalezeno: {importStatus.ok.join(", ")}</div>}
+      {importStatus.warn.length>0&&<div style={{color:"#92400e",fontWeight:600,marginTop:4}}>⚠️ Nenalezeno: {importStatus.warn.join(", ")}</div>}
+      {importStatus.warn.length>0&&importStatus.diagKeys&&<div style={{color:"#666",fontSize:11,marginTop:4}}>Klíče v souboru: {importStatus.diagKeys.join(", ")}</div>}
+      {importStatus.dbErrors&&<div style={{color:"#dc2626",fontWeight:600,marginTop:4,fontSize:12}}>⛔ Chyby DB: {importStatus.dbErrors.join(" | ")}</div>}
+    </div>}
+
+    {/* Detail jedné prodejny */}
+    {storeId===ALL_STORES
+      ? <div style={{textAlign:"center",padding:40,color:"#888",background:"#f8f9ff",borderRadius:10,border:"1.5px dashed #e8e8f0"}}>
+          <div style={{fontSize:32,marginBottom:8}}>📋</div>
+          <div style={{fontWeight:700,fontSize:15,marginBottom:4}}>Zobrazení všech poboček</div>
+          <div style={{fontSize:13}}>Pro detail a ruční úpravy vyber konkrétní prodejnu v selectoru nahoře.</div>
+          <div style={{fontSize:13,marginTop:4,color:"#1B4F8A"}}>Import xlsx funguje pro všechny prodejny najednou bez ohledu na výběr.</div>
+        </div>
+      : loadingData
+        ? <div style={{textAlign:"center",padding:40,color:"#aaa"}}>Načítám data…</div>
+        : rows.length===0
+          ? <div style={{textAlign:"center",padding:40,color:"#bbb"}}>Žádní aktivní prodejci na této pobočce.</div>
+          : <>
+              {/* Lock banner */}
+              {isLocked&&<div style={{marginBottom:14,padding:"10px 16px",borderRadius:8,background:"#f0fdf4",border:"1.5px solid #86efac",fontSize:13,display:"flex",alignItems:"center",gap:8}}>
+                <span style={{fontSize:16}}>🔒</span>
+                <span style={{fontWeight:600,color:"#166534"}}>Data jsou uložena a zamčena. Pro úpravy klikněte na „Odemknout".</span>
+              </div>}
+              <div style={{overflowX:"auto"}}>
+                <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
+                  <thead>
+                    <tr>
+                      <th style={thS}>Prodejce</th>
+                      <th style={{...thS,textAlign:"center"}}>Hodiny<div style={{fontSize:10,fontWeight:400,opacity:0.8}}>z rozvrhu</div></th>
+                      {["Obrat (Kč)","Tržba PZ (Kč)","Tržba služeb (Kč)","Obrat přísl. (Kč)","Kor. motivace (Kč)"].map(h=>(
+                        <th key={h} style={thS}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rows.map((r,i)=><tr key={r.employee_id} style={{background:i%2===0?"#fff":"#f8f9ff"}}>
+                      <td style={{padding:"8px 10px",fontWeight:700,color:"#1a1a2e",whiteSpace:"nowrap"}}>
+                        {r.locked&&<span title="Zamčeno" style={{marginRight:5,fontSize:11}}>🔒</span>}
+                        {r.name}
+                      </td>
+                      <td style={{padding:"4px 6px"}}>
+                        <div style={{position:"relative"}}>
+                          <input type="number" value={r.hodiny} readOnly={isLocked}
+                            onChange={e=>!isLocked&&updRow(i,"hodiny",e.target.value)}
+                            style={{...inputS,textAlign:"right",
+                              background:isLocked?"#f3f4f6":r.hodiny_source==="rozvrh"?"#f0fdf4":r.hodiny_source==="saved"?"#f0f9ff":"#fff",
+                              border:isLocked?"1.5px solid #d1d5db":r.hodiny_source==="rozvrh"?"1.5px solid #86efac":r.hodiny_source==="saved"?"1.5px solid #93c5fd":"1.5px solid #E8E8F0",
+                              cursor:isLocked?"not-allowed":"text"}} min="0"/>
+                          {!isLocked&&r.hodiny_source==="rozvrh"&&<span title="Převzato z rozvrhu" style={{position:"absolute",right:6,top:"50%",transform:"translateY(-50%)",fontSize:10,color:"#16a34a",pointerEvents:"none"}}>📅</span>}
+                        </div>
+                      </td>
+                      {["obrat","trzba_pz","trzba_sluzby","obrat_prislusenstvi","korunova_motivace"].map(f=>(
+                        <td key={f} style={{padding:"4px 6px"}}>
+                          <input type="number" value={r[f]} readOnly={isLocked}
+                            onChange={e=>!isLocked&&updRow(i,f,e.target.value)}
+                            style={{...inputS,textAlign:"right",background:isLocked?"#f3f4f6":"#fff",cursor:isLocked?"not-allowed":"text"}} min="0"/>
+                        </td>
+                      ))}
+                    </tr>)}
+                  </tbody>
+                </table>
+              </div>
+              {!isLocked&&<div style={{marginTop:8,fontSize:11,color:"#888",display:"flex",gap:16,flexWrap:"wrap"}}>
+                <span><span style={{display:"inline-block",width:10,height:10,borderRadius:2,background:"#f0fdf4",border:"1px solid #86efac",marginRight:4}}/>📅 Hodiny z rozvrhu</span>
+                <span><span style={{display:"inline-block",width:10,height:10,borderRadius:2,background:"#f0f9ff",border:"1px solid #93c5fd",marginRight:4}}/>Hodiny z uloženého záznamu</span>
+              </div>}
+              <div style={{marginTop:14,display:"flex",gap:10,alignItems:"center",flexWrap:"wrap"}}>
+                {!isLocked&&<button onClick={handleSave} disabled={saving}
+                  style={{background:"#6b7280",color:"#fff",border:"none",borderRadius:9,padding:"11px 28px",fontSize:14,fontWeight:700,cursor:saving?"not-allowed":"pointer",opacity:saving?0.7:1}}>
+                  {saving?"Ukládám…":"💾 Uložit ručně a zamknout"}
+                </button>}
+                {isLocked&&<button onClick={handleUnlock}
+                  style={{background:"#fff7ed",color:"#c2410c",border:"1.5px solid #f97316",borderRadius:9,padding:"11px 28px",fontSize:14,fontWeight:700,cursor:"pointer"}}>
+                  🔓 Odemknout pro úpravy
+                </button>}
+                {saved&&<span style={{color:"#16a34a",fontWeight:700,fontSize:13}}>✅ Uloženo a zamčeno!</span>}
+                {!isLocked&&!saving&&<span style={{fontSize:12,color:"#aaa"}}>💡 Import xlsx uloží a zamkne automaticky</span>}
+              </div>
+            </>
+    }
+  </div>;
+}
+
+// ── Obrazovka 2: Výsledky týmu ────────────────────────────────
+function ProgressBar({value, max, color}){
+  const pct = max>0 ? Math.min(100, Math.round(value/max*100)) : 0;
+  const bg = pct>=80?"#16a34a":pct>=50?"#f97316":"#dc2626";
+  return <div style={{width:"100%",background:"#e5e7eb",borderRadius:99,height:8,overflow:"hidden"}}>
+    <div style={{width:`${pct}%`,background:color||bg,borderRadius:99,height:"100%",transition:"width 0.4s"}}/>
+  </div>;
+}
+
+function CommissionResults({employees, stores}){
+  const now = new Date();
+  const [storeId, setStoreId] = useState(stores[0]?.id||1);
+  const [month, setMonth] = useState(now.getMonth()+1);
+  const [year, setYear] = useState(now.getFullYear());
+  const [results, setResults] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [expandedRow, setExpandedRow] = useState(null);
+  const [loadTs] = useState(()=>Date.now());
+  const MONTHS_CZ = ["Leden","Únor","Březen","Duben","Květen","Červen","Červenec","Srpen","Září","Říjen","Listopad","Prosinec"];
+
+  useEffect(()=>{
+    setResults([]); setExpandedRow(null);
+    (async()=>{
+      setLoading(true);
+      const {data:sD} = await supabase.from("commission_settings").select("*").eq("store_id",storeId);
+      const settings = sD?.[0] || {koef_pz:0.025,koef_sluzby:0.012,koef_prislusenstvi:0.1465,prumerna_cena_pz:storeId===2?1775:storeId===3?1710:1630,obrat_koef_plny:0.004,obrat_koef_zkraceny:0.003,obrat_strop:3000};
+      const {data:gD} = await supabase.from("commission_global").select("*").single();
+      const globalSett = gD || {vaha_pz:4,vaha_obrat:1,vaha_sluzby:1,vaha_prisl:1,kraceni:null};
+      const {data:penD} = await supabase.from("commission_penetrace")
+        .select("koef_prislusenstvi").eq("store_id",storeId).eq("month",month);
+      const penetraceOverride = penD?.[0]?.koef_prislusenstvi ?? null;
+      const {data:commD} = await supabase.from("commission_data")
+        .select("*").eq("store_id",storeId).eq("month",month).eq("year",year);
+      if(!commD?.length){ setLoading(false); return; }
+
+      // Načti Rozvoz+Admin z výkazů zaměstnanců
+      const empIds = commD.map(d=>d.employee_id);
+      const {data:tsD} = await supabase.from("timesheets")
+        .select("emp_id,day,roz1,roz2,admin")
+        .in("emp_id", empIds).eq("year",year).eq("month",month);
+
+      // Agreguj Rozvoz+Admin per zaměstnanec
+      const rozvozMap = {};
+      (tsD||[]).forEach(r=>{
+        const id = r.emp_id;
+        if(!rozvozMap[id]) rozvozMap[id] = {roz1:0,roz2:0,adminPrace:0};
+        rozvozMap[id].roz1 += Number(r.roz1)||0;
+        rozvozMap[id].roz2 += Number(r.roz2)||0;
+        rozvozMap[id].adminPrace += Number(r.admin)||0;
+      });
+
+      // Filtruj skryté role, přidej role k datům
+      const emps = employees.filter(e=>e.active&&e.mainStore===storeId&&!COMMISSION_HIDDEN_ROLES.has(e.role));
+      const dataWithNames = commD
+        .filter(d=>emps.some(e=>e.id===d.employee_id))
+        .map(d=>{
+          const emp = emps.find(e=>e.id===d.employee_id);
+          const roz = rozvozMap[d.employee_id]||{roz1:0,roz2:0,adminPrace:0};
+          return {
+            ...d,
+            role: emp?.role||"",
+            name: `${emp?.firstName||""} ${emp?.lastName||""}`.trim(),
+            rozvoz1: roz.roz1,
+            rozvoz2: roz.roz2,
+            admin_prace: roz.adminPrace,
+          };
+        });
+
+      // Pro výpočet celkového plnění: speciální role se nepočítají do soucetHodin
+      const normalCommD = commD.filter(d=>{
+        const emp = employees.find(e=>e.id===d.employee_id);
+        return emp && !COMMISSION_HIDDEN_ROLES.has(emp.role) && !COMMISSION_SPECIAL_ROLES.has(emp.role);
+      });
+
+      const calcs = dataWithNames.map(d=>({
+        name: d.name||`#${d.employee_id}`,
+        data: d,
+        settings,
+        globalSett,
+        penetraceOverride,
+        calc: calcCommission(d, settings, normalCommD, penetraceOverride, globalSett),
+        penetraceZdroj: penetraceOverride!=null ? `import (${(penetraceOverride*100).toFixed(2)} %)` : `výchozí (${((Number(settings.koef_prislusenstvi)||0.1465)*100).toFixed(2)} %)`,
+      })).sort((a,b)=>{
+        // Speciální role vždy na konec
+        const aSpec = COMMISSION_SPECIAL_ROLES.has(a.data.role)?1:0;
+        const bSpec = COMMISSION_SPECIAL_ROLES.has(b.data.role)?1:0;
+        if(aSpec!==bSpec) return aSpec-bSpec;
+        return (b.calc?.celkPlneni||0)-(a.calc?.celkPlneni||0);
+      });
+      setResults(calcs);
+      setLoading(false);
+    })();
+  },[storeId,month,year,loadTs]);
+
+  const exportXlsx = async()=>{
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet(`Provize ${MONTHS_CZ[month-1]} ${year}`);
+
+    // Záhlaví
+    const cols = ["Prodejce","Plnění PZ %","Plnění obratu %","Plnění služeb %","Plnění přísl. %","Celkové plnění %","Koeficient %","Provize Kč"];
+    ws.addRow(cols);
+    ws.getRow(1).font = {bold:true, color:{argb:"FFFFFFFF"}};
+    ws.getRow(1).fill = {type:"pattern", pattern:"solid", fgColor:{argb:"FF1B4F8A"}};
+    ws.getRow(1).alignment = {horizontal:"center"};
+
+    // Data
+    results.forEach((r,i)=>{
+      const c = r.calc;
+      if(!c) return;
+      const row = ws.addRow([
+        r.name,
+        Math.round(c.plneniPz*100),
+        Math.round(c.plneniObrat*100),
+        Math.round(c.plneniSluzby*100),
+        Math.round(c.plneniPrislusenství*100),
+        Math.round(c.celkPlneni*100),
+        Math.round(c.koef*100),
+        Math.round(c.vyslednaProvize),
+      ]);
+      row.getCell(1).font = {bold:true};
+      // Barevné indikátory plnění (sloupce 2–6)
+      [2,3,4,5,6].forEach(ci=>{
+        const val = row.getCell(ci).value;
+        row.getCell(ci).fill = {type:"pattern", pattern:"solid",
+          fgColor:{argb: val>=80?"FFD1FAE5": val>=50?"FFFED7AA":"FFFECACA"}};
+      });
+      // Provize tučně modře
+      row.getCell(8).font = {bold:true, color:{argb:"FF1B4F8A"}};
+      // Střídavé řádky
+      if(i%2===1) row.eachCell(cell=>{ if(!cell.fill?.fgColor?.argb) cell.fill={type:"pattern",pattern:"solid",fgColor:{argb:"FFF8F9FF"}}; });
+    });
+
+    // Šířky sloupců
+    ws.getColumn(1).width = 22;
+    [2,3,4,5,6,7,8].forEach(ci=>{ ws.getColumn(ci).width = 14; ws.getColumn(ci).alignment={horizontal:"center"}; });
+
+    // Stáhnout
+    const buf = await wb.xlsx.writeBuffer();
+    const blob = new Blob([buf], {type:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"});
+    const a = document.createElement("a"); a.href=URL.createObjectURL(blob);
+    a.download=`provize_${stores.find(s=>s.id===storeId)?.name||storeId}_${MONTHS_CZ[month-1]}_${year}.xlsx`;
+    a.click();
+  };
+
+  const inputS={padding:"6px 9px",borderRadius:7,border:"1.5px solid #E8E8F0",fontSize:13,width:"auto"};
+  const pctColor = v => v>=0.8?"#16a34a":v>=0.5?"#f97316":"#dc2626";
+  const medal = (i) => i===0?"🥇":i===1?"🥈":i===2?"🥉":"";
+
+  return <div>
+    <div style={{display:"flex",gap:12,flexWrap:"wrap",marginBottom:20,alignItems:"flex-end"}}>
+      <div><div style={{fontSize:11,fontWeight:700,color:"#888",marginBottom:4}}>POBOČKA</div>
+        <select value={storeId} onChange={e=>setStoreId(Number(e.target.value))} style={{...inputS,minWidth:140}}>
+          {stores.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}
+        </select></div>
+      <div><div style={{fontSize:11,fontWeight:700,color:"#888",marginBottom:4}}>MĚSÍC</div>
+        <select value={month} onChange={e=>setMonth(Number(e.target.value))} style={{...inputS,minWidth:120}}>
+          {MONTHS_CZ.map((m,i)=><option key={i+1} value={i+1}>{m}</option>)}
+        </select></div>
+      <div><div style={{fontSize:11,fontWeight:700,color:"#888",marginBottom:4}}>ROK</div>
+        <select value={year} onChange={e=>setYear(Number(e.target.value))} style={{...inputS,minWidth:90}}>
+          {[2025,2026,2027].map(y=><option key={y} value={y}>{y}</option>)}
+        </select></div>
+      {results.length>0&&<button onClick={exportXlsx}
+        style={{padding:"8px 18px",borderRadius:7,border:"1.5px solid #1B4F8A",background:"#fff",color:"#1B4F8A",fontWeight:700,fontSize:13,cursor:"pointer",marginLeft:"auto",alignSelf:"flex-end"}}>
+        📊 Export Excel
+      </button>}
+    </div>
+
+    {loading ? <div style={{textAlign:"center",padding:40,color:"#aaa"}}>Načítám výsledky…</div>
+    : results.length===0 ? <div style={{textAlign:"center",padding:40,color:"#bbb"}}>Nejsou zadána data pro tento měsíc.</div>
+    : <div style={{display:"flex",flexDirection:"column",gap:10}}>
+        {results.map((r,i)=>{
+          const c = r.calc;
+          const isExp = expandedRow===i;
+          if(!c) return null;
+          const isSpecial = COMMISSION_SPECIAL_ROLES.has(r.data?.role||"");
+
+          // ── Speciální role: holé číslo, bez progress barů ──
+          if(isSpecial) return <div key={i} style={{border:"1.5px solid #e8e8f0",borderRadius:12,background:"#fff",overflow:"hidden"}}>
+            <div style={{display:"flex",alignItems:"center",gap:12,padding:"12px 18px",flexWrap:"wrap",cursor:"pointer"}}
+              onClick={()=>setExpandedRow(isExp?null:i)}>
+              <div style={{minWidth:160,display:"flex",alignItems:"center",gap:8}}>
+                <span style={{fontSize:11,background:"#f0f0f0",color:"#666",borderRadius:4,padding:"1px 6px",fontWeight:700}}>{r.data.role}</span>
+                <span style={{fontWeight:800,fontSize:15,color:"#1a1a2e"}}>{r.name}</span>
+              </div>
+              <div style={{flex:1,fontSize:12,color:"#aaa"}}>Bez plánu · koef. 100 %</div>
+              <div style={{textAlign:"center",marginRight:8}}>
+                <div style={{fontSize:10,color:"#aaa",fontWeight:600}}>PROVIZE</div>
+                <div style={{fontSize:16,fontWeight:800,color:"#1B4F8A"}}>{czk(c.vyslednaProvize)}</div>
+              </div>
+              <span style={{fontSize:16,color:"#ccc"}}>{isExp?"▲":"▼"}</span>
+            </div>
+            {isExp&&<div style={{borderTop:"1px solid #e8e8f0",padding:"12px 18px",background:"#fafafe"}}>
+              <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(160px,1fr))",gap:10}}>
+                {[
+                  {label:"Obrat",         val:czk(r.data.obrat||0),              provize:c.provizeObrat},
+                  {label:"Záruky (PZ)",   val:czk(r.data.trzba_pz||0),           provize:c.provizePz},
+                  {label:"Služby",        val:czk(r.data.trzba_sluzby||0),       provize:c.provizeSluzby},
+                  {label:"Příslušenství", val:czk(r.data.obrat_prislusenstvi||0),provize:c.provizePrislusenství},
+                  {label:"Kor. motivace", val:czk(c.korunovaMot||0),             provize:c.korunovaMot},
+                  ...(c.provizeRozvozAdmin>0?[{label:"Rozvoz+Admin",val:`R1: ${c.rozv1}× · R2: ${c.rozv2}× · Admin: ${c.adminH}h`,provize:c.provizeRozvozAdmin}]:[]),
+                ].map((it,xi)=><div key={xi} style={{background:"#fff",borderRadius:8,padding:"10px 12px",border:"1px solid #e8e8f0"}}>
+                  <div style={{fontWeight:700,fontSize:12,color:"#555",marginBottom:4}}>{it.label}</div>
+                  <div style={{fontSize:12,color:"#888"}}>Skutečnost: <strong>{it.val}</strong></div>
+                  <div style={{fontSize:12,color:"#1B4F8A",marginTop:2}}>Provize: <strong>{czk(it.provize)}</strong></div>
+                </div>)}
+              </div>
+            </div>}
+          </div>;
+
+          // ── Normální role: plný výpočet s progress bary ──
+          const items = [
+            {
+              label:"Záruky (PZ)", done:c.plneniPz, provize:c.provizePz,
+              plan:c.planPz, actual:r.data.trzba_pz,
+              chybi:Math.max(0,(c.planPz||0)-r.data.trzba_pz), jednotka:"Kč tržby", weight:"4×",
+              moznyZiskSlozky: Math.max(0, (c.planPz||0) - r.data.trzba_pz) * (Number(r.settings?.sazba_pz)||0.10),
+            },
+            {
+              label:"Obrat", done:c.plneniObrat, provize:c.provizeObrat,
+              plan:c.planObrat, actual:r.data.obrat,
+              chybi:Math.max(0,(c.planObrat||0)-r.data.obrat), jednotka:"Kč", weight:"1×",
+              moznyZiskSlozky: Math.max(0,
+                Math.min((c.planObrat||0) * (Number(r.settings?.obrat_koef_plny)||0.004), Number(r.settings?.obrat_strop)||3000)
+                - c.provizeObrat
+              ),
+            },
+            {
+              label:"Služby", done:c.plneniSluzby, provize:c.provizeSluzby,
+              plan:c.planSluzby, actual:r.data.trzba_sluzby,
+              chybi:Math.max(0,(c.planSluzby||0)-r.data.trzba_sluzby), jednotka:"Kč tržby", weight:"1×",
+              moznyZiskSlozky: Math.min(
+                Math.max(0, (c.planSluzby||0) - r.data.trzba_sluzby) * (Number(r.settings?.sazba_sluzby)||0.10),
+                Math.max(0, (Number(r.settings?.strop_sluzby)||1500) - c.provizeSluzby)
+              ),
+            },
+            {
+              label:"Příslušenství", done:c.plneniPrislusenství, provize:c.provizePrislusenství,
+              plan:c.planPrislusenství, actual:r.data.obrat_prislusenstvi,
+              chybi:Math.max(0,(c.planPrislusenství||0)-r.data.obrat_prislusenstvi), jednotka:"Kč", weight:"1×",
+              moznyZiskSlozky: Math.min(
+                Math.max(0, (c.planPrislusenství||0) * (Number(r.settings?.sazba_prisl_4)||0.038) - c.provizePrislusenství),
+                Math.max(0, (Number(r.settings?.strop_prislusenstvi)||4000) - c.provizePrislusenství)
+              ),
+              penetraceInfo: r.penetraceOverride != null
+                ? `${(r.penetraceOverride*100).toFixed(2)} % (import)`
+                : `${((Number(r.settings?.koef_prislusenstvi)||0.1465)*100).toFixed(2)} % (výchozí)`,
+            },
+          ];
+
+          // Výpočet možného zisku – přímý, bez simulace
+          // 1) Provize ze složek při 100 % plnění
+          const sett = r.settings || {};
+          const sazbaPzS    = Number(sett.sazba_pz)||0.10;
+          const sazbaSluzbyS= Number(sett.sazba_sluzby)||0.10;
+          const stropSluzbyS= Number(sett.strop_sluzby)||1500;
+          const obratKoefS  = (Number(r.data.hodiny)||0)>=160 ? (Number(sett.obrat_koef_plny)||0.004) : (Number(sett.obrat_koef_zkraceny)||0.003);
+          const obratStropS = Number(sett.obrat_strop)||3000;
+          const sazbaPrisl4S= Number(sett.sazba_prisl_4)||0.038;
+          const stropPrislS = Number(sett.strop_prislusenstvi)||4000;
+
+          const pz100    = c.planPz * sazbaPzS;                                           // PZ: plán × sazba (bez stropu)
+          const obrat100 = Math.min(c.planObrat * obratKoefS, obratStropS);               // Obrat: plán × sazba, max strop
+          const sluzby100= Math.min(c.planSluzby * sazbaSluzbyS, stropSluzbyS);           // Služby: plán × sazba, max strop
+          const prisl100 = Math.min(c.planPrislusenství * sazbaPrisl4S, stropPrislS);     // Přísl: plán × sazba4, max strop
+          const koru100  = c.korunovaMot;                                                  // Korunová: beze změny
+
+          const zaklad100 = pz100 + obrat100 + sluzby100 + prisl100 + koru100;
+          // koef při 100 % = nejvyšší pásmo v tabulce krácení
+          const koef100 = calcKoefKraceni(1.0, r.globalSett?.kraceni);
+          const provize100= zaklad100 * koef100;
+
+          const zakladAkt = c.provizeObrat + c.provizePz + c.provizeSluzby + c.provizePrislusenství + c.korunovaMot;
+          // Rozklad: přírůstek ze složek (× koef100=1) + skok koeficientu na aktuální základ
+          // moznyZisk = (zaklad100 − zakladAkt)×1.0 + zakladAkt×(1.0 − c.koef)
+          const moznyZProvizi  = Math.round(Math.max(0, zaklad100 - zakladAkt));        // přírůstek provizí ze složek
+          const moznyZKoef     = Math.round(Math.max(0, zakladAkt * (1.0 - c.koef)));  // přínos skoku koeficientu
+          const moznyZisk      = Math.round(Math.max(0, provize100 - c.vyslednaProvize));
+
+          const celkPct = Math.round(c.celkPlneni*100);
+          const koefPct = Math.round(c.koef*100);
+          const cardBg = i===0?"#f0fdf4":i===results.length-1?"#fff7ed":"#fff";
+          const borderColor = i===0?"#86efac":i===results.length-1?"#fed7aa":"#e8e8f0";
+
+          return <div key={i} style={{border:`1.5px solid ${borderColor}`,borderRadius:12,background:cardBg,overflow:"hidden"}}>
+            {/* Hlavička karty */}
+            <div style={{display:"flex",alignItems:"center",gap:12,padding:"14px 18px",cursor:"pointer",flexWrap:"wrap"}}
+              onClick={()=>setExpandedRow(isExp?null:i)}>
+              {/* Medaile + jméno */}
+              <div style={{minWidth:160,display:"flex",alignItems:"center",gap:8}}>
+                {medal(i)&&<span style={{fontSize:20}}>{medal(i)}</span>}
+                {!medal(i)&&<span style={{fontSize:13,color:"#aaa",fontWeight:700,minWidth:20,textAlign:"center"}}>{i+1}.</span>}
+                <span style={{fontWeight:800,fontSize:15,color:"#1a1a2e"}}>{r.name}</span>
+              </div>
+
+              {/* Celkové plnění – progress */}
+              <div style={{flex:1,minWidth:160}}>
+                <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}>
+                  <span style={{fontSize:11,color:"#888",fontWeight:600}}>Celkové plnění</span>
+                  <span style={{fontSize:13,fontWeight:800,color:pctColor(c.celkPlneni)}}>{celkPct} %</span>
+                </div>
+                <ProgressBar value={c.celkPlneni} max={1} color={pctColor(c.celkPlneni)}/>
+              </div>
+
+              {/* Koef + provize */}
+              <div style={{display:"flex",gap:16,alignItems:"center",flexShrink:0}}>
+                <div style={{textAlign:"center"}}>
+                  <div style={{fontSize:10,color:"#aaa",fontWeight:600}}>KOEFICIENT</div>
+                  <div style={{fontSize:16,fontWeight:800,color:koefPct>=90?"#16a34a":koefPct>=50?"#f97316":"#dc2626"}}>{koefPct} %</div>
+                </div>
+                <div style={{textAlign:"center"}}>
+                  <div style={{fontSize:10,color:"#aaa",fontWeight:600}}>PROVIZE</div>
+                  <div style={{fontSize:16,fontWeight:800,color:"#1B4F8A"}}>{czk(c.vyslednaProvize)}</div>
+                </div>
+                {c.bonusObrat>0&&<div style={{textAlign:"center"}}>
+                  <div style={{fontSize:10,color:"#aaa",fontWeight:600}}>BONUS</div>
+                  <div style={{fontSize:14,fontWeight:800,color:"#16a34a"}}>+{czk(c.bonusObrat)}</div>
+                </div>}
+                {moznyZisk>50&&<div style={{textAlign:"center",background:"#fef9c3",borderRadius:8,padding:"4px 8px",border:"1px solid #fde047"}}>
+                  <div style={{fontSize:10,color:"#854d0e",fontWeight:600}}>MOŽNÝ ZISK</div>
+                  <div style={{fontSize:14,fontWeight:800,color:"#854d0e"}}>+{czk(moznyZisk)}</div>
+                </div>}
+                <div style={{color:"#bbb",fontSize:18,marginLeft:4}}>{isExp?"▲":"▼"}</div>
+              </div>
+            </div>
+
+            {/* Rozbalený detail */}
+            {isExp&&<div style={{borderTop:"1px solid #e8e8f0",padding:"14px 18px",background:"#fafafe"}}>
+              <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(220px,1fr))",gap:12,marginBottom:16}}>
+                {items.map((it,xi)=>{
+                  const pct=Math.round(it.done*100);
+                  const barColor=pctColor(it.done);
+                  const mozny = Math.round(it.moznyZiskSlozky||0);
+                  return <div key={xi} style={{background:"#fff",borderRadius:10,padding:"12px 14px",border:`1px solid ${it.done>=1?"#86efac":it.done>=0.5?"#fed7aa":"#fecaca"}`}}>
+                    <div style={{display:"flex",justifyContent:"space-between",marginBottom:6}}>
+                      <span style={{fontWeight:700,fontSize:13,color:"#1a1a2e"}}>{it.label}</span>
+                      <span style={{fontSize:11,color:"#aaa",fontWeight:600}}>váha {it.weight}</span>
+                    </div>
+                    <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}>
+                      <span style={{fontSize:11,color:"#888"}}>Splněno</span>
+                      <span style={{fontSize:13,fontWeight:700,color:barColor}}>{pct} %</span>
+                    </div>
+                    <ProgressBar value={it.done} max={1} color={barColor}/>
+                    <div style={{marginTop:8,display:"flex",justifyContent:"space-between",fontSize:12}}>
+                      <span style={{color:"#666"}}>Skutečnost: <strong>{czk(it.actual)}</strong></span>
+                      <span style={{color:"#666"}}>Plán: <strong>{czk(it.plan)}</strong></span>
+                    </div>
+                    {it.penetraceInfo&&<div style={{marginTop:4,fontSize:11,color:"#888",background:"#f8f9ff",borderRadius:4,padding:"2px 6px",display:"inline-block"}}>
+                      📊 Penetrace: {it.penetraceInfo}
+                    </div>}
+                    {it.chybi>0
+                      ? <div style={{marginTop:4,fontSize:12,color:"#dc2626",fontWeight:600}}>
+                          Chybí: {czk(it.chybi)} {it.jednotka}
+                          {mozny>0&&<span style={{color:"#f97316",fontWeight:700,marginLeft:6}}>→ +{czk(mozny)} provize</span>}
+                        </div>
+                      : <div style={{marginTop:4,fontSize:12,color:"#16a34a",fontWeight:700}}>✅ Plán splněn!</div>
+                    }
+                    <div style={{marginTop:4,fontSize:12,color:"#1B4F8A"}}>Provize: <strong>{czk(it.provize)}</strong></div>
+                  </div>;
+                })}
+
+                {/* Korunová motivace – kartička */}
+                <div style={{background:"#fff",borderRadius:10,padding:"12px 14px",border:"1px solid #e8e8f0"}}>
+                  <div style={{display:"flex",justifyContent:"space-between",marginBottom:6}}>
+                    <span style={{fontWeight:700,fontSize:13,color:"#1a1a2e"}}>💰 Korunová motivace</span>
+                    <span style={{fontSize:11,color:"#aaa",fontWeight:600}}>mimo plnění</span>
+                  </div>
+                  <div style={{marginTop:4,fontSize:13,color:"#1B4F8A",fontWeight:700}}>{czk(c.korunovaMot)}</div>
+                  <div style={{marginTop:4,fontSize:11,color:"#aaa"}}>Dodavatelské provize · nekrátí se</div>
+                </div>
+
+                {/* Rozvoz+Admin – zobrazí se jen pokud má hodnotu */}
+                {(c.rozv1>0||c.rozv2>0||c.adminH>0)&&<div style={{background:"#fff",borderRadius:10,padding:"12px 14px",border:"1px solid #e8e8f0"}}>
+                  <div style={{display:"flex",justifyContent:"space-between",marginBottom:6}}>
+                    <span style={{fontWeight:700,fontSize:13,color:"#1a1a2e"}}>🚚 Rozvoz+Admin</span>
+                    <span style={{fontSize:11,color:"#aaa",fontWeight:600}}>mimo krácení</span>
+                  </div>
+                  <div style={{fontSize:12,color:"#888",marginBottom:4}}>
+                    {c.rozv1>0&&<div>Rozvoz 1: <strong>{c.rozv1}×</strong></div>}
+                    {c.rozv2>0&&<div>Rozvoz 2: <strong>{c.rozv2}×</strong></div>}
+                    {c.adminH>0&&<div>Admin práce: <strong>{c.adminH}h</strong></div>}
+                  </div>
+                  <div style={{marginTop:4,fontSize:13,color:"#1B4F8A",fontWeight:700}}>{czk(c.provizeRozvozAdmin)}</div>
+                </div>}
+              </div>
+              {/* Motivační banner */}
+              {moznyZisk>50&&<div style={{marginBottom:12,padding:"14px 16px",background:"#fef9c3",borderRadius:8,border:"1px solid #fde047"}}>
+                <div style={{display:"flex",alignItems:"center",gap:16,flexWrap:"wrap"}}>
+                  <div>
+                    <div style={{fontSize:11,color:"#854d0e",fontWeight:700,marginBottom:2}}>💡 SPLNĚNÍM PLÁNU VE VŠECH SLOŽKÁCH ZÍSKÁŠ NAVÍC</div>
+                    <div style={{fontSize:22,fontWeight:900,color:"#854d0e"}}>+{czk(moznyZisk)}</div>
+                  </div>
+                  <div style={{display:"flex",flexDirection:"column",gap:4,fontSize:12,color:"#713f12"}}>
+                    <div style={{display:"flex",alignItems:"center",gap:8}}>
+                      <span style={{background:"#fde68a",borderRadius:4,padding:"2px 8px",fontWeight:700,minWidth:80,textAlign:"right"}}>+{czk(Math.max(0,moznyZProvizi))}</span>
+                      <span>z vyšších provizí jednotlivých složek</span>
+                    </div>
+                    <div style={{display:"flex",alignItems:"center",gap:8}}>
+                      <span style={{background:"#fde68a",borderRadius:4,padding:"2px 8px",fontWeight:700,minWidth:80,textAlign:"right"}}>+{czk(Math.max(0,moznyZKoef))}</span>
+                      <span>ze skoku koeficientu {Math.round(c.koef*100)} % → 100 %</span>
+                    </div>
+                  </div>
+                </div>
+              </div>}
+              {/* Výpočet provize */}
+              <div style={{background:"#fff",borderRadius:8,padding:"10px 14px",border:"1px solid #e8e8f0",fontSize:12,color:"#555",lineHeight:2}}>
+                <span style={{fontWeight:700,color:"#1a1a2e"}}>Výpočet: </span>
+                ({czk(c.provizeObrat)} + {czk(c.provizePz)} + {czk(c.provizeSluzby)} + {czk(c.provizePrislusenství)} + {czk(c.korunovaMot)}{c.provizeRozvozAdmin>0&&` + ${czk(c.provizeRozvozAdmin)} R+A`})
+                × {koefPct} % = {czk(c.zaklad)}
+                {c.bonusObrat>0&&<> + bonus {czk(c.bonusObrat)}</>}
+                {" "}= <strong style={{color:"#1B4F8A"}}>{czk(c.vyslednaProvize)}</strong>
+              </div>
+            </div>}
+          </div>;
+        })}
+        <div style={{marginTop:4,fontSize:11,color:"#aaa",display:"flex",gap:16,flexWrap:"wrap",padding:"4px"}}>
+          <span>🥇🥈🥉 = pořadí v týmu · kliknutím na kartu zobrazíte detail</span>
+          {results[0]?.penetraceZdroj&&<span style={{marginLeft:"auto",color:"#1B4F8A"}}>📊 Koef. příslušenství: {results[0].penetraceZdroj}</span>}
+        </div>
+      </div>
+    }
+  </div>;
+}
+
+// ── Obrazovka 3: Nastavení koeficientů ───────────────────────
+function CommissionSettings({stores, onSettingsSaved}){
+  const [displayData, setDisplayData] = useState({});
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [importingPenetrace, setImportingPenetrace] = useState(false);
+  const [penetraceStatus, setPenetraceStatus] = useState(null);
+  const [penetraceTable, setPenetraceTable] = useState([]);
+  const [editingPen, setEditingPen] = useState({});
+  const [savingPen, setSavingPen] = useState(false);
+  const penetraceRef = useRef(null);
+
+  // Globální nastavení (sdílené pro všechny pobočky)
+  const [globalSettings, setGlobalSettings] = useState({
+    prislusenství_prirazka: "0.5",
+    vaha_pz: "4", vaha_obrat: "1", vaha_sluzby: "1", vaha_prisl: "1",
+    kraceni: [
+      {od:0, koef:0}, {od:10, koef:15}, {od:24, koef:30},
+      {od:49, koef:50}, {od:79, koef:90}, {od:99, koef:100},
+    ],
+    sazba_rozvoz1: "0",   // Kč za jízdu Rozvoz 1
+    sazba_rozvoz2: "0",   // Kč za jízdu Rozvoz 2
+    sazba_admin:   "0",   // Kč za hodinu Admin práce
+  });
+  const [savingGlobal, setSavingGlobal] = useState(false);
+  const [savedGlobal, setSavedGlobal] = useState(false);
+
+  const PCT_FIELDS = new Set([
+    "koef_pz","koef_sluzby","koef_prislusenstvi","obrat_koef_plny","obrat_koef_zkraceny",
+    "sazba_pz","sazba_sluzby","sazba_prisl_1","sazba_prisl_2","sazba_prisl_3","sazba_prisl_4",
+  ]);
+
+  const DEFAULTS_DB = {
+    koef_pz:0.025, koef_sluzby:0.012, koef_prislusenstvi:0.1465,
+    obrat_koef_plny:0.004, obrat_koef_zkraceny:0.003, obrat_strop:3000,
+    bonus_obrat_110:500, bonus_obrat_120:1000,
+    sazba_pz:0.10, sazba_sluzby:0.10, strop_sluzby:1500,
+    sazba_prisl_1:0.01, sazba_prisl_2:0.02, sazba_prisl_3:0.03, sazba_prisl_4:0.038,
+    strop_prislusenstvi:4000,
+  };
+  const PZ_DEFAULTS = {1:1630, 2:1775, 3:1710};
+  const STORE_NAME_MAP = {"strakonice":1,"blatná":2,"blatna":2,"pelhřimov":3,"pelhrimov":3};
+  const MONTHS_CZ = ["","Leden","Únor","Březen","Duben","Květen","Červen","Červenec","Srpen","Září","Říjen","Listopad","Prosinec"];
+
+  const dbToDisplay = (key, dbVal, defaultDbVal) => {
+    let num = (dbVal === null || dbVal === undefined) ? defaultDbVal : Number(dbVal);
+    if(PCT_FIELDS.has(key) && num === 0 && defaultDbVal) num = defaultDbVal;
+    if(PCT_FIELDS.has(key)) return String(Math.round(num * 10000) / 100);
+    if(num === 0 && defaultDbVal) return String(defaultDbVal);
+    return String(num || "");
+  };
+  const displayToDB = (key, displayVal) => {
+    const num = Number(displayVal)||0;
+    if(PCT_FIELDS.has(key)) return num / 100;
+    return num;
+  };
+
+  const loadAll = async()=>{
+    // Per-pobočka nastavení
+    const {data:sD} = await supabase.from("commission_settings").select("*");
+    const disp = {};
+    stores.forEach(s=>{
+      const found = sD?.find(r=>r.store_id===s.id);
+      const dbRow = found || {...DEFAULTS_DB, prumerna_cena_pz: PZ_DEFAULTS[s.id]||1630};
+      disp[s.id] = {};
+      Object.keys(DEFAULTS_DB).forEach(key=>{
+        disp[s.id][key] = dbToDisplay(key, dbRow[key], DEFAULTS_DB[key]);
+      });
+      disp[s.id]["prumerna_cena_pz"] = String(dbRow.prumerna_cena_pz || PZ_DEFAULTS[s.id]||1630);
+    });
+    setDisplayData(disp);
+
+    // Globální nastavení z DB
+    const {data:gD} = await supabase.from("commission_global").select("*").single();
+    if(gD){
+      // Přirážka může být 0 – nepouží || ale explicitní null check
+      const prirazkaDB = gD.prislusenství_prirazka;
+      const prirazkaDisplay = (prirazkaDB === null || prirazkaDB === undefined)
+        ? "0.5"
+        : String(Math.round(prirazkaDB * 10000) / 100); // 0 → "0", 0.005 → "0.5"
+      setGlobalSettings({
+        prislusenství_prirazka: prirazkaDisplay,
+        vaha_pz: String(gD.vaha_pz||4),
+        vaha_obrat: String(gD.vaha_obrat||1),
+        vaha_sluzby: String(gD.vaha_sluzby||1),
+        vaha_prisl: String(gD.vaha_prisl||1),
+        kraceni: gD.kraceni || [{od:0,koef:0},{od:10,koef:15},{od:24,koef:30},{od:49,koef:50},{od:79,koef:90},{od:99,koef:100}],
+        sazba_rozvoz1: String(gD.sazba_rozvoz1||0),
+        sazba_rozvoz2: String(gD.sazba_rozvoz2||0),
+        sazba_admin:   String(gD.sazba_admin||0),
+      });
+    }
+
+    // Penetrace
+    const {data:penD} = await supabase.from("commission_penetrace").select("*").order("month");
+    setPenetraceTable(penD||[]);
+    // editingPen zobrazuje loňskou penetraci (read-only) – editovatelná je jen přirážka
+    setEditingPen({});
+  };
+
+  useEffect(()=>{ loadAll(); },[]);
+
+  const upd = (storeId, field, val) =>
+    setDisplayData(prev=>({...prev,[storeId]:{...prev[storeId],[field]:val}}));
+  const updGlobal = (field, val) =>
+    setGlobalSettings(prev=>({...prev,[field]:val}));
+  const updKraceni = (idx, field, val) =>
+    setGlobalSettings(prev=>({
+      ...prev,
+      kraceni: prev.kraceni.map((r,i)=>i===idx?{...r,[field]:Number(val)}:r)
+    }));
+
+  const handleSave = async()=>{
+    setSaving(true);
+    for(const s of stores){
+      const d = displayData[s.id]; if(!d) continue;
+      await supabase.from("commission_settings").upsert({
+        store_id:s.id,
+        koef_pz:displayToDB("koef_pz",d.koef_pz), koef_sluzby:displayToDB("koef_sluzby",d.koef_sluzby),
+        koef_prislusenstvi:displayToDB("koef_prislusenstvi",d.koef_prislusenstvi),
+        prumerna_cena_pz:Number(d.prumerna_cena_pz)||PZ_DEFAULTS[s.id]||1630,
+        obrat_koef_plny:displayToDB("obrat_koef_plny",d.obrat_koef_plny),
+        obrat_koef_zkraceny:displayToDB("obrat_koef_zkraceny",d.obrat_koef_zkraceny),
+        obrat_strop:Number(d.obrat_strop)||3000, bonus_obrat_110:Number(d.bonus_obrat_110)||500,
+        bonus_obrat_120:Number(d.bonus_obrat_120)||1000,
+        sazba_pz:displayToDB("sazba_pz",d.sazba_pz), sazba_sluzby:displayToDB("sazba_sluzby",d.sazba_sluzby),
+        strop_sluzby:Number(d.strop_sluzby)||1500,
+        sazba_prisl_1:displayToDB("sazba_prisl_1",d.sazba_prisl_1), sazba_prisl_2:displayToDB("sazba_prisl_2",d.sazba_prisl_2),
+        sazba_prisl_3:displayToDB("sazba_prisl_3",d.sazba_prisl_3), sazba_prisl_4:displayToDB("sazba_prisl_4",d.sazba_prisl_4),
+        strop_prislusenstvi:Number(d.strop_prislusenstvi)||4000,
+        updated_at:new Date().toISOString(),
+      },{onConflict:"store_id"});
+    }
+    setSaving(false); setSaved(true); setTimeout(()=>setSaved(false),2500);
+    if(onSettingsSaved) onSettingsSaved();
+  };
+
+  const handleSaveGlobal = async()=>{
+    setSavingGlobal(true);
+    const prirazkaDisplay = globalSettings.prislusenství_prirazka;
+    const prirazkaDB = (prirazkaDisplay===""||prirazkaDisplay==null) ? 0.005 : Number(prirazkaDisplay)/100;
+    await supabase.from("commission_global").upsert({
+      id:1,
+      prislusenství_prirazka: prirazkaDB,
+      vaha_pz: Number(globalSettings.vaha_pz)||4,
+      vaha_obrat: Number(globalSettings.vaha_obrat)||1,
+      vaha_sluzby: Number(globalSettings.vaha_sluzby)||1,
+      vaha_prisl: Number(globalSettings.vaha_prisl)||1,
+      kraceni: globalSettings.kraceni,
+      sazba_rozvoz1: Number(globalSettings.sazba_rozvoz1)||0,
+      sazba_rozvoz2: Number(globalSettings.sazba_rozvoz2)||0,
+      sazba_admin:   Number(globalSettings.sazba_admin)||0,
+    },{onConflict:"id"});
+    setSavingGlobal(false); setSavedGlobal(true); setTimeout(()=>setSavedGlobal(false),2500);
+    if(onSettingsSaved) onSettingsSaved();
+  };
+
+  const handleSavePenetrace = async()=>{
+    // Přirážka může být 0 – nepouží || ale explicitní null check
+    const prirazkaDisplay = globalSettings.prislusenství_prirazka;
+    const prirazka = (prirazkaDisplay === "" || prirazkaDisplay === null || prirazkaDisplay === undefined)
+      ? 0.005  // default 0.5% jen pokud pole je prázdné
+      : Number(prirazkaDisplay) / 100;  // 0 je validní hodnota
+    setSavingPen(true);
+    // 1) Ulož přirážku do commission_global aby přežila reload
+    await supabase.from("commission_global").upsert({
+      id:1,
+      prislusenství_prirazka: prirazka,
+      vaha_pz: Number(globalSettings.vaha_pz)||4,
+      vaha_obrat: Number(globalSettings.vaha_obrat)||1,
+      vaha_sluzby: Number(globalSettings.vaha_sluzby)||1,
+      vaha_prisl: Number(globalSettings.vaha_prisl)||1,
+      kraceni: globalSettings.kraceni,
+      sazba_rozvoz1: Number(globalSettings.sazba_rozvoz1)||0,
+      sazba_rozvoz2: Number(globalSettings.sazba_rozvoz2)||0,
+      sazba_admin:   Number(globalSettings.sazba_admin)||0,
+    },{onConflict:"id"});
+    // 2) Přepočítej koeficienty v commission_penetrace
+    for(const rec of penetraceTable){
+      const koef = Math.round(((rec.penetrace_loni||0) + prirazka) * 100000) / 100000;
+      await supabase.from("commission_penetrace").upsert(
+        {store_id:rec.store_id, month:rec.month, koef_prislusenstvi:koef, penetrace_loni:rec.penetrace_loni},
+        {onConflict:"store_id,month"});
+    }
+    setSavingPen(false); await loadAll();
+    if(onSettingsSaved) onSettingsSaved();
+  };
+
+  const handlePenetraceImport=async(e)=>{
+    const file=e.target.files?.[0]; if(!file) return;
+    e.target.value=""; setImportingPenetrace(true); setPenetraceStatus(null);
+    try {
+      const XLSX=await loadXLSX();
+      const buf=await file.arrayBuffer();
+      const wb=XLSX.read(new Uint8Array(buf),{type:"array"});
+      const ws=wb.Sheets[wb.SheetNames[0]];
+      const rows=XLSX.utils.sheet_to_json(ws,{header:1,defval:null});
+      const saved=[]; let currentMonth=null;
+      for(let i=0;i<rows.length;i++){
+        const r=rows[i]; if(!r) continue;
+        const c0=String(r[0]||"").trim();
+        if(c0==="Fiskální datum RMD"){ const mv=r[1]; if(mv!=null) currentMonth=Number(mv); continue; }
+        if(c0.toLowerCase().startsWith("prodejna")&&currentMonth!=null){
+          const storePart=c0.toLowerCase().replace("prodejna","").trim();
+          const storeId=STORE_NAME_MAP[storePart]; if(!storeId) continue;
+          const pen=r[11]; if(pen==null||isNaN(Number(pen))) continue;
+          const penNum=Number(pen);
+          const koef=Math.round((penNum+0.005)*10000)/10000;
+          const {error}=await supabase.from("commission_penetrace").upsert(
+            {store_id:storeId,month:currentMonth,koef_prislusenstvi:koef,penetrace_loni:penNum},
+            {onConflict:"store_id,month"});
+          if(!error) saved.push(`${c0} (${String(currentMonth).padStart(2,"0")}): ${(penNum*100).toFixed(2)} % → ${(koef*100).toFixed(2)} %`);
+        }
+      }
+      setPenetraceStatus({saved}); setImportingPenetrace(false); await loadAll();
+      if(onSettingsSaved) onSettingsSaved();
+    } catch(err){ setImportingPenetrace(false); alert("Chyba importu: "+err.message); }
+  };
+
+  const inputS={padding:"6px 9px",borderRadius:7,border:"1.5px solid #E8E8F0",fontSize:13,width:90,textAlign:"right"};
+  const thS={padding:"9px 10px",textAlign:"left",fontWeight:700,color:"#fff",fontSize:12,background:"#1B4F8A"};
+  const tdS={padding:"8px 10px",fontSize:13};
+  const fieldGroups = [
+    {
+      title: "📊 Plánové koeficienty",
+      subtitle: "Určují plán každé složky jako % z plánu prodejny",
+      fields: [
+        {key:"koef_pz",          label:"PZ – koef. plánu",  help:"Plán PZ = X % z plánu prodejny",     suffix:"%"},
+        {key:"koef_sluzby",      label:"Služby – koef. plánu", help:"Plán služeb = X % z plánu prodejny", suffix:"%"},
+        {key:"prumerna_cena_pz", label:"Průměrná cena PZ",   help:"STR 1 630, BL 1 775, PE 1 710 Kč",  suffix:"Kč"},
+      ]
+    },
+    {
+      title: "💰 Sazby provizí",
+      subtitle: "Procentní sazby pro výpočet provize z každé složky",
+      fields: [
+        {key:"sazba_pz",           label:"PZ – sazba provize",          help:"% z tržby prodaných záruk",               suffix:"%"},
+        {key:"sazba_sluzby",       label:"Služby – sazba provize",      help:"% z tržby služeb",                        suffix:"%"},
+        {key:"strop_sluzby",       label:"Služby – strop provize",      help:"Max. provize za služby",                  suffix:"Kč"},
+      ]
+    },
+    {
+      title: "📦 Příslušenství – stupňovité sazby",
+      subtitle: "Sazba závisí na % splnění plánu příslušenství",
+      fields: [
+        {key:"sazba_prisl_1",      label:"Sazba 11–25 % plnění",        help:"Pásmo 11–25 % splnění plánu",             suffix:"%"},
+        {key:"sazba_prisl_2",      label:"Sazba 26–60 % plnění",        help:"Pásmo 26–60 % splnění plánu",             suffix:"%"},
+        {key:"sazba_prisl_3",      label:"Sazba 61–99 % plnění",        help:"Pásmo 61–99 % splnění plánu",             suffix:"%"},
+        {key:"sazba_prisl_4",      label:"Sazba 100 %+ plnění",         help:"Při splnění nebo překročení plánu",        suffix:"%"},
+        {key:"strop_prislusenstvi",label:"Příslušenství – strop provize",help:"Max. provize za příslušenství",           suffix:"Kč"},
+      ]
+    },
+    {
+      title: "📈 Obrat",
+      subtitle: "Sazby a bonusy za obrat",
+      fields: [
+        {key:"obrat_koef_plny",    label:"Sazba plný úvazek (≥160h)",   help:"% z obratu prodejce – plný úvazek",       suffix:"%"},
+        {key:"obrat_koef_zkraceny",label:"Sazba zkrácený úvazek (<160h)",help:"% z obratu prodejce – zkrácený úvazek",  suffix:"%"},
+        {key:"obrat_strop",        label:"Strop obratové provize",       help:"Max. provize za obrat (před bonusem)",    suffix:"Kč"},
+        {key:"bonus_obrat_110",    label:"Bonus za 110–119 % obratu",    help:"Bonus se nekrátí, vyplácí se vždy",       suffix:"Kč"},
+        {key:"bonus_obrat_120",    label:"Bonus za 120 %+ obratu",       help:"Bonus se nekrátí, vyplácí se vždy",       suffix:"Kč"},
+      ]
+    },
+  ];
+
+  // Měsíce 1–12 jsou fiskální měsíce, hodnoty > 12 jsou roční souhrny (2025 apod.) – skryjeme je
+  const allMonths = [...new Set(penetraceTable.map(r=>r.month))].filter(m=>m>=1&&m<=12).sort((a,b)=>a-b);
+
+  return <div>
+    {/* Import penetrace */}
+    <div style={{marginBottom:24,padding:"16px 20px",background:"#f0f9ff",borderRadius:10,border:"1.5px solid #93c5fd"}}>
+      <div style={{fontWeight:700,color:"#1B4F8A",marginBottom:6,fontSize:14}}>📊 Import penetrace příslušenství</div>
+      <div style={{fontSize:13,color:"#555",marginBottom:12,lineHeight:1.6}}>
+        Nahraj <strong>Příslušenství_data.xlsx</strong> jednou ročně. Koeficienty se uloží per pobočka × měsíc a lze je níže ručně korigovat.
+      </div>
+      <input ref={penetraceRef} type="file" accept=".xlsx" style={{display:"none"}} onChange={handlePenetraceImport}/>
+      <button onClick={()=>penetraceRef.current?.click()} disabled={importingPenetrace}
+        style={{padding:"9px 20px",borderRadius:7,border:"1.5px solid #1B4F8A",background:"#1B4F8A",color:"#fff",fontWeight:700,fontSize:13,cursor:importingPenetrace?"not-allowed":"pointer",opacity:importingPenetrace?0.7:1}}>
+        {importingPenetrace?"Zpracovávám…":"📂 Nahrát Příslušenství_data.xlsx"}
+      </button>
+      {penetraceStatus&&<div style={{marginTop:12,fontSize:12,color:"#166534",background:"#f0fdf4",borderRadius:7,padding:"10px 14px",border:"1px solid #86efac"}}>
+        <strong>✅ Importováno {penetraceStatus.saved.length} záznamů</strong>
+        <div style={{maxHeight:100,overflowY:"auto",lineHeight:1.8,marginTop:4}}>
+          {penetraceStatus.saved.map((s,i)=><div key={i}>{s}</div>)}
+        </div>
+      </div>}
+    </div>
+
+    {/* Přehled penetrace – read-only s přirážkou */}
+    {allMonths.length>0&&<div style={{marginBottom:24}}>
+      <div style={{fontWeight:700,color:"#1a1a2e",marginBottom:6,fontSize:14}}>
+        📈 Přehled penetrace příslušenství
+      </div>
+      {/* Přirážka – jedna globální hodnota */}
+      <div style={{marginBottom:12,padding:"12px 16px",background:"#f0fdf4",borderRadius:8,border:"1.5px solid #86efac",display:"flex",alignItems:"center",gap:16,flexWrap:"wrap"}}>
+        <div style={{fontSize:13,color:"#1a1a2e"}}>
+          <strong>Přirážka k loňské penetraci</strong>
+          <div style={{fontSize:11,color:"#888",marginTop:2}}>Přičte se ke každé loňské hodnotě → výsledný koeficient pro daný měsíc</div>
+        </div>
+        <div style={{display:"flex",alignItems:"center",gap:6}}>
+          <span style={{fontSize:13,color:"#555"}}>loňská penetrace +</span>
+          <input type="number" step="0.01" value={globalSettings.prislusenství_prirazka}
+            onChange={e=>updGlobal("prislusenství_prirazka",e.target.value)}
+            style={{...inputS,width:70,border:"1.5px solid #86efac"}}/>
+          <span style={{fontSize:13,color:"#555"}}>% = výsledný koeficient</span>
+        </div>
+        <button onClick={handleSavePenetrace} disabled={savingPen}
+          style={{padding:"7px 16px",borderRadius:7,border:"none",background:"#16a34a",color:"#fff",fontWeight:700,fontSize:13,cursor:savingPen?"not-allowed":"pointer",opacity:savingPen?0.7:1}}>
+          {savingPen?"Přepočítávám…":"🔄 Přepočítat a uložit koeficienty"}
+        </button>
+      </div>
+      <div style={{overflowX:"auto"}}>
+        <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
+          <thead><tr>
+            <th style={thS}>Měsíc</th>
+            {stores.map(s=><th key={s.id} style={{...thS,textAlign:"center"}}>
+              {s.name}
+              <div style={{display:"flex",justifyContent:"center",gap:4,marginTop:2,fontSize:10,fontWeight:400}}>
+                <span style={{opacity:0.7}}>loni %</span>
+                <span style={{opacity:0.4}}>→</span>
+                <span style={{opacity:0.9}}>koef. %</span>
+              </div>
+            </th>)}
+          </tr></thead>
+          <tbody>
+            {allMonths.map(mon=><tr key={mon} style={{borderBottom:"1px solid #eee"}}>
+              <td style={{...tdS,fontWeight:600}}>{MONTHS_CZ[mon]||mon}</td>
+              {stores.map((s,si)=>{
+                const rec = penetraceTable.find(r=>r.store_id===s.id&&r.month===mon);
+                const penLoni = rec?.penetrace_loni;
+                const koefUlozeny = rec?.koef_prislusenstvi; // skutečně uložená hodnota v DB
+                const prirazkaDisplay = globalSettings.prislusenství_prirazka;
+                const prirazka = (prirazkaDisplay === "" || prirazkaDisplay == null)
+                  ? 0.005 : Number(prirazkaDisplay) / 100;
+                const koefVypocet = penLoni != null ? penLoni + prirazka : null; // co by bylo při aktuální přirážce
+                const sedí = koefUlozeny!=null && koefVypocet!=null && Math.abs(koefUlozeny-koefVypocet)<0.0002;
+                return <td key={s.id} style={{...tdS,textAlign:"center",background:si%2===0?"#fff":"#f8f9ff"}}>
+                  {penLoni!=null
+                    ? <div style={{display:"flex",alignItems:"center",justifyContent:"center",gap:6,fontSize:13}}>
+                        <span style={{color:"#888"}}>{(penLoni*100).toFixed(2)} %</span>
+                        <span style={{color:"#bbb"}}>→</span>
+                        <span style={{fontWeight:700,color: sedí?"#1B4F8A":"#f97316"}}>
+                          {koefUlozeny!=null?(koefUlozeny*100).toFixed(2):"-"} %
+                        </span>
+                        {!sedí&&koefUlozeny!=null&&<span title={`Liší se od výpočtu (${koefVypocet!=null?(koefVypocet*100).toFixed(2):"-"} %)`} style={{fontSize:10,color:"#f97316",cursor:"help"}}>✎</span>}
+                      </div>
+                    : <span style={{color:"#ddd"}}>–</span>
+                  }
+                </td>;
+              })}
+            </tr>)}
+          </tbody>
+        </table>
+      </div>
+      <div style={{marginTop:8,fontSize:11,color:"#aaa"}}>
+        ✎ = hodnota byla ručně upravena a liší se od výpočtu (loňská + přirážka)
+      </div>
+    </div>}
+
+    {/* Globální nastavení – váhy a tabulka krácení */}
+    <div style={{marginBottom:24,border:"1.5px solid #e8e8f0",borderRadius:10,overflow:"hidden"}}>
+      <div style={{background:"#1B4F8A",padding:"10px 16px"}}>
+        <div style={{fontWeight:700,color:"#fff",fontSize:13}}>⚖️ Celkové plnění – váhy složek a tabulka krácení</div>
+        <div style={{fontSize:11,color:"rgba(255,255,255,0.7)",marginTop:2}}>Globální nastavení – platí pro všechny pobočky</div>
+      </div>
+      <div style={{padding:"16px",display:"grid",gridTemplateColumns:"1fr 1fr",gap:20}}>
+        {/* Váhy složek */}
+        <div>
+          <div style={{fontWeight:700,color:"#1a1a2e",marginBottom:10,fontSize:13}}>Váhy složek ve vzorci celkového plnění</div>
+          <div style={{fontSize:11,color:"#888",marginBottom:10}}>
+            Vzorec: (PZ×váha + Obrat×váha + Služby×váha + Přísl.×váha) ÷ součet vah
+          </div>
+          {[
+            {key:"vaha_pz",     label:"Záruky (PZ)"},
+            {key:"vaha_obrat",  label:"Obrat"},
+            {key:"vaha_sluzby", label:"Služby"},
+            {key:"vaha_prisl",  label:"Příslušenství"},
+          ].map(f=>{
+            const total = (Number(globalSettings.vaha_pz)||4)+(Number(globalSettings.vaha_obrat)||1)+(Number(globalSettings.vaha_sluzby)||1)+(Number(globalSettings.vaha_prisl)||1);
+            const pct = Math.round((Number(globalSettings[f.key])||0)/total*100);
+            return <div key={f.key} style={{display:"flex",alignItems:"center",gap:10,marginBottom:8}}>
+              <span style={{minWidth:120,fontSize:13,color:"#555"}}>{f.label}</span>
+              <input type="number" step="1" min="0" value={globalSettings[f.key]}
+                onChange={e=>updGlobal(f.key,e.target.value)}
+                style={{...inputS,width:60}}/>
+              <span style={{fontSize:11,color:"#aaa",minWidth:40}}>({pct} %)</span>
+            </div>;
+          })}
+          <div style={{marginTop:8,fontSize:11,color:"#888",padding:"6px 10px",background:"#f8f9ff",borderRadius:6}}>
+            Součet vah: {(Number(globalSettings.vaha_pz)||4)+(Number(globalSettings.vaha_obrat)||1)+(Number(globalSettings.vaha_sluzby)||1)+(Number(globalSettings.vaha_prisl)||1)}
+          </div>
+        </div>
+
+        {/* Tabulka krácení */}
+        <div>
+          <div style={{fontWeight:700,color:"#1a1a2e",marginBottom:10,fontSize:13}}>Tabulka krácení provize</div>
+          <div style={{fontSize:11,color:"#888",marginBottom:10}}>Při celkovém plnění ≥ X % se použije koeficient Y %</div>
+          <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
+            <thead><tr style={{background:"#f0f4ff"}}>
+              <th style={{padding:"6px 10px",textAlign:"left",fontWeight:700,color:"#1B4F8A",fontSize:12}}>Od plnění %</th>
+              <th style={{padding:"6px 10px",textAlign:"left",fontWeight:700,color:"#1B4F8A",fontSize:12}}>Koeficient %</th>
+            </tr></thead>
+            <tbody>
+              {globalSettings.kraceni.map((r,idx)=>(
+                <tr key={idx} style={{borderBottom:"1px solid #eee"}}>
+                  <td style={{padding:"4px 6px"}}>
+                    <input type="number" step="1" min="0" max="100" value={r.od}
+                      onChange={e=>updKraceni(idx,"od",e.target.value)}
+                      style={{...inputS,width:70}}/>
+                    <span style={{marginLeft:4,fontSize:12,color:"#888"}}>%</span>
+                  </td>
+                  <td style={{padding:"4px 6px"}}>
+                    <input type="number" step="1" min="0" max="100" value={r.koef}
+                      onChange={e=>updKraceni(idx,"koef",e.target.value)}
+                      style={{...inputS,width:70}}/>
+                    <span style={{marginLeft:4,fontSize:12,color:"#888"}}>%</span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* Sazby Rozvoz+Admin – speciální role */}
+      <div style={{padding:"0 16px 16px",borderTop:"1px solid #e8e8f0",paddingTop:14}}>
+        <div style={{fontWeight:700,color:"#1a1a2e",marginBottom:8,fontSize:13}}>🚚 Odměny Rozvoz+Admin (pro role: Rozvoz, Účetní, Brigádník)</div>
+        <div style={{fontSize:11,color:"#888",marginBottom:10}}>Fixní sazby – Rozvoz 1 a 2 v Kč/jízda, Admin v Kč/hodinu. Hodnoty se načítají automaticky z výkazu zaměstnance.</div>
+        <div style={{display:"flex",gap:20,flexWrap:"wrap"}}>
+          {[
+            {key:"sazba_rozvoz1", label:"Rozvoz 1", jednotka:"Kč/jízda"},
+            {key:"sazba_rozvoz2", label:"Rozvoz 2", jednotka:"Kč/jízda"},
+            {key:"sazba_admin",   label:"Admin práce", jednotka:"Kč/hodinu"},
+          ].map(f=><div key={f.key}>
+            <div style={{fontSize:11,fontWeight:700,color:"#888",marginBottom:4}}>{f.label.toUpperCase()}</div>
+            <div style={{display:"flex",alignItems:"center",gap:6}}>
+              <input type="number" step="1" min="0" value={globalSettings[f.key]||"0"}
+                onChange={e=>updGlobal(f.key,e.target.value)}
+                style={{...inputS,width:100}}/>
+              <span style={{fontSize:12,color:"#888"}}>{f.jednotka}</span>
+            </div>
+          </div>)}
+        </div>
+      </div>
+
+      <div style={{padding:"0 16px 16px",display:"flex",gap:10,alignItems:"center"}}>
+        <button onClick={handleSaveGlobal} disabled={savingGlobal}
+          style={{background:"#1B4F8A",color:"#fff",border:"none",borderRadius:9,padding:"10px 24px",fontSize:14,fontWeight:700,cursor:savingGlobal?"not-allowed":"pointer",opacity:savingGlobal?0.7:1}}>
+          {savingGlobal?"Ukládám…":"💾 Uložit globální nastavení"}
+        </button>
+        {savedGlobal&&<span style={{color:"#16a34a",fontWeight:700,fontSize:13}}>✅ Uloženo!</span>}
+        <span style={{fontSize:11,color:"#aaa",marginLeft:8}}>Po uložení se výsledky přepočítají automaticky</span>
+      </div>
+    </div>
+
+    {/* Výchozí koeficienty – rozděleno do sekcí */}
+    <div style={{fontWeight:700,color:"#1a1a2e",marginBottom:14,fontSize:14}}>⚙️ Sazby a koeficienty per pobočka</div>
+    {fieldGroups.map(group=>(
+      <div key={group.title} style={{marginBottom:20,border:"1.5px solid #e8e8f0",borderRadius:10,overflow:"hidden"}}>
+        <div style={{background:"#1B4F8A",padding:"10px 16px"}}>
+          <div style={{fontWeight:700,color:"#fff",fontSize:13}}>{group.title}</div>
+          <div style={{fontSize:11,color:"rgba(255,255,255,0.7)",marginTop:2}}>{group.subtitle}</div>
+        </div>
+        <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
+          <thead><tr style={{background:"#eef4ff"}}>
+            <th style={{...thS,background:"#eef4ff",color:"#1B4F8A",fontWeight:700,padding:"8px 14px"}}>Parametr</th>
+            {stores.map(s=><th key={s.id} style={{...thS,background:"#eef4ff",color:"#1B4F8A",textAlign:"center",padding:"8px 14px"}}>{s.name}</th>)}
+          </tr></thead>
+          <tbody>
+            {group.fields.map(f=><tr key={f.key} style={{borderBottom:"1px solid #f0f0f0"}}>
+              <td style={{...tdS,paddingLeft:14}}>
+                <div style={{fontWeight:600,color:"#1a1a2e"}}>{f.label}</div>
+                <div style={{fontSize:11,color:"#aaa"}}>{f.help}</div>
+              </td>
+              {stores.map((s,si)=><td key={s.id} style={{...tdS,textAlign:"center",background:si%2===0?"#fff":"#f8f9ff"}}>
+                <div style={{display:"flex",alignItems:"center",justifyContent:"center",gap:4}}>
+                  <input
+                    type="number"
+                    step={f.suffix==="%"?"0.01":"1"}
+                    value={displayData[s.id]?.[f.key] ?? ""}
+                    onChange={e=>upd(s.id, f.key, e.target.value)}
+                    style={inputS}
+                  />
+                  <span style={{fontSize:12,color:"#888",minWidth:20}}>{f.suffix}</span>
+                </div>
+              </td>)}
+            </tr>)}
+          </tbody>
+        </table>
+      </div>
+    ))}
+    <div style={{marginTop:16,display:"flex",gap:10,alignItems:"center"}}>
+      <button onClick={handleSave} disabled={saving}
+        style={{background:"#1B4F8A",color:"#fff",border:"none",borderRadius:9,padding:"11px 28px",fontSize:14,fontWeight:700,cursor:saving?"not-allowed":"pointer",opacity:saving?0.7:1}}>
+        {saving?"Ukládám…":"💾 Uložit nastavení"}
+      </button>
+      {saved&&<span style={{color:"#16a34a",fontWeight:700,fontSize:13}}>✅ Uloženo!</span>}
+    </div>
+  </div>;
+}
+
+// ── Hlavní kontejner provizního modulu ───────────────────────
+function CommissionModule({employees, stores, currentUser, sched, holidays, patterns}){
+  if(currentUser?.role !== "admin") return null;
+  const [subTab, setSubTab] = useState("input");
+  const [resultsKey, setResultsKey] = useState(0); // increment to force re-fetch
+  const subTabs=[
+    {key:"input",   label:"📝 Zadat výsledky"},
+    {key:"results", label:"📊 Výsledky týmu"},
+    {key:"settings",label:"⚙️ Nastavení koeficientů"},
+  ];
+  const handleSettingsSaved = ()=>{
+    // Po uložení koeficientů přepneme na Výsledky a přinutíme je k přenačtení
+    setResultsKey(k=>k+1);
+    setSubTab("results");
+  };
+  return <div>
+    <div style={{display:"flex",gap:4,marginBottom:20,borderBottom:"2px solid #e8e8f0",paddingBottom:0}}>
+      {subTabs.map(t=><button key={t.key} onClick={()=>setSubTab(t.key)}
+        style={{padding:"9px 18px",background:"none",border:"none",borderBottom:subTab===t.key?"3px solid #1B4F8A":"3px solid transparent",color:subTab===t.key?"#1B4F8A":"#888",fontWeight:subTab===t.key?700:500,fontSize:13,cursor:"pointer",marginBottom:-2}}>
+        {t.label}
+      </button>)}
+    </div>
+    {subTab==="input"    && <CommissionInput employees={employees} stores={stores} currentUser={currentUser} sched={sched} holidays={holidays} patterns={patterns}/>}
+    {subTab==="results"  && <CommissionResults key={resultsKey} employees={employees} stores={stores}/>}
+    {subTab==="settings" && <CommissionSettings stores={stores} onSettingsSaved={handleSettingsSaved}/>}
   </div>;
 }
 
