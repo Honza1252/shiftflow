@@ -28,6 +28,7 @@ function dbToEmp(r){
     contractHoursDay: r.contract_hours_day,
     contractHoursWeek: r.contract_hours_week,
     vacHours: r.vac_hours,
+    vacAdjustment: Number(r.vac_adjustment||0),
     kdpStart: r.kdp_start||0,
     startDate: r.start_date||null,
     active: r.active,
@@ -44,6 +45,7 @@ function empToDB(e){
     contract_hours_day: e.contractHoursDay,
     contract_hours_week: e.contractHoursWeek,
     vac_hours: e.vacHours,
+    vac_adjustment: e.vacAdjustment||0,
     kdp_start: e.kdpStart||0,
     start_date: e.startDate||null,
     active: e.active,
@@ -311,6 +313,9 @@ function getWorkingDays(y,m,holidays){
     if(getDow(y,m,d)<5) c++;
   return c;
 }
+// Celkový nárok dovolené = vacHours + vacAdjustment
+function empVacTotal(emp){ return (emp.vacHours||0) + (emp.vacAdjustment||0); }
+
 // Vrátí startDate zaměstnance jako Date objekt nebo null
 function empStartDate(emp){
   if(!emp.startDate) return null;
@@ -525,7 +530,30 @@ function EmployeeForm({initial, stores, onSave, onClose}){
           </button>)}
         </div>
       </div>
-      <FInput label="Dovolená (h/rok)" type="number" value={form.vacHours} onChange={v=>upd("vacHours",Number(v))}/>
+      <div style={{display:"flex",flexDirection:"column",gap:6}}>
+        <div style={{display:"flex",gap:10,alignItems:"flex-end"}}>
+          <FInput label="Dovolená (h/rok)" type="number" value={form.vacHours} onChange={v=>upd("vacHours",Number(v))} style={{flex:1}}/>
+          <div style={{display:"flex",flexDirection:"column",gap:4,flex:1}}>
+            <FLabel>Korekce (jednorázová)</FLabel>
+            <div style={{display:"flex",gap:6,alignItems:"center"}}>
+              <input type="number" value={form._vacCorr||""} placeholder="např. +10 nebo -20"
+                onChange={e=>upd("_vacCorr",e.target.value)}
+                style={{padding:"7px 10px",border:`1.5px solid ${C.border}`,borderRadius:7,fontSize:13,width:140,outline:"none"}}/>
+              <Btn small onClick={()=>{
+                const delta=Number(form._vacCorr||0);
+                if(!delta) return;
+                upd("vacAdjustment",(form.vacAdjustment||0)+delta);
+                upd("_vacCorr","");
+              }}>Přičíst</Btn>
+            </div>
+          </div>
+        </div>
+        {(form.vacAdjustment||0)!==0&&<div style={{fontSize:11,color:"#1565c0",padding:"4px 10px",background:"#e8f0fe",borderRadius:6}}>
+          Kumulativní korekce: <strong>{(form.vacAdjustment||0)>0?"+":""}{form.vacAdjustment}h</strong>
+          &nbsp;→ Celkový nárok: <strong>{(form.vacHours||0)+(form.vacAdjustment||0)}h</strong>
+          <button onClick={()=>upd("vacAdjustment",0)} style={{marginLeft:10,border:"none",background:"none",color:"#c62828",cursor:"pointer",fontSize:11,fontWeight:700}}>Resetovat korekci</button>
+        </div>}
+      </div>
       <FInput label="Počáteční KDP (hodiny)" type="number" value={form.kdpStart} onChange={v=>upd("kdpStart",Number(v))}/>
       <div style={{display:"flex",flexDirection:"column",gap:4}}>
         <FInput label="Datum nástupu" type="date" value={form.startDate||""} onChange={v=>upd("startDate",v||null)}/>
@@ -1417,7 +1445,7 @@ function EmployeesView({employees,setEmployees,stores}){
   const [editEmp,setEditEmp]=useState(null);
   const [showNew,setShowNew]=useState(false);
   const [loginEmp,setLoginEmp]=useState(null);
-  const newEmpTemplate={firstName:"",lastName:"",mainStore:1,extraStores:[],role:"",contractHoursDay:8,contractHoursWeek:40,vacHours:160,kdpStart:0,startDate:"",active:true,customTimes:{}};
+  const newEmpTemplate={firstName:"",lastName:"",mainStore:1,extraStores:[],role:"",contractHoursDay:8,contractHoursWeek:40,vacHours:160,vacAdjustment:0,kdpStart:0,startDate:"",active:true,customTimes:{}};
 
   return <div>
     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
@@ -1457,7 +1485,12 @@ function EmployeesView({employees,setEmployees,stores}){
                   ?<Badge color="#fff3e0" textColor="#e65100">{Object.keys(emp.customTimes||{}).map(id=>STORE_SHORT[id]).join(", ")}</Badge>
                   :<span style={{color:"#ddd"}}>—</span>}
               </td>
-              <td style={{padding:"8px 10px",borderBottom:`1px solid ${C.border}`}}>{emp.vacHours}h/rok</td>
+              <td style={{padding:"8px 10px",borderBottom:`1px solid ${C.border}`}}>
+                {emp.vacHours}h/rok
+                {(emp.vacAdjustment||0)!==0&&<span style={{fontSize:10,color:(emp.vacAdjustment||0)>0?"#2e7d32":"#c62828",fontWeight:700,marginLeft:4}}>
+                  {(emp.vacAdjustment||0)>0?"+":""}{emp.vacAdjustment}h → {empVacTotal(emp)}h
+                </span>}
+              </td>
               <td style={{padding:"8px 10px",borderBottom:`1px solid ${C.border}`}}><Badge color={emp.active?"#e8f5e9":"#ffebee"} textColor={emp.active?"#2e7d32":"#c62828"}>{emp.active?"Aktivní":"Neaktivní"}</Badge></td>
               <td style={{padding:"8px 10px",borderBottom:`1px solid ${C.border}`,whiteSpace:"nowrap"}}>
                 <Btn small variant="secondary" onClick={()=>setEditEmp(emp)} style={{marginRight:6}}>Upravit</Btn>
@@ -2447,7 +2480,7 @@ function SummaryTable({storeId, employees, year, month, sched, holidays, stores,
           const kdp        = beforeStart ? null : calcKdpCumulative(emp, year, month, sched, holidays, stores, patterns, employees, timesheetData);
           const kdpPaid    = 0;
           const kdpBalance = kdp!==null ? kdp : null;
-          const vacLeft    = emp.vacHours - vacUsed;
+          const vacLeft    = empVacTotal(emp) - vacUsed;
           const kdpFmt = v => v===null?"—":(v>0?"+":v<0?"-":"")+fmtH(Math.abs(v));
           const kdpStyle = v => v===null
             ? {padding:"8px 10px",textAlign:"center",borderBottom:`1px solid ${C.border}`,color:"#ccc"}
@@ -2462,7 +2495,7 @@ function SummaryTable({storeId, employees, year, month, sched, holidays, stores,
             <td style={{padding:"8px 10px",textAlign:"center",borderBottom:`1px solid ${C.border}`,color:"#1a1a2e",fontWeight:600}}>{fmtH(planned)}</td>
             <td style={colStyle(overtime)}>{overtime>0?"+":""}{fmtH(overtime)}</td>
             <td style={kdpStyle(kdp)}>{kdpFmt(kdp)}</td>
-            <td style={{padding:"8px 10px",textAlign:"center",borderBottom:`1px solid ${C.border}`,color:"#555"}}>{fmtH(emp.vacHours)}</td>
+            <td style={{padding:"8px 10px",textAlign:"center",borderBottom:`1px solid ${C.border}`,color:"#555"}}>{fmtH(empVacTotal(emp))}</td>
             <td style={{padding:"8px 10px",textAlign:"center",borderBottom:`1px solid ${C.border}`,color:"#1565c0",fontWeight:600}}>{fmtH(vacUsed)}</td>
             <td style={colStyle(vacLeft, "#2e7d32", "#c62828")}>{fmtH(vacLeft)}</td>
           </tr>;
@@ -3170,14 +3203,14 @@ ${d}${hol?"!":"."}`;
       const fund2=wd2*empContractDay(emp);
       const ot=planned-fund2;
       const kdp=calcKdpCumulative(emp,year,month,sched,holidays,stores,patterns,employees,timesheetData);
-      const vacLeft=emp.vacHours-vacUsed;
+      const vacLeft=empVacTotal(emp)-vacUsed;
       const altBg=ri%2===0?"FFFFFFFF":"FFF8F9FC";
       const sRow=ws.addRow([
         `${emp.firstName} ${emp.lastName}`,
         fmtH2(fund2), fmtH2(planned),
         (ot>=0?"+":"")+fmtH2(ot),
         fmtHs(kdp),
-        fmtH2(emp.vacHours), fmtH2(vacUsed), fmtH2(vacLeft),
+        fmtH2(empVacTotal(emp)), fmtH2(vacUsed), fmtH2(vacLeft),
       ]);
       sRow.height=13;
       sRow.eachCell((cell,cn)=>{
@@ -3478,10 +3511,10 @@ ${d}${hol?"!":"."}`;
       const fund2=wd*empContractDay(emp);
       const ot=planned-fund2;
       const kdp=calcKdpCumulative(emp,year,month,sched,holidays,stores,patterns,employees,timesheetData);
-      const vacLeft=emp.vacHours-vacUsed;
+      const vacLeft=empVacTotal(emp)-vacUsed;
       const altBg=ri%2===0?[255,255,255]:[248,249,252];
       sx=mL;
-      const vals=[cz(`${emp.firstName} ${emp.lastName}`),fmtH2(fund2),fmtH2(planned),(ot>=0?"+":"")+fmtH2(ot),fmtHs(kdp),fmtH2(emp.vacHours),fmtH2(vacUsed),fmtH2(vacLeft)];
+      const vals=[cz(`${emp.firstName} ${emp.lastName}`),fmtH2(fund2),fmtH2(planned),(ot>=0?"+":"")+fmtH2(ot),fmtHs(kdp),fmtH2(empVacTotal(emp)),fmtH2(vacUsed),fmtH2(vacLeft)];
       const tcs=[[26,26,46],[80,82,100],[26,26,46],ot>0?[46,125,50]:ot<0?[198,40,40]:[120,120,130],kdp>0?[21,101,192]:kdp<0?[198,40,40]:[120,120,130],[80,82,100],[21,101,192],vacLeft>0?[46,125,50]:[198,40,40]];
       sHdrs.forEach((_,hi)=>{
         doc.setFillColor(altBg[0],altBg[1],altBg[2]);
