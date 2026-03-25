@@ -1016,7 +1016,12 @@ function ScheduleView({storeId,employees,year,month,sched,onCellEdit,actions,hol
       const absSeg=vacSeg||otherAbsSeg;
 
       if(!workSegs.length&&!vacSeg&&!otherAbsSeg&&dayOffSeg){
-        bg=C.dayOff; lines=["V"]; txtColor="#81c784";
+        // Volno: pokud vzor říká práci → žlutá (změna), jinak zelená
+        if(patternDay){
+          bg=C.modified; lines=["V"]; txtColor="#888";
+        } else {
+          bg=C.dayOff; lines=["V"]; txtColor="#81c784";
+        }
       } else if(workSegs.length&&vacSeg){
         // Práce + Dovolená/Nemoc – zobraz práci a DOV Xh
         const totalH=calcSplitWorked(workSegs,emp.mainStore,stores);
