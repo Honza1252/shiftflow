@@ -29,7 +29,7 @@ function dbToEmp(r){
     contractHoursWeek: r.contract_hours_week,
     vacHours: r.vac_hours,
     vacAdjustment: Number(r.vac_adjustment||0),
-    kdpStart: r.kdp_start||0,
+    kpdStart: r.kpd_start||0,
     startDate: r.start_date||null,
     active: r.active,
     customTimes: r.custom_times||{},
@@ -46,7 +46,7 @@ function empToDB(e){
     contract_hours_week: e.contractHoursWeek,
     vac_hours: e.vacHours,
     vac_adjustment: e.vacAdjustment||0,
-    kdp_start: e.kdpStart||0,
+    kpd_start: e.kpdStart||0,
     start_date: e.startDate||null,
     active: e.active,
     custom_times: e.customTimes||{},
@@ -197,26 +197,26 @@ const INIT_STORES = [
 // contractHoursDay  = hodiny za odpracovaný den (pro výpočet dovolené, přestávek)
 // contractHoursWeek = fond hodin za týden (pro výpočet přesčasu)
 const INIT_EMPS = [
-  {id:1, firstName:"Voneš",     lastName:"",     mainStore:1, extraStores:[],    role:"Vedoucí prodavač",   contractHoursDay:8, contractHoursWeek:40, vacHours:160, kdpStart:0, active:true, customTimes:{}},
-  {id:2, firstName:"Šusta",     lastName:"Petr", mainStore:1, extraStores:[2],   role:"Zástupce vedoucího", contractHoursDay:8, contractHoursWeek:40, vacHours:160, kdpStart:0, active:true, customTimes:{}},
-  {id:3, firstName:"Moláček",   lastName:"",     mainStore:1, extraStores:[],    role:"Prodavač",           contractHoursDay:8, contractHoursWeek:40, vacHours:160, kdpStart:0, active:true, customTimes:{}},
-  {id:4, firstName:"Staněk",    lastName:"",     mainStore:1, extraStores:[],    role:"Prodavač",           contractHoursDay:8, contractHoursWeek:40, vacHours:160, kdpStart:0, active:true, customTimes:{}},
-  {id:5, firstName:"Komínková", lastName:"",     mainStore:1, extraStores:[],    role:"Prodavač",           contractHoursDay:8, contractHoursWeek:40, vacHours:160, kdpStart:0, active:true, customTimes:{}},
-  {id:6, firstName:"Přibová",   lastName:"",     mainStore:1, extraStores:[],    role:"Prodavač",           contractHoursDay:6, contractHoursWeek:30, vacHours:160, kdpStart:0, active:true, customTimes:{}},
-  {id:7, firstName:"Havelka",   lastName:"",     mainStore:1, extraStores:[],    role:"Prodavač",           contractHoursDay:6, contractHoursWeek:30, vacHours:160, kdpStart:0, active:true, customTimes:{}},
-  {id:8, firstName:"Kříž",      lastName:"",     mainStore:1, extraStores:[2],   role:"Rozvoz",             contractHoursDay:8, contractHoursWeek:40, vacHours:160, kdpStart:0, active:true,
+  {id:1, firstName:"Voneš",     lastName:"",     mainStore:1, extraStores:[],    role:"Vedoucí prodavač",   contractHoursDay:8, contractHoursWeek:40, vacHours:160, kpdStart:0, active:true, customTimes:{}},
+  {id:2, firstName:"Šusta",     lastName:"Petr", mainStore:1, extraStores:[2],   role:"Zástupce vedoucího", contractHoursDay:8, contractHoursWeek:40, vacHours:160, kpdStart:0, active:true, customTimes:{}},
+  {id:3, firstName:"Moláček",   lastName:"",     mainStore:1, extraStores:[],    role:"Prodavač",           contractHoursDay:8, contractHoursWeek:40, vacHours:160, kpdStart:0, active:true, customTimes:{}},
+  {id:4, firstName:"Staněk",    lastName:"",     mainStore:1, extraStores:[],    role:"Prodavač",           contractHoursDay:8, contractHoursWeek:40, vacHours:160, kpdStart:0, active:true, customTimes:{}},
+  {id:5, firstName:"Komínková", lastName:"",     mainStore:1, extraStores:[],    role:"Prodavač",           contractHoursDay:8, contractHoursWeek:40, vacHours:160, kpdStart:0, active:true, customTimes:{}},
+  {id:6, firstName:"Přibová",   lastName:"",     mainStore:1, extraStores:[],    role:"Prodavač",           contractHoursDay:6, contractHoursWeek:30, vacHours:160, kpdStart:0, active:true, customTimes:{}},
+  {id:7, firstName:"Havelka",   lastName:"",     mainStore:1, extraStores:[],    role:"Prodavač",           contractHoursDay:6, contractHoursWeek:30, vacHours:160, kpdStart:0, active:true, customTimes:{}},
+  {id:8, firstName:"Kříž",      lastName:"",     mainStore:1, extraStores:[2],   role:"Rozvoz",             contractHoursDay:8, contractHoursWeek:40, vacHours:160, kpdStart:0, active:true,
     customTimes:{
       1:{ weekday:["09:00","18:00"], saturday:null, sunday:null },
       2:{ weekday:["08:00","17:00"], saturday:null, sunday:null },
     }
   },
-  {id:9, firstName:"Míka",      lastName:"",     mainStore:2, extraStores:[],    role:"Vedoucí prodavač",   contractHoursDay:8, contractHoursWeek:40, vacHours:160, kdpStart:0, active:true, customTimes:{}},
-  {id:10,firstName:"Štefanová", lastName:"",     mainStore:2, extraStores:[],    role:"Prodavač",           contractHoursDay:8, contractHoursWeek:40, vacHours:160, kdpStart:0, active:true, customTimes:{}},
-  {id:11,firstName:"Michálek",  lastName:"",     mainStore:2, extraStores:[],    role:"Prodavač",           contractHoursDay:8, contractHoursWeek:40, vacHours:160, kdpStart:0, active:true, customTimes:{}},
-  {id:12,firstName:"Martinec",  lastName:"",     mainStore:3, extraStores:[],    role:"Vedoucí prodavač",   contractHoursDay:8, contractHoursWeek:40, vacHours:160, kdpStart:0, active:true, customTimes:{}},
-  {id:13,firstName:"Bímon",     lastName:"",     mainStore:3, extraStores:[],    role:"Zástupce vedoucího", contractHoursDay:8, contractHoursWeek:40, vacHours:160, kdpStart:0, active:true, customTimes:{}},
-  {id:14,firstName:"Jankovský", lastName:"",     mainStore:1, extraStores:[2,3], role:"Majitel",            contractHoursDay:8, contractHoursWeek:40, vacHours:0,   kdpStart:0, active:true, customTimes:{}},
-  {id:15,firstName:"Šustrová",  lastName:"",     mainStore:1, extraStores:[],    role:"Účetní",             contractHoursDay:4, contractHoursWeek:20, vacHours:80,  kdpStart:0, active:true, customTimes:{}},
+  {id:9, firstName:"Míka",      lastName:"",     mainStore:2, extraStores:[],    role:"Vedoucí prodavač",   contractHoursDay:8, contractHoursWeek:40, vacHours:160, kpdStart:0, active:true, customTimes:{}},
+  {id:10,firstName:"Štefanová", lastName:"",     mainStore:2, extraStores:[],    role:"Prodavač",           contractHoursDay:8, contractHoursWeek:40, vacHours:160, kpdStart:0, active:true, customTimes:{}},
+  {id:11,firstName:"Michálek",  lastName:"",     mainStore:2, extraStores:[],    role:"Prodavač",           contractHoursDay:8, contractHoursWeek:40, vacHours:160, kpdStart:0, active:true, customTimes:{}},
+  {id:12,firstName:"Martinec",  lastName:"",     mainStore:3, extraStores:[],    role:"Vedoucí prodavač",   contractHoursDay:8, contractHoursWeek:40, vacHours:160, kpdStart:0, active:true, customTimes:{}},
+  {id:13,firstName:"Bímon",     lastName:"",     mainStore:3, extraStores:[],    role:"Zástupce vedoucího", contractHoursDay:8, contractHoursWeek:40, vacHours:160, kpdStart:0, active:true, customTimes:{}},
+  {id:14,firstName:"Jankovský", lastName:"",     mainStore:1, extraStores:[2,3], role:"Majitel",            contractHoursDay:8, contractHoursWeek:40, vacHours:0,   kpdStart:0, active:true, customTimes:{}},
+  {id:15,firstName:"Šustrová",  lastName:"",     mainStore:1, extraStores:[],    role:"Účetní",             contractHoursDay:4, contractHoursWeek:20, vacHours:80,  kpdStart:0, active:true, customTimes:{}},
 ];
 
 // ─── ČASY SMĚN ───────────────────────────────────────────────
@@ -554,7 +554,7 @@ function EmployeeForm({initial, stores, onSave, onClose}){
           <button onClick={()=>upd("vacAdjustment",0)} style={{marginLeft:10,border:"none",background:"none",color:"#c62828",cursor:"pointer",fontSize:11,fontWeight:700}}>Resetovat korekci</button>
         </div>}
       </div>
-      <FInput label="Počáteční KDP (hodiny)" type="number" value={form.kdpStart} onChange={v=>upd("kdpStart",Number(v))}/>
+      <FInput label="Počáteční KPD (hodiny)" type="number" value={form.kpdStart} onChange={v=>upd("kpdStart",Number(v))}/>
       <div style={{display:"flex",flexDirection:"column",gap:4}}>
         <FInput label="Datum nástupu" type="date" value={form.startDate||""} onChange={v=>upd("startDate",v||null)}/>
         <div style={{fontSize:11,color:"#aaa",paddingLeft:2}}>
@@ -1445,7 +1445,7 @@ function EmployeesView({employees,setEmployees,stores}){
   const [editEmp,setEditEmp]=useState(null);
   const [showNew,setShowNew]=useState(false);
   const [loginEmp,setLoginEmp]=useState(null);
-  const newEmpTemplate={firstName:"",lastName:"",mainStore:1,extraStores:[],role:"",contractHoursDay:8,contractHoursWeek:40,vacHours:160,vacAdjustment:0,kdpStart:0,startDate:"",active:true,customTimes:{}};
+  const newEmpTemplate={firstName:"",lastName:"",mainStore:1,extraStores:[],role:"",contractHoursDay:8,contractHoursWeek:40,vacHours:160,vacAdjustment:0,kpdStart:0,startDate:"",active:true,customTimes:{}};
 
   return <div>
     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
@@ -1521,7 +1521,7 @@ function EmployeesView({employees,setEmployees,stores}){
             contract_hours_day: f.contractHoursDay,
             contract_hours_week: f.contractHoursWeek,
             vac_hours: f.vacHours,
-            kdp_start: f.kdpStart||0,
+            kpd_start: f.kpdStart||0,
             active: f.active,
             custom_times: f.customTimes||{},
           };
@@ -1545,7 +1545,7 @@ function EmployeesView({employees,setEmployees,stores}){
 }
 
 // ─── TIMESHEET ───────────────────────────────────────────────
-function TimesheetView({employee, year, month, holidays, stores, sched, employees, patterns, rows, onRowChange, timesheetData, onKdpPaidChange, canEditKdp=true, tsStatus="draft", onSubmit, onApprove, onReturn, isVedouci=false}){
+function TimesheetView({employee, year, month, holidays, stores, sched, employees, patterns, rows, onRowChange, timesheetData, onKdpPaidChange, canEditKpd=true, tsStatus="draft", onSubmit, onApprove, onReturn, isVedouci=false}){
   const dim = getDim(year, month);
   const brRules = getBreakRules(employee.mainStore, stores);
   const fund = getEmpFund(employee, year, month, holidays);
@@ -1753,17 +1753,17 @@ function TimesheetView({employee, year, month, holidays, stores, sched, employee
   const fmtH = h => h===0?"—":(h%1===0?`${h}h`:`${h.toFixed(1)}h`);
   const fmtHsign = h => h===0?"0h":((h>0?"+":"-")+Math.abs(h%1===0?h:+h.toFixed(1))+"h");
 
-  // KDP výpočet pro tento výkaz
-  // KDP vstup = kumulativní KDP ke konci předchozího měsíce
+  // KPD výpočet pro tento výkaz
+  // KPD vstup = kumulativní KPD ke konci předchozího měsíce
   const prevMonthY = month===0?year-1:year;
   const prevMonthM = month===0?11:month-1;
   const isFirstMonth = year===APP_START.year && month===APP_START.month;
-  const kdpVstup = isFirstMonth
-    ? (employee.kdpStart||0)
-    : calcKdpCumulative(employee, prevMonthY, prevMonthM, sched, holidays, stores, patterns, employees, timesheetData);
+  const kpdVstup = isFirstMonth
+    ? (employee.kpdStart||0)
+    : calcKpdCumulative(employee, prevMonthY, prevMonthM, sched, holidays, stores, patterns, employees, timesheetData);
   const tsKeyThis = `${employee.id}-${year}-${month+1}`;
-  const kdpPaidThis = Number(timesheetData?.[tsKeyThis]?.kdpPaid || 0);
-  const kdpVystup = kdpVstup + overtime - kdpPaidThis;
+  const kpdPaidThis = Number(timesheetData?.[tsKeyThis]?.kpdPaid || 0);
+  const kpdVystup = kpdVstup + overtime - kpdPaidThis;
 
   // ── Export Excel s barvami (ExcelJS) ──
   const exportExcel = async () => {
@@ -1869,9 +1869,9 @@ function TimesheetView({employee, year, month, holidays, stores, sched, employee
       ["Rozvoz 2", totRoz2>0?`${totRoz2}×`:"—"],
       ["Stravenky", tix>0?`${tix} ks`:"—"],
       [],
-      ["KDP vstup", fmtHsign(kdpVstup)],
-      ["KDP proplaceno", kdpPaidThis>0?`${kdpPaidThis}h`:"—"],
-      ["KDP výstup", fmtHsign(kdpVystup)],
+      ["KPD vstup", fmtHsign(kpdVstup)],
+      ["KPD proplaceno", kpdPaidThis>0?`${kpdPaidThis}h`:"—"],
+      ["KPD výstup", fmtHsign(kpdVystup)],
     ];
     sumRows.forEach(r=>{
       const row = ws.addRow(r);
@@ -2030,28 +2030,28 @@ function TimesheetView({employee, year, month, holidays, stores, sched, employee
     drawTiles(tiles1, marginL, sy+1);
     drawTiles(tiles2, marginL, sy+1+tileH+tileGap);
 
-    // ── KDP – vizuální blok ──
+    // ── KPD – vizuální blok ──
     const ky = sy + 1 + (tileH+tileGap)*2 + 6;
     doc.setFont("helvetica","bold"); doc.setFontSize(8.5);
     doc.setTextColor(26,26,46);
-    doc.text(cz("KDP – Konto presc. hodin"), marginL, ky);
+    doc.text(cz("KPD – Konto pracovni doby"), marginL, ky);
 
-    const kdpTiles = [
-      { label:"KDP vstup (z min. mes.)", val:fmtHsign(kdpVstup),   bg:[232,234,246], tc:[57,73,171]  },
+    const kpdTiles = [
+      { label:"KPD vstup (z min. mes.)", val:fmtHsign(kpdVstup),   bg:[232,234,246], tc:[57,73,171]  },
       { label:"Presc. tento mesic",       val:fmtHsign(overtime),   bg:overtime>=0?[232,245,233]:[255,235,238], tc:overtime>=0?[46,125,50]:[198,40,40] },
-      { label:"KDP proplaceno",            val:kdpPaidThis>0?`${kdpPaidThis}h`:"— (nic)", bg:[255,243,224], tc:[230,81,0] },
-      { label:"KDP vystup (pristi mes.)", val:fmtHsign(kdpVystup),  bg:kdpVystup>=0?[227,242,253]:[255,235,238], tc:kdpVystup>=0?[21,101,192]:[198,40,40] },
+      { label:"KPD proplaceno",            val:kpdPaidThis>0?`${kpdPaidThis}h`:"— (nic)", bg:[255,243,224], tc:[230,81,0] },
+      { label:"KPD vystup (pristi mes.)", val:fmtHsign(kpdVystup),  bg:kpdVystup>=0?[227,242,253]:[255,235,238], tc:kpdVystup>=0?[21,101,192]:[198,40,40] },
     ];
-    const kdpTileW = (usableW - 3*tileGap) / 4;
-    kdpTiles.forEach((t, i)=>{
-      const tx = marginL + i*(kdpTileW+tileGap);
+    const kpdTileW = (usableW - 3*tileGap) / 4;
+    kpdTiles.forEach((t, i)=>{
+      const tx = marginL + i*(kpdTileW+tileGap);
       doc.setFillColor(...t.bg);
-      doc.roundedRect(tx, ky+2, kdpTileW, tileH+2, 1, 1, "F");
+      doc.roundedRect(tx, ky+2, kpdTileW, tileH+2, 1, 1, "F");
       doc.setFont("helvetica","normal"); doc.setFontSize(5.5);
       doc.setTextColor(...t.tc);
-      doc.text(cz(t.label).toUpperCase(), tx+kdpTileW/2, ky+6, {align:"center"});
+      doc.text(cz(t.label).toUpperCase(), tx+kpdTileW/2, ky+6, {align:"center"});
       doc.setFont("helvetica","bold"); doc.setFontSize(10);
-      doc.text(cz(t.val), tx+kdpTileW/2, ky+12, {align:"center"});
+      doc.text(cz(t.val), tx+kpdTileW/2, ky+12, {align:"center"});
     });
 
     // ── Podpis – pravý dolní roh ──
@@ -2271,26 +2271,26 @@ function TimesheetView({employee, year, month, holidays, stores, sched, employee
         Celkem = Odprac. + Dovolená + Nemoc + Sv.zavřeno + OČR + Jiné &nbsp;│&nbsp;
         So: {fmtH(soH)} &nbsp;│&nbsp; Ne: {fmtH(neH)}
       </div>
-      {/* KDP sekce */}
+      {/* KPD sekce */}
       <div style={{borderTop:`2px solid ${C.border}`,padding:"14px 16px",background:"#f0f4ff"}}>
-        <div style={{fontSize:12,fontWeight:800,color:C.topbar,marginBottom:10,textTransform:"uppercase",letterSpacing:"0.06em"}}>📈 KDP – Konto přesčasových hodin</div>
+        <div style={{fontSize:12,fontWeight:800,color:C.topbar,marginBottom:10,textTransform:"uppercase",letterSpacing:"0.06em"}}>📈 KPD – Konto pracovní doby</div>
         <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))",gap:10,alignItems:"end"}}>
-          {/* KDP vstup */}
+          {/* KPD vstup */}
           <div style={{background:"#e8eaf6",borderRadius:8,padding:"10px 12px",textAlign:"center"}}>
-            <div style={{fontSize:9,fontWeight:700,color:"#3949ab",textTransform:"uppercase",marginBottom:4}}>KDP vstup (z min. měsíce)</div>
-            <div style={{fontSize:18,fontWeight:800,color:kdpVstup>=0?"#3949ab":"#c62828"}}>{fmtHsign(kdpVstup)}</div>
+            <div style={{fontSize:9,fontWeight:700,color:"#3949ab",textTransform:"uppercase",marginBottom:4}}>KPD vstup (z min. měsíce)</div>
+            <div style={{fontSize:18,fontWeight:800,color:kpdVstup>=0?"#3949ab":"#c62828"}}>{fmtHsign(kpdVstup)}</div>
           </div>
           {/* Přesčas tento měsíc – odkaz na stávající hodnotu */}
           <div style={{background:overtime>=0?"#e8f5e9":"#ffebee",borderRadius:8,padding:"10px 12px",textAlign:"center"}}>
             <div style={{fontSize:9,fontWeight:700,color:overtime>=0?"#2e7d32":"#c62828",textTransform:"uppercase",marginBottom:4}}>Přesčas / minus tento měsíc</div>
             <div style={{fontSize:18,fontWeight:800,color:overtime>=0?"#2e7d32":"#c62828"}}>{fmtHsign(overtime)}</div>
           </div>
-          {/* KDP proplaceno – editovatelné pro vedoucího, read-only pro prodavače */}
+          {/* KPD proplaceno – editovatelné pro vedoucího, read-only pro prodavače */}
           <div style={{background:"#fff3e0",borderRadius:8,padding:"10px 12px",textAlign:"center"}}>
-            <div style={{fontSize:9,fontWeight:700,color:"#e65100",textTransform:"uppercase",marginBottom:6}}>KDP proplaceno (vedoucí)</div>
-            {canEditKdp
+            <div style={{fontSize:9,fontWeight:700,color:"#e65100",textTransform:"uppercase",marginBottom:6}}>KPD proplaceno (vedoucí)</div>
+            {canEditKpd
               ? <select
-                  value={kdpPaidThis}
+                  value={kpdPaidThis}
                   onChange={e=>onKdpPaidChange(Number(e.target.value))}
                   style={{padding:"5px 8px",borderRadius:6,border:`1.5px solid #ffcc80`,fontSize:14,fontWeight:700,color:"#e65100",background:"#fff",width:"100%",textAlign:"center"}}
                 >
@@ -2299,15 +2299,15 @@ function TimesheetView({employee, year, month, holidays, stores, sched, employee
                   ))}
                 </select>
               : <div style={{fontSize:16,fontWeight:800,color:"#e65100",padding:"4px 0"}}>
-                  {kdpPaidThis===0?"— (nic)":kdpPaidThis%1===0?`${kdpPaidThis}h`:`${kdpPaidThis}h`}
+                  {kpdPaidThis===0?"— (nic)":kpdPaidThis%1===0?`${kpdPaidThis}h`:`${kpdPaidThis}h`}
                 </div>
             }
           </div>
-          {/* KDP výstup */}
-          <div style={{background:kdpVystup>=0?"#e3f2fd":"#ffebee",borderRadius:8,padding:"10px 12px",textAlign:"center",border:`2px solid ${kdpVystup>=0?"#90caf9":"#ef9a9a"}`}}>
-            <div style={{fontSize:9,fontWeight:700,color:kdpVystup>=0?"#1565c0":"#c62828",textTransform:"uppercase",marginBottom:4}}>KDP výstup (do příštího měsíce)</div>
-            <div style={{fontSize:20,fontWeight:800,color:kdpVystup>=0?"#1565c0":"#c62828"}}>{fmtHsign(kdpVystup)}</div>
-            <div style={{fontSize:9,color:"#aaa",marginTop:2}}>= vstup {fmtHsign(kdpVstup)} + přesčas {fmtHsign(overtime)}{kdpPaidThis>0?` − proplaceno ${kdpPaidThis}h`:""}</div>
+          {/* KPD výstup */}
+          <div style={{background:kpdVystup>=0?"#e3f2fd":"#ffebee",borderRadius:8,padding:"10px 12px",textAlign:"center",border:`2px solid ${kpdVystup>=0?"#90caf9":"#ef9a9a"}`}}>
+            <div style={{fontSize:9,fontWeight:700,color:kpdVystup>=0?"#1565c0":"#c62828",textTransform:"uppercase",marginBottom:4}}>KPD výstup (do příštího měsíce)</div>
+            <div style={{fontSize:20,fontWeight:800,color:kpdVystup>=0?"#1565c0":"#c62828"}}>{fmtHsign(kpdVystup)}</div>
+            <div style={{fontSize:9,color:"#aaa",marginTop:2}}>= vstup {fmtHsign(kpdVstup)} + přesčas {fmtHsign(overtime)}{kpdPaidThis>0?` − proplaceno ${kpdPaidThis}h`:""}</div>
           </div>
         </div>
       </div>
@@ -2341,12 +2341,16 @@ function TimesheetView({employee, year, month, holidays, stores, sched, employee
 
 
 // ─── SUMMARY TABLE ───────────────────────────────────────────
-// ─── KDP HELPER ──────────────────────────────────────────────
-// Vypočítá kumulativní KDP pro zaměstnance k danému měsíci (včetně).
+// ─── KPD HELPER ──────────────────────────────────────────────
+// Vypočítá kumulativní KPD pro zaměstnance k danému měsíci (včetně).
 // Prochází všechny měsíce od APP_START do (year,month) a sčítá přesčas − proplaceno.
-function calcKdpCumulative(emp, toYear, toMonth, sched, holidays, stores, patterns, employees, timesheetData){
-  let kdp = emp.kdpStart || 0;
-  let y = APP_START.year, m = APP_START.month;
+function calcKpdCumulative(emp, toYear, toMonth, sched, holidays, stores, patterns, employees, timesheetData){
+  let kpd = emp.kpdStart || 0;
+  // Startuj od data nástupu zaměstnance (pokud je po APP_START), jinak od APP_START
+  const empSd = empStartDate(emp);
+  const appStartDate = new Date(APP_START.year, APP_START.month, 1);
+  const startFrom = (empSd && empSd > appStartDate) ? empSd : appStartDate;
+  let y = startFrom.getFullYear(), m = startFrom.getMonth();
   while(y < toYear || (y === toYear && m <= toMonth)){
     const dim = getDim(y, m);
     const wd  = getWorkingDays(y, m, holidays);
@@ -2377,15 +2381,15 @@ function calcKdpCumulative(emp, toYear, toMonth, sched, holidays, stores, patter
       }
     }
     const overtime = planned - fund;
-    // KDP proplaceno z timesheetData pro tento měsíc
+    // KPD proplaceno z timesheetData pro tento měsíc
     const tsKey = `${emp.id}-${y}-${m+1}`;
     const tsMonth = timesheetData?.[tsKey] || {};
-    const paid = Number(tsMonth.kdpPaid || 0);
-    kdp += overtime - paid;
+    const paid = Number(tsMonth.kpdPaid || 0);
+    kpd += overtime - paid;
     // posun na další měsíc
     if(m===11){y++;m=0;}else{m++;}
   }
-  return kdp;
+  return kpd;
 }
 
 function SummaryTable({storeId, employees, year, month, sched, holidays, stores, patterns, timesheetData}){
@@ -2404,7 +2408,7 @@ function SummaryTable({storeId, employees, year, month, sched, holidays, stores,
     "Měsíční fond",
     "Naplánováno",
     "Přesčas",
-    "KDP zůstatek",
+    "KPD zůstatek",
     "Dovolená nárok",
     "Dovolená čerpáno",
     "Dovolená zbývá",
@@ -2477,12 +2481,12 @@ function SummaryTable({storeId, employees, year, month, sched, holidays, stores,
 
           const overtime   = planned - fund;
           const beforeStart = year<APP_START.year||(year===APP_START.year&&month<APP_START.month);
-          const kdp        = beforeStart ? null : calcKdpCumulative(emp, year, month, sched, holidays, stores, patterns, employees, timesheetData);
-          const kdpPaid    = 0;
-          const kdpBalance = kdp!==null ? kdp : null;
+          const kpd        = beforeStart ? null : calcKpdCumulative(emp, year, month, sched, holidays, stores, patterns, employees, timesheetData);
+          const kpdPaid    = 0;
+          const kpdBalance = kpd!==null ? kpd : null;
           const vacLeft    = empVacTotal(emp) - vacUsed;
-          const kdpFmt = v => v===null?"—":(v>0?"+":v<0?"-":"")+fmtH(Math.abs(v));
-          const kdpStyle = v => v===null
+          const kpdFmt = v => v===null?"—":(v>0?"+":v<0?"-":"")+fmtH(Math.abs(v));
+          const kpdStyle = v => v===null
             ? {padding:"8px 10px",textAlign:"center",borderBottom:`1px solid ${C.border}`,color:"#ccc"}
             : colStyle(v,"#1565c0","#c62828");
 
@@ -2494,7 +2498,7 @@ function SummaryTable({storeId, employees, year, month, sched, holidays, stores,
             <td style={{padding:"8px 10px",textAlign:"center",borderBottom:`1px solid ${C.border}`,color:"#555"}}>{fmtH(fund)}</td>
             <td style={{padding:"8px 10px",textAlign:"center",borderBottom:`1px solid ${C.border}`,color:"#1a1a2e",fontWeight:600}}>{fmtH(planned)}</td>
             <td style={colStyle(overtime)}>{overtime>0?"+":""}{fmtH(overtime)}</td>
-            <td style={kdpStyle(kdp)}>{kdpFmt(kdp)}</td>
+            <td style={kpdStyle(kpd)}>{kpdFmt(kpd)}</td>
             <td style={{padding:"8px 10px",textAlign:"center",borderBottom:`1px solid ${C.border}`,color:"#555"}}>{fmtH(empVacTotal(emp))}</td>
             <td style={{padding:"8px 10px",textAlign:"center",borderBottom:`1px solid ${C.border}`,color:"#1565c0",fontWeight:600}}>{fmtH(vacUsed)}</td>
             <td style={colStyle(vacLeft, "#2e7d32", "#c62828")}>{fmtH(vacLeft)}</td>
@@ -2503,7 +2507,7 @@ function SummaryTable({storeId, employees, year, month, sched, holidays, stores,
       </tbody>
     </table>
     <div style={{marginTop:10,fontSize:11,color:"#bbb",padding:"6px 0"}}>
-      * KDP zaplacené – bude dostupné po napojení na výplatní evidenci. Přesčas = Naplánováno − Fond.
+      * KPD zaplacené – bude dostupné po napojení na výplatní evidenci. Přesčas = Naplánováno − Fond.
     </div>
   </div>;
 }
@@ -2689,13 +2693,13 @@ function MainApp({currentUser, handleLogout}){
           setSched(s);
         }
 
-        // Výkazy – převod do {empId-year-month: {day: {arrival,...}, _status, kdpPaid}}
+        // Výkazy – převod do {empId-year-month: {day: {arrival,...}, _status, kpdPaid}}
         if(tsD?.length){
           const td={};
           for(const r of tsD){
             const k=`${r.emp_id}-${r.year}-${r.month}`;
             if(!td[k]) td[k]={};
-            // Den=0 je metadata (kdpPaid, status) – neukladame ho jako normalni den
+            // Den=0 je metadata (kpdPaid, status) – neukladame ho jako normalni den
             if(r.day > 0){
               td[k][r.day]={
                 arrival:r.arrival||"", departure:r.departure||"",
@@ -2704,8 +2708,8 @@ function MainApp({currentUser, handleLogout}){
                 admin:r.admin||"", roz1:r.roz1||"", roz2:r.roz2||"",
               };
             }
-            // KDP proplaceno – čte se z libovolného řádku kde je nastaveno
-            if(r.kdp_paid && Number(r.kdp_paid)>0) td[k].kdpPaid = Number(r.kdp_paid);
+            // KPD proplaceno – čte se z libovolného řádku kde je nastaveno
+            if(r.kpd_paid && Number(r.kpd_paid)>0) td[k].kpdPaid = Number(r.kpd_paid);
             // Status výkazu
             if(r.status && r.status!=="draft") td[k]._status = r.status;
           }
@@ -2788,11 +2792,11 @@ function MainApp({currentUser, handleLogout}){
     },{onConflict:"emp_id,year,month,day"});
   },[]);
 
-  // Uložení KDP proplaceno do DB – ukládá se na speciální den=0
-  const dbSaveKdpPaid=useCallback(async(empId,y,m,kdpPaid)=>{
+  // Uložení KPD proplaceno do DB – ukládá se na speciální den=0
+  const dbSaveKdpPaid=useCallback(async(empId,y,m,kpdPaid)=>{
     await supabase.from("timesheets").upsert({
       emp_id:empId, year:y, month:m, day:0,
-      kdp_paid: kdpPaid,
+      kpd_paid: kpdPaid,
     },{onConflict:"emp_id,year,month,day"});
   },[]);
 
@@ -3166,7 +3170,7 @@ ${d}${hol?"!":"."}`;
     sumTitleRow.height=16;
 
     // Zahlavi souhrnu
-    const sumHdrs=["Zamestnanec","Fond","Naplanováno","Presc.","KDP","Dov.nárok","Dov.cerpano","Dov.zbývá"];
+    const sumHdrs=["Zamestnanec","Fond","Naplanováno","Presc.","KPD","Dov.nárok","Dov.cerpano","Dov.zbývá"];
     const sumHRow=ws.addRow(sumHdrs);
     sumHRow.height=14;
     sumHRow.eachCell(cell=>{
@@ -3202,14 +3206,14 @@ ${d}${hol?"!":"."}`;
       }
       const fund2=wd2*empContractDay(emp);
       const ot=planned-fund2;
-      const kdp=calcKdpCumulative(emp,year,month,sched,holidays,stores,patterns,employees,timesheetData);
+      const kpd=calcKpdCumulative(emp,year,month,sched,holidays,stores,patterns,employees,timesheetData);
       const vacLeft=empVacTotal(emp)-vacUsed;
       const altBg=ri%2===0?"FFFFFFFF":"FFF8F9FC";
       const sRow=ws.addRow([
         `${emp.firstName} ${emp.lastName}`,
         fmtH2(fund2), fmtH2(planned),
         (ot>=0?"+":"")+fmtH2(ot),
-        fmtHs(kdp),
+        fmtHs(kpd),
         fmtH2(empVacTotal(emp)), fmtH2(vacUsed), fmtH2(vacLeft),
       ]);
       sRow.height=13;
@@ -3218,13 +3222,13 @@ ${d}${hol?"!":"."}`;
         cell.alignment={horizontal:cn===1?"left":"center",vertical:"middle"};
         cell.border={bottom:{style:"hair",color:{argb:"FFD8DAE8"}}};
         const otColor=ot>0?"FF2E7D32":ot<0?"FFC62828":"FF888888";
-        const kdpColor=kdp>0?"FF1565C0":kdp<0?"FFC62828":"FF888888";
+        const kpdColor=kpd>0?"FF1565C0":kpd<0?"FFC62828":"FF888888";
         const vacColor=vacLeft>0?"FF2E7D32":"FFC62828";
         if(cn===1) cell.font={bold:true,size:9};
         else if(cn===2) cell.font={size:8,color:{argb:"FF555577"}};
         else if(cn===3) cell.font={size:8,bold:true};
         else if(cn===4) cell.font={size:8,bold:true,color:{argb:otColor}};
-        else if(cn===5) cell.font={size:8,bold:true,color:{argb:kdpColor}};
+        else if(cn===5) cell.font={size:8,bold:true,color:{argb:kpdColor}};
         else if(cn===6) cell.font={size:8,color:{argb:"FF555577"}};
         else if(cn===7) cell.font={size:8,color:{argb:"FF1565C0"}};
         else if(cn===8) cell.font={size:8,bold:true,color:{argb:vacColor}};
@@ -3472,7 +3476,7 @@ ${d}${hol?"!":"."}`;
     doc.setDrawColor(190,192,210);
     doc.line(mL, mT+14, pageW-mR, mT+14);
 
-    const sHdrs=["Zamestnanec","Fond","Naplan.","Presc.","KDP","Dov.narok","Dov.cerp.","Dov.zbyva"];
+    const sHdrs=["Zamestnanec","Fond","Naplan.","Presc.","KPD","Dov.narok","Dov.cerp.","Dov.zbyva"];
     const sColW=[52,18,20,18,20,22,22,22];
     const totalSW=sColW.reduce((a,b)=>a+b,0);
     const sRowH=10; let sx=mL; let sy=mT+19;
@@ -3510,12 +3514,12 @@ ${d}${hol?"!":"."}`;
       }
       const fund2=wd*empContractDay(emp);
       const ot=planned-fund2;
-      const kdp=calcKdpCumulative(emp,year,month,sched,holidays,stores,patterns,employees,timesheetData);
+      const kpd=calcKpdCumulative(emp,year,month,sched,holidays,stores,patterns,employees,timesheetData);
       const vacLeft=empVacTotal(emp)-vacUsed;
       const altBg=ri%2===0?[255,255,255]:[248,249,252];
       sx=mL;
-      const vals=[cz(`${emp.firstName} ${emp.lastName}`),fmtH2(fund2),fmtH2(planned),(ot>=0?"+":"")+fmtH2(ot),fmtHs(kdp),fmtH2(empVacTotal(emp)),fmtH2(vacUsed),fmtH2(vacLeft)];
-      const tcs=[[26,26,46],[80,82,100],[26,26,46],ot>0?[46,125,50]:ot<0?[198,40,40]:[120,120,130],kdp>0?[21,101,192]:kdp<0?[198,40,40]:[120,120,130],[80,82,100],[21,101,192],vacLeft>0?[46,125,50]:[198,40,40]];
+      const vals=[cz(`${emp.firstName} ${emp.lastName}`),fmtH2(fund2),fmtH2(planned),(ot>=0?"+":"")+fmtH2(ot),fmtHs(kpd),fmtH2(empVacTotal(emp)),fmtH2(vacUsed),fmtH2(vacLeft)];
+      const tcs=[[26,26,46],[80,82,100],[26,26,46],ot>0?[46,125,50]:ot<0?[198,40,40]:[120,120,130],kpd>0?[21,101,192]:kpd<0?[198,40,40]:[120,120,130],[80,82,100],[21,101,192],vacLeft>0?[46,125,50]:[198,40,40]];
       sHdrs.forEach((_,hi)=>{
         doc.setFillColor(altBg[0],altBg[1],altBg[2]);
         doc.rect(sx,sy,sColW[hi],sRowH,"F");
@@ -3691,7 +3695,7 @@ ${d}${hol?"!":"."}`;
             rows={getTimesheetRows(tsEmp,year,month+1)}
             onRowChange={isLocked?null:(day,field,value)=>updTimesheetRow(tsEmp,year,month+1,day,field,value)}
             timesheetData={timesheetData}
-            canEditKdp={isVedouci}
+            canEditKpd={isVedouci}
             tsStatus={tsStatus}
             isVedouci={isVedouci}
             onSubmit={handleSubmit}
@@ -3699,7 +3703,7 @@ ${d}${hol?"!":"."}`;
             onReturn={handleReturn}
             onKdpPaidChange={isLocked&&!isVedouci?null:async v=>{
               const k2=tsKey(tsEmp,year,month+1);
-              setTimesheetData(prev=>({...prev,[k2]:{...(prev[k2]||{}),kdpPaid:v}}));
+              setTimesheetData(prev=>({...prev,[k2]:{...(prev[k2]||{}),kpdPaid:v}}));
               // Ulož do DB ihned
               await dbSaveKdpPaid(tsEmp, year, month+1, v);
             }}/>;
