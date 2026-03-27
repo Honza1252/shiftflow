@@ -4437,8 +4437,7 @@ function ProgressBar({value, max, color}){
 
 function BannerBlock({c, celkPct, provize100, r}){
   const kraceni=r.globalSett?.kraceni||[{od:0,koef:0},{od:10,koef:15},{od:24,koef:30},{od:49,koef:50},{od:79,koef:90},{od:99,koef:100}];
-  const prahy=kraceni.sort((a,b)=>a.od-b.od);
-  const nextP=prahy.find(p=>p.od>celkPct);
+  const prahy=[...kraceni].sort((a,b)=>a.od-b.od);
 
   const vahaSouc=(Number(r.globalSett?.vaha_pz)||4)+(Number(r.globalSett?.vaha_obrat)||1)+(Number(r.globalSett?.vaha_sluzby)||1)+(Number(r.globalSett?.vaha_prisl)||1);
   const vahaPz=Number(r.globalSett?.vaha_pz)||4;
@@ -4450,37 +4449,57 @@ function BannerBlock({c, celkPct, provize100, r}){
   const plneniSl=Math.min(c.plneniSluzby||0,1);
   const plneniPr=Math.min(c.plneniPrislusenství||0,1);
 
+  const aktKoef=Math.round(calcKoefKraceni(celkPct/100, kraceni)*100);
+
   // Přínos doplnění každé složky na 100% v % celkového plnění
   const slozky=[
     {label:"záruky",        chybi:Math.max(0,(c.planPz||0)-(Number(r.data.trzba_pz)||0)),               jednotka:"Kč tržby", prida:((1-plneniPz)*vahaPz/vahaSouc)*100},
     {label:"obrat",         chybi:Math.max(0,(c.planObrat||0)-(Number(r.data.obrat)||0)),                jednotka:"Kč obratu",prida:((1-plneniOb)*vahaOb/vahaSouc)*100},
     {label:"služby",        chybi:Math.max(0,(c.planSluzby||0)-(Number(r.data.trzba_sluzby)||0)),        jednotka:"Kč tržby", prida:((1-plneniSl)*vahaSl/vahaSouc)*100},
     {label:"příslušenství", chybi:Math.max(0,(c.planPrislusenství||0)-(Number(r.data.obrat_prislusenstvi)||0)), jednotka:"Kč", prida:((1-plneniPr)*vahaPr/vahaSouc)*100},
-  ].filter(s=>s.chybi>0);
-
-  // Pro každou složku spočítej skutečný koeficient po jejím doplnění na 100%
-  const slozkySkutecne=slozky.map(s=>{
+  ].filter(s=>s.chybi>0).map(s=>{
     const novePlneni=Math.min(100, celkPct+s.prida);
-    const novyKoef=calcKoefKraceni(novePlneni/100, kraceni);
-    return {...s, novePlneni:Math.round(novePlneni), novyKoef:Math.round(novyKoef*100)};
+    const novyKoef=Math.round(calcKoefKraceni(novePlneni/100, kraceni)*100);
+    // Všechny lepší prahy které tato složka přeskočí
+    const skokPrahy=prahy.filter(p=>p.od>celkPct && p.od<=Math.round(novePlneni) && p.koef>aktKoef);
+    return {...s, novePlneni:Math.round(novePlneni), novyKoef, skokPrahy};
   });
 
-  const chybiCelk=nextP?nextP.od-celkPct:0;
-  // Složka která sama dostane plnění výš (na jakýkoli lepší koef) – vyber s nejmenší Kč
-  const aktKoef=Math.round(calcKoefKraceni(celkPct/100, kraceni)*100);
-  const dostatecna=slozkySkutecne.filter(s=>s.novyKoef>aktKoef).sort((a,b)=>a.chybi-b.chybi)[0];
-  const nejvetsi=slozkySkutecne.sort((a,b)=>b.prida-a.prida)[0];
+  // Složka která sama zlepší koef – vyber s nejmenší Kč částkou
+  const dostatecna=slozky.filter(s=>s.novyKoef>aktKoef).sort((a,b)=>a.chybi-b.chybi)[0];
+  const nejvetsi=slozky.sort((a,b)=>b.prida-a.prida)[0];
   const tip=dostatecna||nejvetsi;
 
+  // Formulace bannerové věty – zohledni složky nad 100%
+  const nektereSplneny=[c.plneniPz,c.plneniObrat,c.plneniSluzby,c.plneniPrislusenství].some(p=>(p||0)>1);
+  const bannerVeta = nektereSplneny
+    ? "Kdybys splnil zbývající složky na 100%, měl bys"
+    : "Splněním plánu ve všech složkách bys měl";
+
+  // Pokud provize100 < aktuální (záruky přesahují plán a přispívají víc)
+  const provize100Round=Math.round(provize100);
+  const aktProvize=Math.round(c.vyslednaProvize);
+  const bannerZaporny=provize100Round<=aktProvize;
+
   return <div style={{marginBottom:12,padding:"14px 16px",background:"#fef9c3",borderRadius:8,border:"1px solid #fde047"}}>
-    <div style={{fontSize:11,color:"#854d0e",fontWeight:700,marginBottom:4}}>💡 Splněním plánu ve všech složkách bys měl</div>
-    <div style={{display:"flex",alignItems:"baseline",gap:10,flexWrap:"wrap",marginBottom:8}}>
-      <span style={{fontSize:24,fontWeight:900,color:"#854d0e"}}>{Math.round(provize100).toLocaleString("cs-CZ")} Kč</span>
-      <span style={{fontSize:13,color:"#92400e"}}>místo {Math.round(c.vyslednaProvize).toLocaleString("cs-CZ")} Kč</span>
-    </div>
+    <div style={{fontSize:11,color:"#854d0e",fontWeight:700,marginBottom:4}}>💡 {bannerVeta}</div>
+    {!bannerZaporny&&<div style={{display:"flex",alignItems:"baseline",gap:10,flexWrap:"wrap",marginBottom:tip?8:0}}>
+      <span style={{fontSize:24,fontWeight:900,color:"#854d0e"}}>{provize100Round.toLocaleString("cs-CZ")} Kč</span>
+      <span style={{fontSize:13,color:"#92400e"}}>místo {aktProvize.toLocaleString("cs-CZ")} Kč</span>
+    </div>}
+    {bannerZaporny&&<div style={{fontSize:13,color:"#92400e",marginBottom:tip?8:0}}>
+      Díky překročení plánu v záručních opravách máš provizi již {aktProvize.toLocaleString("cs-CZ")} Kč – splnění zbytku by přineslo {provize100Round.toLocaleString("cs-CZ")} Kč.
+    </div>}
     {tip&&<div style={{background:"#fff8e1",borderRadius:6,padding:"8px 12px",fontSize:13,color:"#713f12",borderLeft:"3px solid #f59e0b"}}>
       {dostatecna&&dostatecna.novyKoef>aktKoef
-        ? <span>Tip: Prodej <strong>{tip.label}</strong> za dalších <strong>{Math.round(tip.chybi).toLocaleString("cs-CZ")} {tip.jednotka}</strong> a skočíš na koeficient <strong>{tip.novyKoef} %</strong></span>
+        ? <span>
+            Tip: Prodej <strong>{tip.label}</strong> za dalších{" "}
+            <strong>{Math.round(tip.chybi).toLocaleString("cs-CZ")} {tip.jednotka}</strong>
+            {tip.skokPrahy&&tip.skokPrahy.length>1
+              ? <span> a přeskočíš přes {tip.skokPrahy.slice(0,-1).map(p=>p.koef+" %").join(", ")} rovnou na koeficient <strong>{tip.novyKoef} %</strong></span>
+              : <span> a skočíš na koeficient <strong>{tip.novyKoef} %</strong></span>
+            }
+          </span>
         : <span>Tip: Zaměř se hlavně na <strong>{tip.label}</strong> – přidá ti nejvíce ({Math.round(tip.prida).toFixed(1)} % plnění)</span>
       }
     </div>}
