@@ -31,6 +31,7 @@ function dbToEmp(r){
     vacAdjustment: r.vac_adjustment||0,
     kpdStart: r.kpd_start||0,
     startDate: r.start_date||null,
+    endDate: r.end_date||null,
     active: r.active,
     customTimes: r.custom_times||{},
   };
@@ -48,6 +49,7 @@ function empToDB(e){
     vac_adjustment: e.vacAdjustment||0,
     kpd_start: e.kpdStart||0,
     start_date: e.startDate||null,
+    end_date: e.endDate||null,
     active: e.active,
     custom_times: e.customTimes||{},
   };
@@ -322,15 +324,30 @@ function empStartDate(emp){
   const d = new Date(emp.startDate);
   return isNaN(d) ? null : d;
 }
+// Vrátí endDate zaměstnance jako Date objekt nebo null
+function empEndDate(emp){
+  if(!emp.endDate) return null;
+  const d = new Date(emp.endDate);
+  return isNaN(d) ? null : d;
+}
 // Vrátí true pokud je zaměstnanec aktivní v daném měsíci (year, month 0-indexed)
 function isEmpActiveInMonth(emp, year, month){
-  const sd = empStartDate(emp);
-  if(!sd) return true;
   const appStart = new Date(2026,1,1);
-  if(sd < appStart) return true;
-  if(year > sd.getFullYear()) return true;
-  if(year === sd.getFullYear() && month >= sd.getMonth()) return true;
-  return false;
+  // Kontrola nástupu
+  const sd = empStartDate(emp);
+  if(sd && sd >= appStart){
+    if(year < sd.getFullYear()) return false;
+    if(year === sd.getFullYear() && month < sd.getMonth()) return false;
+  }
+  // Kontrola ukončení – nezobrazovat od měsíce NÁSLEDUJÍCÍHO po ukončení
+  const ed = empEndDate(emp);
+  if(ed){
+    const endYear = ed.getFullYear();
+    const endMonth = ed.getMonth();
+    if(year > endYear) return false;
+    if(year === endYear && month > endMonth) return false;
+  }
+  return true;
 }
 // Vrátí poměrný počet pracovních dní pro nástupní měsíc
 function getWorkingDaysFrom(y, m, fromDate, holidays){
@@ -341,15 +358,30 @@ function getWorkingDaysFrom(y, m, fromDate, holidays){
   return c;
 }
 // Fond hodin s ohledem na datum nástupu
+function getWorkingDaysUntil(y, m, untilDate, holidays){
+  let c=0;
+  const lastDay = untilDate.getFullYear()===y && untilDate.getMonth()===m ? untilDate.getDate() : getDim(y,m);
+  for(let d=1;d<=lastDay;d++)
+    if(getDow(y,m,d)<5) c++;
+  return c;
+}
 function getEmpFund(emp, year, month, holidays){
   const sd = empStartDate(emp);
+  const ed = empEndDate(emp);
   const appStart = new Date(2026,1,1);
-  if(!sd || sd < appStart){
-    return getWorkingDays(year, month, holidays) * empContractDay(emp);
+  let startDay = null;
+  let endDay = null;
+  if(sd && sd >= appStart && sd.getFullYear()===year && sd.getMonth()===month) startDay = sd;
+  if(ed && ed.getFullYear()===year && ed.getMonth()===month) endDay = ed;
+  if(startDay && endDay){
+    // Nástup i ukončení ve stejném měsíci
+    let c=0;
+    for(let d=startDay.getDate();d<=endDay.getDate();d++)
+      if(getDow(year,month,d)<5) c++;
+    return c * empContractDay(emp);
   }
-  if(sd.getFullYear()===year && sd.getMonth()===month){
-    return getWorkingDaysFrom(year, month, sd, holidays) * empContractDay(emp);
-  }
+  if(startDay) return getWorkingDaysFrom(year, month, startDay, holidays) * empContractDay(emp);
+  if(endDay)   return getWorkingDaysUntil(year, month, endDay, holidays) * empContractDay(emp);
   return getWorkingDays(year, month, holidays) * empContractDay(emp);
 }
 
@@ -535,6 +567,8 @@ function EmployeeForm({initial, stores, onSave, onClose}){
       <FInput label="Počáteční KPD (hodiny)" type="number" value={form.kpdStart} onChange={v=>upd("kpdStart",Number(v))}/>
       <FInput label="Datum nástupu" type="date" value={form.startDate||""} onChange={v=>upd("startDate",v||null)}/>
       <div style={{fontSize:11,color:"#888",marginTop:-8}}>Pouze u nových zaměstnanců nastoupivších po spuštění aplikace. Před tímto datem se nezobrazuje.</div>
+      <FInput label="Datum ukončení PP" type="date" value={form.endDate||""} onChange={v=>upd("endDate",v||null)}/>
+      <div style={{fontSize:11,color:"#888",marginTop:-8}}>Po tomto datu se zaměstnanec nezobrazí v rozvrhu. Historická data zůstávají zachována.</div>
       {initial.id&&<label style={{display:"flex",alignItems:"center",gap:8,fontSize:13,fontWeight:600,cursor:"pointer",padding:"8px 0"}}>
         <input type="checkbox" checked={form.active} onChange={e=>upd("active",e.target.checked)}/>
         Aktivní zaměstnanec
@@ -994,6 +1028,11 @@ function ScheduleView({storeId,employees,year,month,sched,onCellEdit,actions,hol
     if(sd && sd>=appStart){
       const cellDate=new Date(d.getFullYear(),d.getMonth(),d.getDate());
       if(cellDate<sd) return {bg:"#f0f0f0",lines:[""],hrs:null,txtColor:"#ddd",clickable:false};
+    }
+    const ed=empEndDate(emp);
+    if(ed){
+      const cellDate=new Date(d.getFullYear(),d.getMonth(),d.getDate());
+      if(cellDate>ed) return {bg:"#f0f0f0",lines:[""],hrs:null,txtColor:"#ddd",clickable:false};
     }
     const dow=d.getDay()===0?6:d.getDay()-1;
     const dateStr=ds(d);
