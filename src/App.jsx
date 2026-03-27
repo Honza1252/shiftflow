@@ -4438,71 +4438,113 @@ function ProgressBar({value, max, color}){
 function BannerBlock({c, celkPct, provize100, r}){
   const kraceni=r.globalSett?.kraceni||[{od:0,koef:0},{od:10,koef:15},{od:24,koef:30},{od:49,koef:50},{od:79,koef:90},{od:99,koef:100}];
   const prahy=[...kraceni].sort((a,b)=>a.od-b.od);
+  const nextP=prahy.find(p=>p.od>celkPct);
 
-  const vahaSouc=(Number(r.globalSett?.vaha_pz)||4)+(Number(r.globalSett?.vaha_obrat)||1)+(Number(r.globalSett?.vaha_sluzby)||1)+(Number(r.globalSett?.vaha_prisl)||1);
-  const vahaPz=Number(r.globalSett?.vaha_pz)||4;
-  const vahaOb=Number(r.globalSett?.vaha_obrat)||1;
-  const vahaSl=Number(r.globalSett?.vaha_sluzby)||1;
-  const vahaPr=Number(r.globalSett?.vaha_prisl)||1;
-  const plneniPz=Math.min(c.plneniPz||0,1);
-  const plneniOb=Math.min(c.plneniObrat||0,1);
-  const plneniSl=Math.min(c.plneniSluzby||0,1);
-  const plneniPr=Math.min(c.plneniPrislusenství||0,1);
-
-  const aktKoef=Math.round(calcKoefKraceni(celkPct/100, kraceni)*100);
-
-  // Přínos doplnění každé složky na 100% v % celkového plnění
-  const slozky=[
-    {label:"záruky",        chybi:Math.max(0,(c.planPz||0)-(Number(r.data.trzba_pz)||0)),               jednotka:"Kč tržby", prida:((1-plneniPz)*vahaPz/vahaSouc)*100},
-    {label:"obrat",         chybi:Math.max(0,(c.planObrat||0)-(Number(r.data.obrat)||0)),                jednotka:"Kč obratu",prida:((1-plneniOb)*vahaOb/vahaSouc)*100},
-    {label:"služby",        chybi:Math.max(0,(c.planSluzby||0)-(Number(r.data.trzba_sluzby)||0)),        jednotka:"Kč tržby", prida:((1-plneniSl)*vahaSl/vahaSouc)*100},
-    {label:"příslušenství", chybi:Math.max(0,(c.planPrislusenství||0)-(Number(r.data.obrat_prislusenstvi)||0)), jednotka:"Kč", prida:((1-plneniPr)*vahaPr/vahaSouc)*100},
-  ].filter(s=>s.chybi>0).map(s=>{
-    const novePlneni=Math.min(100, celkPct+s.prida);
-    const novyKoef=Math.round(calcKoefKraceni(novePlneni/100, kraceni)*100);
-    // Všechny lepší prahy které tato složka přeskočí
-    const skokPrahy=prahy.filter(p=>p.od>celkPct && p.od<=Math.round(novePlneni) && p.koef>aktKoef);
-    return {...s, novePlneni:Math.round(novePlneni), novyKoef, skokPrahy};
-  });
-
-  // Složka která sama zlepší koef – vyber s nejmenší Kč částkou
-  const dostatecna=slozky.filter(s=>s.novyKoef>aktKoef).sort((a,b)=>a.chybi-b.chybi)[0];
-  const nejvetsi=slozky.sort((a,b)=>b.prida-a.prida)[0];
-  const tip=dostatecna||nejvetsi;
-
-  // Formulace bannerové věty – zohledni složky nad 100%
   const nektereSplneny=[c.plneniPz,c.plneniObrat,c.plneniSluzby,c.plneniPrislusenství].some(p=>(p||0)>1);
-  const bannerVeta = nektereSplneny
-    ? "Kdybys splnil zbývající složky na 100%, měl bys"
-    : "Splněním plánu ve všech složkách bys měl";
-
-  // Pokud provize100 < aktuální (záruky přesahují plán a přispívají víc)
+  const bannerVeta=nektereSplneny?"Kdybys splnil zbývající složky na 100%, měl bys":"Splněním plánu ve všech složkách bys měl";
   const provize100Round=Math.round(provize100);
   const aktProvize=Math.round(c.vyslednaProvize);
   const bannerZaporny=provize100Round<=aktProvize;
 
-  return <div style={{marginBottom:12,padding:"14px 16px",background:"#fef9c3",borderRadius:8,border:"1px solid #fde047"}}>
-    <div style={{fontSize:11,color:"#854d0e",fontWeight:700,marginBottom:4}}>💡 {bannerVeta}</div>
-    {!bannerZaporny&&<div style={{display:"flex",alignItems:"baseline",gap:10,flexWrap:"wrap",marginBottom:tip?8:0}}>
-      <span style={{fontSize:24,fontWeight:900,color:"#854d0e"}}>{provize100Round.toLocaleString("cs-CZ")} Kč</span>
-      <span style={{fontSize:13,color:"#92400e"}}>místo {aktProvize.toLocaleString("cs-CZ")} Kč</span>
-    </div>}
-    {bannerZaporny&&<div style={{fontSize:13,color:"#92400e",marginBottom:tip?8:0}}>
-      Díky překročení plánu v záručních opravách máš provizi již {aktProvize.toLocaleString("cs-CZ")} Kč – splnění zbytku by přineslo {provize100Round.toLocaleString("cs-CZ")} Kč.
-    </div>}
-    {tip&&<div style={{background:"#fff8e1",borderRadius:6,padding:"8px 12px",fontSize:13,color:"#713f12",borderLeft:"3px solid #f59e0b"}}>
-      {dostatecna&&dostatecna.novyKoef>aktKoef
-        ? <span>
-            Tip: Prodej <strong>{tip.label}</strong> za dalších{" "}
-            <strong>{Math.round(tip.chybi).toLocaleString("cs-CZ")} {tip.jednotka}</strong>
-            {tip.skokPrahy&&tip.skokPrahy.length>1
-              ? <span> a přeskočíš přes {tip.skokPrahy.slice(0,-1).map(p=>p.koef+" %").join(", ")} rovnou na koeficient <strong>{tip.novyKoef} %</strong></span>
-              : <span> a skočíš na koeficient <strong>{tip.novyKoef} %</strong></span>
-            }
-          </span>
-        : <span>Tip: Zaměř se hlavně na <strong>{tip.label}</strong> – přidá ti nejvíce ({Math.round(tip.prida).toFixed(1)} % plnění)</span>
-      }
-    </div>}
+  // Data pro tabulku
+  const vahaPz=Number(r.globalSett?.vaha_pz)||4;
+  const cilTarget=nextP?`${nextP.koef} %`:"100 %";
+  const rows=[
+    {
+      label:"Záruky (PZ)", vaha:`váha ${vahaPz}×`, klicova:vahaPz>=4,
+      plneni:c.plneniPz||0, plan:c.planPz||0,
+      actual:Number(r.data.trzba_pz)||0, jednotka:"Kč tržby",
+    },
+    {
+      label:"Obrat", vaha:"váha 1×", klicova:false,
+      plneni:c.plneniObrat||0, plan:c.planObrat||0,
+      actual:Number(r.data.obrat)||0, jednotka:"Kč obratu",
+    },
+    {
+      label:"Služby", vaha:"váha 1×", klicova:false,
+      plneni:c.plneniSluzby||0, plan:c.planSluzby||0,
+      actual:Number(r.data.trzba_sluzby)||0, jednotka:"Kč",
+    },
+    {
+      label:"Příslušenství", vaha:"váha 1×", klicova:false,
+      plneni:c.plneniPrislusenství||0, plan:c.planPrislusenství||0,
+      actual:Number(r.data.obrat_prislusenstvi)||0, jednotka:"Kč",
+    },
+  ];
+
+  const pctColor=p=>p>=1?"#16a34a":p>=0.5?"#f97316":"#dc2626";
+  const fmtKc=v=>Math.round(v).toLocaleString("cs-CZ");
+
+  // Celkové plnění při 100% všeho
+  const vahaSouc=(Number(r.globalSett?.vaha_pz)||4)+(Number(r.globalSett?.vaha_obrat)||1)+(Number(r.globalSett?.vaha_sluzby)||1)+(Number(r.globalSett?.vaha_prisl)||1);
+  const celk100=Math.round(((Math.min(c.plneniPz||0,1)*vahaPz + 1*(Number(r.globalSett?.vaha_obrat)||1) + 1*(Number(r.globalSett?.vaha_sluzby)||1) + 1*(Number(r.globalSett?.vaha_prisl)||1))/vahaSouc)*100);
+
+  return <div style={{marginBottom:12}}>
+    {/* Banner */}
+    <div style={{padding:"14px 16px",background:"#fef9c3",borderRadius:"8px 8px 0 0",border:"1px solid #fde047",borderBottom:"none"}}>
+      <div style={{fontSize:11,color:"#854d0e",fontWeight:700,marginBottom:4}}>💡 {bannerVeta}</div>
+      {!bannerZaporny&&<div style={{display:"flex",alignItems:"baseline",gap:10,flexWrap:"wrap"}}>
+        <span style={{fontSize:24,fontWeight:900,color:"#854d0e"}}>{fmtKc(provize100Round)} Kč</span>
+        <span style={{fontSize:13,color:"#92400e"}}>místo {fmtKc(aktProvize)} Kč</span>
+      </div>}
+      {bannerZaporny&&<div style={{fontSize:13,color:"#92400e"}}>
+        Díky překročení plánu v záručních opravách máš provizi již {fmtKc(aktProvize)} Kč – splnění zbytku by přineslo {fmtKc(provize100Round)} Kč.
+      </div>}
+    </div>
+
+    {/* Tabulka cílů */}
+    <div style={{border:"1px solid #fde047",borderRadius:"0 0 8px 8px",overflow:"hidden"}}>
+      <div style={{padding:"8px 14px",background:"#fffbeb",fontSize:11,fontWeight:700,color:"#92400e",borderBottom:"1px solid #fde047"}}>
+        Co potřebuješ pro koeficient {cilTarget}?
+      </div>
+      <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+        <thead>
+          <tr style={{background:"#fffde7"}}>
+            <th style={{padding:"7px 14px",textAlign:"left",fontWeight:600,color:"#888",fontSize:11,borderBottom:"1px solid #fde047"}}>Složka</th>
+            <th style={{padding:"7px 10px",textAlign:"center",fontWeight:600,color:"#888",fontSize:11,borderBottom:"1px solid #fde047",width:70}}>Nyní</th>
+            <th style={{padding:"7px 10px",textAlign:"right",fontWeight:600,color:"#888",fontSize:11,borderBottom:"1px solid #fde047",width:110}}>Cíl (100 %)</th>
+            <th style={{padding:"7px 14px",textAlign:"right",fontWeight:600,color:"#888",fontSize:11,borderBottom:"1px solid #fde047",width:130}}>Chybí</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row,ri)=>{
+            const splneno=row.plneni>=1;
+            const chybi=Math.max(0, row.plan-row.actual);
+            const rowBg=splneno?"#f0fdf4":"#fff";
+            return <tr key={ri} style={{background:rowBg,borderBottom:"0.5px solid #fef9c3"}}>
+              <td style={{padding:"9px 14px"}}>
+                <div style={{fontWeight:600,fontSize:12,color:"#1a1a2e"}}>{row.label}</div>
+                <div style={{fontSize:10,color:"#aaa"}}>{row.vaha}{row.klicova?" · klíčová složka":""}</div>
+              </td>
+              <td style={{padding:"9px 10px",textAlign:"center"}}>
+                <div style={{fontSize:14,fontWeight:700,color:pctColor(row.plneni)}}>{Math.round(row.plneni*100)} %</div>
+                <div style={{height:3,background:"#f0f0f0",borderRadius:2,marginTop:3,overflow:"hidden"}}>
+                  <div style={{height:"100%",width:`${Math.min(row.plneni*100,100)}%`,background:pctColor(row.plneni),borderRadius:2}}></div>
+                </div>
+              </td>
+              <td style={{padding:"9px 10px",textAlign:"right",fontSize:11,color:"#888"}}>
+                {splneno
+                  ? <span style={{color:"#16a34a",fontWeight:600}}>✓ Splněno</span>
+                  : <span>{fmtKc(row.plan)} {row.jednotka}</span>
+                }
+              </td>
+              <td style={{padding:"9px 14px",textAlign:"right"}}>
+                {splneno
+                  ? <span style={{color:"#16a34a"}}>–</span>
+                  : <span style={{fontWeight:700,color:"#dc2626"}}>{fmtKc(chybi)} {row.jednotka}</span>
+                }
+              </td>
+            </tr>;
+          })}
+        </tbody>
+        <tfoot>
+          <tr style={{background:"#fffde7",borderTop:"1px solid #fde047"}}>
+            <td colSpan={3} style={{padding:"7px 14px",fontSize:11,color:"#92400e"}}>Celkové plnění nyní → při splnění všeho</td>
+            <td style={{padding:"7px 14px",textAlign:"right",fontSize:11,fontWeight:700,color:"#854d0e"}}>{celkPct} % → {celk100} %</td>
+          </tr>
+        </tfoot>
+      </table>
+    </div>
   </div>;
 }
 
