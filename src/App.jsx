@@ -4435,6 +4435,41 @@ function ProgressBar({value, max, color}){
   </div>;
 }
 
+function BannerBlock({c, celkPct, provize100, r}){
+  // Najdi nejbližší práh
+  const prahy=(r.globalSett?.kraceni||[{od:0,koef:0},{od:10,koef:15},{od:24,koef:30},{od:49,koef:50},{od:79,koef:90},{od:99,koef:100}]).sort((a,b)=>a.od-b.od);
+  const nextP=prahy.find(p=>p.od>celkPct);
+
+  // Najdi nejsnazší cestu k dalšímu prahu – složka s nejmenším chybějícím Kč do 100%
+  const slozky=[
+    {label:"záruky",     chybi:Math.max(0,(c.planPz||0)-(Number(r.data.trzba_pz)||0)),         jednotka:"Kč tržby"},
+    {label:"obrat",      chybi:Math.max(0,(c.planObrat||0)-(Number(r.data.obrat)||0)),          jednotka:"Kč obratu"},
+    {label:"služby",     chybi:Math.max(0,(c.planSluzby||0)-(Number(r.data.trzba_sluzby)||0)),  jednotka:"Kč tržby"},
+    {label:"příslušenství", chybi:Math.max(0,(c.planPrislusenství||0)-(Number(r.data.obrat_prislusenstvi)||0)), jednotka:"Kč"},
+  ].filter(s=>s.chybi>0).sort((a,b)=>a.chybi-b.chybi);
+  const nejsnazsi=slozky[0];
+
+  return <div style={{marginBottom:12,padding:"14px 16px",background:"#fef9c3",borderRadius:8,border:"1px solid #fde047"}}>
+    <div style={{fontSize:11,color:"#854d0e",fontWeight:700,marginBottom:4}}>💡 Splněním plánu ve všech složkách bys měl</div>
+    <div style={{display:"flex",alignItems:"baseline",gap:10,flexWrap:"wrap",marginBottom:8}}>
+      <span style={{fontSize:24,fontWeight:900,color:"#854d0e"}}>
+        {Math.round(provize100).toLocaleString("cs-CZ")} Kč
+      </span>
+      <span style={{fontSize:13,color:"#92400e"}}>
+        místo {Math.round(c.vyslednaProvize).toLocaleString("cs-CZ")} Kč
+      </span>
+    </div>
+    {nextP&&nejsnazsi&&<div style={{background:"#fff8e1",borderRadius:6,padding:"8px 12px",fontSize:13,color:"#713f12",borderLeft:"3px solid #f59e0b"}}>
+      Tip: Prodej {nejsnazsi.label} za dalších{" "}
+      <strong>{Math.round(nejsnazsi.chybi).toLocaleString("cs-CZ")} {nejsnazsi.jednotka}</strong>
+      {" "}a skočíš na koeficient <strong>{nextP.koef} %</strong>
+    </div>}
+    {nextP&&!nejsnazsi&&<div style={{fontSize:12,color:"#92400e",marginTop:4}}>
+      Do koeficientu {nextP.koef} % chybí jen {nextP.od-celkPct} % plnění
+    </div>}
+  </div>;
+}
+
 function SimulatorBlock({i, r, c, koefPct, celkPct, simVals, setSimVals, results, calcCommission}){
   const sk = `${i}`;
   const sv = simVals[sk] || {};
@@ -4895,18 +4930,7 @@ function CommissionResults({employees, stores}){
                 </div>}
               </div>
               {/* Motivační banner */}
-              {moznyZisk>50&&<div style={{marginBottom:12,padding:"14px 16px",background:"#fef9c3",borderRadius:8,border:"1px solid #fde047"}}>
-                <div style={{fontSize:11,color:"#854d0e",fontWeight:700,marginBottom:4}}>💡 Splněním plánu ve všech složkách bys měl</div>
-                <div style={{display:"flex",alignItems:"baseline",gap:10,flexWrap:"wrap"}}>
-                  <span style={{fontSize:24,fontWeight:900,color:"#854d0e"}}>{czk(provize100)}</span>
-                  <span style={{fontSize:13,color:"#92400e"}}>místo {czk(c.vyslednaProvize)}</span>
-                </div>
-                {(()=>{
-                  const prahy=(r.globalSett?.kraceni||[{od:0,koef:0},{od:10,koef:15},{od:24,koef:30},{od:49,koef:50},{od:79,koef:90},{od:99,koef:100}]).sort((a,b)=>a.od-b.od);
-                  const nextP=prahy.find(p=>p.od>celkPct);
-                  return nextP?<div style={{marginTop:6,fontSize:12,color:"#92400e"}}>Nejblíže: do koef. {nextP.koef} % chybí jen {nextP.od-celkPct} % plnění</div>:null;
-                })()}
-              </div>}
+              {moznyZisk>50&&<BannerBlock c={c} celkPct={celkPct} provize100={provize100} r={r}/>}
               {/* Simulátor */}
               <SimulatorBlock i={i} r={r} c={c} koefPct={koefPct} celkPct={celkPct}
                 simVals={simVals} setSimVals={setSimVals} results={results} calcCommission={calcCommission}/>
