@@ -3940,7 +3940,7 @@ function calcCommission(emp, settings, allEmpsData, penetraceOverride, globalSet
       provizePrislusenství, plneniPrislusenství:null, stropPrislusenství:stropPrisl,
       korunovaMot, rozv1, rozv2, adminH, provizeRozvozAdmin,
       planObrat:null, planPz:null, planSluzby:null, planPrislusenství:null,
-      celkPlneni:1, koef:1, zaklad:vyslednaProvize,
+      celkPlneni:1, koef:1, zakladKraceny:vyslednaProvize, zaklad:vyslednaProvize,
       vyslednaProvize, hrubaMzda:22000+vyslednaProvize,
     };
   }
@@ -4012,7 +4012,10 @@ function calcCommission(emp, settings, allEmpsData, penetraceOverride, globalSet
   const celkPlneni = (Math.min(plneniPz,1)*vahaPz + Math.min(plneniObrat,1)*vahaObrat + Math.min(plneniSluzby,1)*vahaSluzby + Math.min(plneniPrislusenství,1)*vahaPrisl) / vahaSouc;
   const koef = calcKoefKraceni(celkPlneni, g.kraceni);
 
-  const zaklad = (provizeObrat + provizePz + provizeSluzby + provizePrislusenství + korunovaMot + provizeRozvozAdmin) * koef;
+  // Krácené složky × koef, nekrácené se přičtou zvlášť
+  const zakladKraceny = (provizeObrat + provizePz + provizeSluzby + provizePrislusenství) * koef;
+  const nekracene = korunovaMot + provizeRozvozAdmin;
+  const zaklad = zakladKraceny + nekracene;
   const vyslednaProvize = zaklad + bonusObrat;
   const hrubaMzda = 22000 + vyslednaProvize;
 
@@ -4024,12 +4027,47 @@ function calcCommission(emp, settings, allEmpsData, penetraceOverride, globalSet
     provizePrislusenství, plneniPrislusenství, stropPrislusenství,
     korunovaMot, rozv1, rozv2, adminH, provizeRozvozAdmin,
     celkPlneni, koef,
-    zaklad, vyslednaProvize, hrubaMzda,
+    zakladKraceny, zaklad, vyslednaProvize, hrubaMzda,
   };
 }
 
 function pct(v){ return `${Math.round((v||0)*100)} %`; }
 function czk(v){ return `${Math.round(v||0).toLocaleString("cs-CZ")} Kč`; }
+
+// ── Jediný zdroj pravdy pro výpočet provizí ──────────────────
+
+// Pomocná: vytvoří kopii emp s hodnotami na 100% plánu
+function makeTarget100Emp(emp, c){
+  return {
+    ...emp,
+    obrat:               Math.round(c.planObrat||0),
+    trzba_pz:            Math.round(c.planPz||0),
+    trzba_sluzby:        Math.round(c.planSluzby||0),
+    obrat_prislusenstvi: Math.round(c.planPrislusenství||0),
+  };
+}
+
+// Cílová provize při 100% všech složek – používá calcCommission
+function calculateTarget100Commission(emp, c, settings, allEmpsData, penetraceOverride, globalSettings){
+  const target = makeTarget100Emp(emp, c);
+  return calcCommission(target, settings, allEmpsData, penetraceOverride, globalSettings);
+}
+
+// Delta jedné složky: provize při doplnění pouze dané složky na plán
+function calculateCategoryDelta(emp, categoryKey, c, settings, allEmpsData, penetraceOverride, globalSettings){
+  const current = calcCommission(emp, settings, allEmpsData, penetraceOverride, globalSettings);
+  if(!current) return 0;
+  const modified = {
+    ...emp,
+    obrat:               categoryKey==="obrat"               ? Math.round(c.planObrat||0)         : (Number(emp.obrat)||0),
+    trzba_pz:            categoryKey==="trzba_pz"            ? Math.round(c.planPz||0)            : (Number(emp.trzba_pz)||0),
+    trzba_sluzby:        categoryKey==="trzba_sluzby"        ? Math.round(c.planSluzby||0)        : (Number(emp.trzba_sluzby)||0),
+    obrat_prislusenstvi: categoryKey==="obrat_prislusenstvi" ? Math.round(c.planPrislusenství||0) : (Number(emp.obrat_prislusenstvi)||0),
+  };
+  const modCalc = calcCommission(modified, settings, allEmpsData, penetraceOverride, globalSettings);
+  if(!modCalc) return 0;
+  return Math.max(0, Math.round(modCalc.vyslednaProvize) - Math.round(current.vyslednaProvize));
+}
 
 function PlneniDot({v}){
   const pv = (v||0);
@@ -4977,73 +5015,43 @@ function CommissionResults({employees, stores}){
           </div>;
 
           // ── Normální role: plný výpočet s progress bary ──
+          // Společná data pro helper funkce
+          const simAllEmpsForCalc = results.filter(x=>!COMMISSION_SPECIAL_ROLES.has(x.data?.role||"")).map(x=>x.data);
+
           const items = [
             {
               label:"Záruky (PZ)", done:c.plneniPz, provize:c.provizePz,
               plan:c.planPz, actual:r.data.trzba_pz,
               chybi:Math.max(0,(c.planPz||0)-r.data.trzba_pz), jednotka:"Kč tržby", weight:"4×",
-              moznyZiskSlozky: Math.max(0, (c.planPz||0) - r.data.trzba_pz) * (Number(r.settings?.sazba_pz)||0.10),
+              moznyZiskSlozky: calculateCategoryDelta(r.data, "trzba_pz", c, r.settings, simAllEmpsForCalc, r.penetraceOverride, r.globalSett),
             },
             {
               label:"Obrat", done:c.plneniObrat, provize:c.provizeObrat,
               plan:c.planObrat, actual:r.data.obrat,
-              chybi:Math.max(0,(c.planObrat||0)-r.data.obrat), jednotka:"Kč", weight:"1×",
-              moznyZiskSlozky: Math.max(0,
-                Math.min((c.planObrat||0) * (Number(r.settings?.obrat_koef_plny)||0.004), Number(r.settings?.obrat_strop)||3000)
-                - c.provizeObrat
-              ),
+              chybi:Math.max(0,(c.planObrat||0)-r.data.obrat), jednotka:"Kč obratu", weight:"1×",
+              moznyZiskSlozky: calculateCategoryDelta(r.data, "obrat", c, r.settings, simAllEmpsForCalc, r.penetraceOverride, r.globalSett),
             },
             {
               label:"Služby", done:c.plneniSluzby, provize:c.provizeSluzby,
               plan:c.planSluzby, actual:r.data.trzba_sluzby,
               chybi:Math.max(0,(c.planSluzby||0)-r.data.trzba_sluzby), jednotka:"Kč tržby", weight:"1×",
-              moznyZiskSlozky: Math.min(
-                Math.max(0, (c.planSluzby||0) - r.data.trzba_sluzby) * (Number(r.settings?.sazba_sluzby)||0.10),
-                Math.max(0, (Number(r.settings?.strop_sluzby)||1500) - c.provizeSluzby)
-              ),
+              moznyZiskSlozky: calculateCategoryDelta(r.data, "trzba_sluzby", c, r.settings, simAllEmpsForCalc, r.penetraceOverride, r.globalSett),
             },
             {
               label:"Příslušenství", done:c.plneniPrislusenství, provize:c.provizePrislusenství,
               plan:c.planPrislusenství, actual:r.data.obrat_prislusenstvi,
               chybi:Math.max(0,(c.planPrislusenství||0)-r.data.obrat_prislusenstvi), jednotka:"Kč", weight:"1×",
-              moznyZiskSlozky: Math.min(
-                Math.max(0, (c.planPrislusenství||0) * (Number(r.settings?.sazba_prisl_4)||0.038) - c.provizePrislusenství),
-                Math.max(0, (Number(r.settings?.strop_prislusenstvi)||4000) - c.provizePrislusenství)
-              ),
+              moznyZiskSlozky: calculateCategoryDelta(r.data, "obrat_prislusenstvi", c, r.settings, simAllEmpsForCalc, r.penetraceOverride, r.globalSett),
               penetraceInfo: r.penetraceOverride != null
                 ? `${(r.penetraceOverride*100).toFixed(2)} % (import)`
                 : `${((Number(r.settings?.koef_prislusenstvi)||0.1465)*100).toFixed(2)} % (výchozí)`,
             },
           ];
 
-          // Výpočet možného zisku – přímý, bez simulace
-          // 1) Provize ze složek při 100 % plnění
-          const sett = r.settings || {};
-          const sazbaPzS    = Number(sett.sazba_pz)||0.10;
-          const sazbaSluzbyS= Number(sett.sazba_sluzby)||0.10;
-          const stropSluzbyS= Number(sett.strop_sluzby)||1500;
-          const obratKoefS  = (Number(r.data.hodiny)||0)>=160 ? (Number(sett.obrat_koef_plny)||0.004) : (Number(sett.obrat_koef_zkraceny)||0.003);
-          const obratStropS = Number(sett.obrat_strop)||3000;
-          const sazbaPrisl4S= Number(sett.sazba_prisl_4)||0.038;
-          const stropPrislS = Number(sett.strop_prislusenstvi)||4000;
-
-          const pz100    = c.planPz * sazbaPzS;                                           // PZ: plán × sazba (bez stropu)
-          const obrat100 = Math.min(c.planObrat * obratKoefS, obratStropS);               // Obrat: plán × sazba, max strop
-          const sluzby100= Math.min(c.planSluzby * sazbaSluzbyS, stropSluzbyS);           // Služby: plán × sazba, max strop
-          const prisl100 = Math.min(c.planPrislusenství * sazbaPrisl4S, stropPrislS);     // Přísl: plán × sazba4, max strop
-          const koru100  = c.korunovaMot;                                                  // Korunová: beze změny
-
-          const zaklad100 = pz100 + obrat100 + sluzby100 + prisl100 + koru100;
-          // koef při 100 % = nejvyšší pásmo v tabulce krácení
-          const koef100 = calcKoefKraceni(1.0, r.globalSett?.kraceni);
-          const provize100= zaklad100 * koef100;
-
-          const zakladAkt = c.provizeObrat + c.provizePz + c.provizeSluzby + c.provizePrislusenství + c.korunovaMot;
-          // Rozklad: přírůstek ze složek (× koef100=1) + skok koeficientu na aktuální základ
-          // moznyZisk = (zaklad100 − zakladAkt)×1.0 + zakladAkt×(1.0 − c.koef)
-          const moznyZProvizi  = Math.round(Math.max(0, zaklad100 - zakladAkt));        // přírůstek provizí ze složek
-          const moznyZKoef     = Math.round(Math.max(0, zakladAkt * (1.0 - c.koef)));  // přínos skoku koeficientu
-          const moznyZisk      = Math.round(Math.max(0, provize100 - c.vyslednaProvize));
+          // Provize100 – jediný zdroj pravdy přes calcCommission
+          const target100Calc = calculateTarget100Commission(r.data, c, r.settings, simAllEmpsForCalc, r.penetraceOverride, r.globalSett);
+          const provize100 = target100Calc?.vyslednaProvize || 0;
+          const moznyZisk = Math.round(Math.max(0, provize100 - c.vyslednaProvize));
 
           const celkPct = Math.round(c.celkPlneni*100);
           const koefPct = Math.round(c.koef*100);
@@ -5163,8 +5171,11 @@ function CommissionResults({employees, stores}){
               {/* Výpočet provize */}
               <div style={{background:"#fff",borderRadius:8,padding:"10px 14px",border:"1px solid #e8e8f0",fontSize:12,color:"#555",lineHeight:2}}>
                 <span style={{fontWeight:700,color:"#1a1a2e"}}>Výpočet: </span>
-                ({czk(c.provizeObrat)} + {czk(c.provizePz)} + {czk(c.provizeSluzby)} + {czk(c.provizePrislusenství)} + {czk(c.korunovaMot)}{c.provizeRozvozAdmin>0&&` + ${czk(c.provizeRozvozAdmin)} R+A`})
-                × {koefPct} % = {czk(c.zaklad)}
+                ({czk(c.provizeObrat)} + {czk(c.provizePz)} + {czk(c.provizeSluzby)} + {czk(c.provizePrislusenství)})
+                × {koefPct} % = {czk(c.zakladKraceny||0)}
+                {(c.korunovaMot>0||c.provizeRozvozAdmin>0)&&<span style={{color:"#555"}}>
+                  {" "}+ {czk((c.korunovaMot||0)+(c.provizeRozvozAdmin||0))} <span style={{fontSize:10,color:"#aaa"}}>(nekráceno)</span>
+                </span>}
                 {c.bonusObrat>0&&<> + bonus {czk(c.bonusObrat)}</>}
                 {" "}= <strong style={{color:"#1B4F8A"}}>{czk(c.vyslednaProvize)}</strong>
               </div>
