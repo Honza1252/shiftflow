@@ -4498,17 +4498,17 @@ function SimulatorBlock({i, r, c, koefPct, celkPct, simVals, setSimVals, results
         <div style={{fontSize:18,fontWeight:800,color:simKoefPct>=90?"#16a34a":simKoefPct>=50?"#f97316":"#dc2626"}}>{simKoefPct} %</div>
         {deltaKoef>0&&<div style={{fontSize:11,color:"#16a34a",fontWeight:700}}>↑ Skok!</div>}
       </div>
-      <div style={{background:"#fff",borderRadius:8,padding:"8px 12px",textAlign:"center"}}>
-        <div style={{fontSize:10,color:"#888",marginBottom:2}}>Provize</div>
+      <div style={{background:deltaProvize>50?"#dcfce7":"#fff",borderRadius:8,padding:"8px 12px",textAlign:"center",border:deltaProvize>50?"1px solid #86efac":"none"}}>
+        <div style={{fontSize:10,color:"#888",marginBottom:2}}>Provize by byla</div>
         <div style={{fontSize:18,fontWeight:800,color:"#1B4F8A"}}>{simProvize.toLocaleString("cs-CZ")} Kč</div>
-        {deltaProvize!==0&&<div style={{fontSize:11,color:deltaProvize>0?"#16a34a":"#dc2626"}}>{deltaProvize>0?"+":""}{deltaProvize.toLocaleString("cs-CZ")} Kč</div>}
+        <div style={{fontSize:11,color:"#888"}}>nyní máš {Math.round(c.vyslednaProvize).toLocaleString("cs-CZ")} Kč</div>
       </div>
     </div>
     {nextP&&nextP.koef>(hasSim?simKoefPct:koefPct)&&<div style={{marginTop:8,padding:"6px 10px",background:"#fef9c3",borderRadius:6,fontSize:12,color:"#854d0e"}}>
-      Do koeficientu {nextP.koef} % chybí {nextP.od-(hasSim?simCelkPct:celkPct)} % plnění
+      Do koeficientu {nextP.koef} % chybí {nextP.od-(hasSim?simCelkPct:celkPct)} % plnění – zkus posunout posuvníky
     </div>}
     {deltaKoef>0&&<div style={{marginTop:8,padding:"6px 10px",background:"#dcfce7",borderRadius:6,fontSize:12,color:"#166534",fontWeight:700}}>
-      Skok na koeficient {simKoefPct} %! Navíc +{deltaProvize.toLocaleString("cs-CZ")} Kč
+      Skok na koeficient {simKoefPct} %! Provize by byla {simProvize.toLocaleString("cs-CZ")} Kč místo {Math.round(c.vyslednaProvize).toLocaleString("cs-CZ")} Kč
     </div>}
   </div>;
 }
@@ -4831,10 +4831,6 @@ function CommissionResults({employees, stores}){
                   <div style={{fontSize:10,color:"#aaa",fontWeight:600}}>BONUS</div>
                   <div style={{fontSize:14,fontWeight:800,color:"#16a34a"}}>+{czk(c.bonusObrat)}</div>
                 </div>}
-                {moznyZisk>50&&<div style={{textAlign:"center",background:"#fef9c3",borderRadius:8,padding:"4px 8px",border:"1px solid #fde047"}}>
-                  <div style={{fontSize:10,color:"#854d0e",fontWeight:600}}>MOŽNÝ ZISK</div>
-                  <div style={{fontSize:14,fontWeight:800,color:"#854d0e"}}>+{czk(moznyZisk)}</div>
-                </div>}
                 <div style={{color:"#bbb",fontSize:18,marginLeft:4}}>{isExp?"▲":"▼"}</div>
               </div>
             </div>
@@ -4900,22 +4896,16 @@ function CommissionResults({employees, stores}){
               </div>
               {/* Motivační banner */}
               {moznyZisk>50&&<div style={{marginBottom:12,padding:"14px 16px",background:"#fef9c3",borderRadius:8,border:"1px solid #fde047"}}>
-                <div style={{display:"flex",alignItems:"center",gap:16,flexWrap:"wrap"}}>
-                  <div>
-                    <div style={{fontSize:11,color:"#854d0e",fontWeight:700,marginBottom:2}}>💡 SPLNĚNÍM PLÁNU VE VŠECH SLOŽKÁCH ZÍSKÁŠ NAVÍC</div>
-                    <div style={{fontSize:22,fontWeight:900,color:"#854d0e"}}>+{czk(moznyZisk)}</div>
-                  </div>
-                  <div style={{display:"flex",flexDirection:"column",gap:4,fontSize:12,color:"#713f12"}}>
-                    <div style={{display:"flex",alignItems:"center",gap:8}}>
-                      <span style={{background:"#fde68a",borderRadius:4,padding:"2px 8px",fontWeight:700,minWidth:80,textAlign:"right"}}>+{czk(Math.max(0,moznyZProvizi))}</span>
-                      <span>z vyšších provizí jednotlivých složek</span>
-                    </div>
-                    <div style={{display:"flex",alignItems:"center",gap:8}}>
-                      <span style={{background:"#fde68a",borderRadius:4,padding:"2px 8px",fontWeight:700,minWidth:80,textAlign:"right"}}>+{czk(Math.max(0,moznyZKoef))}</span>
-                      <span>ze skoku koeficientu {Math.round(c.koef*100)} % → 100 %</span>
-                    </div>
-                  </div>
+                <div style={{fontSize:11,color:"#854d0e",fontWeight:700,marginBottom:4}}>💡 Splněním plánu ve všech složkách bys měl</div>
+                <div style={{display:"flex",alignItems:"baseline",gap:10,flexWrap:"wrap"}}>
+                  <span style={{fontSize:24,fontWeight:900,color:"#854d0e"}}>{czk(provize100)}</span>
+                  <span style={{fontSize:13,color:"#92400e"}}>místo {czk(c.vyslednaProvize)}</span>
                 </div>
+                {(()=>{
+                  const prahy=(r.globalSett?.kraceni||[{od:0,koef:0},{od:10,koef:15},{od:24,koef:30},{od:49,koef:50},{od:79,koef:90},{od:99,koef:100}]).sort((a,b)=>a.od-b.od);
+                  const nextP=prahy.find(p=>p.od>celkPct);
+                  return nextP?<div style={{marginTop:6,fontSize:12,color:"#92400e"}}>Nejblíže: do koef. {nextP.koef} % chybí jen {nextP.od-celkPct} % plnění</div>:null;
+                })()}
               </div>}
               {/* Simulátor */}
               <SimulatorBlock i={i} r={r} c={c} koefPct={koefPct} celkPct={celkPct}
