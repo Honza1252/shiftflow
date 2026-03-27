@@ -32,6 +32,8 @@ function dbToEmp(r){
     kpdStart: r.kpd_start||0,
     startDate: r.start_date||null,
     endDate: r.end_date||null,
+    transferDate: r.transfer_date||null,
+    transferStore: r.transfer_store||null,
     active: r.active,
     customTimes: r.custom_times||{},
   };
@@ -50,6 +52,8 @@ function empToDB(e){
     kpd_start: e.kpdStart||0,
     start_date: e.startDate||null,
     end_date: e.endDate||null,
+    transfer_date: e.transferDate||null,
+    transfer_store: e.transferStore||null,
     active: e.active,
     custom_times: e.customTimes||{},
   };
@@ -330,6 +334,16 @@ function empEndDate(emp){
   const d = new Date(emp.endDate);
   return isNaN(d) ? null : d;
 }
+// Vrátí aktuální hlavní prodejnu zaměstnance pro daný měsíc (zohledňuje přesun)
+function empMainStore(emp, year, month){
+  if(!emp.transferDate || !emp.transferStore) return emp.mainStore;
+  const td = new Date(emp.transferDate);
+  if(isNaN(td)) return emp.mainStore;
+  const isAfter = year > td.getFullYear() ||
+    (year === td.getFullYear() && month >= td.getMonth());
+  return isAfter ? emp.transferStore : emp.mainStore;
+}
+
 // Vrátí true pokud je zaměstnanec aktivní v daném měsíci (year, month 0-indexed)
 function isEmpActiveInMonth(emp, year, month){
   const appStart = new Date(2026,1,1);
@@ -569,6 +583,14 @@ function EmployeeForm({initial, stores, onSave, onClose}){
       <div style={{fontSize:11,color:"#888",marginTop:-8}}>Pouze u nových zaměstnanců nastoupivších po spuštění aplikace. Před tímto datem se nezobrazuje.</div>
       <FInput label="Datum ukončení PP" type="date" value={form.endDate||""} onChange={v=>upd("endDate",v||null)}/>
       <div style={{fontSize:11,color:"#888",marginTop:-8}}>Po tomto datu se zaměstnanec nezobrazí v rozvrhu. Historická data zůstávají zachována.</div>
+      <div style={{display:"flex",gap:10,flexWrap:"wrap",alignItems:"flex-end"}}>
+        <FInput label="Datum přesunu" type="date" value={form.transferDate||""} onChange={v=>upd("transferDate",v||null)} style={{flex:1}}/>
+        <FSel label="Nová hlavní prodejna" value={form.transferStore||""} onChange={v=>upd("transferStore",v?Number(v):null)}
+          options={[{value:"",label:"— bez přesunu —"},...stores.map(s=>({value:s.id,label:s.name}))]} style={{flex:1}}/>
+      </div>
+      {form.transferDate&&form.transferStore&&<div style={{fontSize:11,color:"#1565c0",marginTop:-8,padding:"6px 10px",background:"#e3f2fd",borderRadius:6}}>
+        Od {form.transferDate} bude hlavní prodejna: <strong>{stores.find(s=>s.id===form.transferStore)?.name}</strong>
+      </div>}
       {initial.id&&<label style={{display:"flex",alignItems:"center",gap:8,fontSize:13,fontWeight:600,cursor:"pointer",padding:"8px 0"}}>
         <input type="checkbox" checked={form.active} onChange={e=>upd("active",e.target.checked)}/>
         Aktivní zaměstnanec
@@ -959,11 +981,11 @@ function CellEditor({emp, date, year, month, current, viewStoreId, stores, emplo
 
 // ─── SCHEDULE VIEW ───────────────────────────────────────────
 function ScheduleView({storeId,employees,year,month,sched,onCellEdit,actions,holidays,stores,patterns}){
-  const mainEmps=employees.filter(e=>e.active&&e.mainStore===storeId&&isEmpActiveInMonth(e,year,month));
+  const mainEmps=employees.filter(e=>e.active&&empMainStore(e,year,month)===storeId&&isEmpActiveInMonth(e,year,month));
 
   // Sdílení zaměstnanci se zobrazí pokud mají v tomto měsíci alespoň jednu směnu (nebo část směny) v této prodejně
   const mirrorEmps=employees.filter(e=>{
-    if(!e.active||e.mainStore===storeId) return false;
+    if(!e.active||empMainStore(e,year,month)===storeId) return false;
     if(!(e.extraStores||[]).includes(storeId)) return false;
     const dim=getDim(year,month);
     const mainStoreEmps=employees.filter(x=>x.active&&x.mainStore===e.mainStore);
@@ -1038,7 +1060,7 @@ function ScheduleView({storeId,employees,year,month,sched,onCellEdit,actions,hol
     const dateStr=ds(d);
     const hol=getHol(d);
     const isMirrorRow=emp.mainStore!==storeId;
-    const canEditRow=emp.mainStore===storeId;
+    const canEditRow=empMainStore(emp,year,month)===storeId;
 
     const cell=getSchedCell(sched,emp.id,dateStr,employees);
     const patternDay=getPatternForDay(emp,d);
@@ -2389,7 +2411,7 @@ function calcKpdCumulative(emp, toYear, toMonth, sched, holidays, stores, patter
 }
 
 function SummaryTable({storeId, employees, year, month, sched, holidays, stores, patterns, timesheetData}){
-  const emps = employees.filter(e=>e.active && e.mainStore===storeId && isEmpActiveInMonth(e,year,month));
+  const emps = employees.filter(e=>e.active && empMainStore(e,year,month)===storeId && isEmpActiveInMonth(e,year,month));
   const dim  = getDim(year, month);
   const wd   = getWorkingDays(year, month, holidays);
 
@@ -2426,7 +2448,7 @@ function SummaryTable({storeId, employees, year, month, sched, holidays, stores,
           const fund = getEmpFund(emp, year, month, holidays);
 
           // Naplánované hodiny – vzor + ruční změny v rozvrhu
-          const mainStoreEmps = employees.filter(e=>e.active&&e.mainStore===storeId);
+          const mainStoreEmps = employees.filter(e=>e.active&&empMainStore(e,year,month)===storeId);
           const empIdx = mainStoreEmps.findIndex(e=>e.id===emp.id);
           let planned = 0;
           for(let d=1;d<=dim;d++){
@@ -3004,7 +3026,7 @@ function MainApp({currentUser, handleLogout}){
   const exportSchedExcel = async () => {
     const storeName = stores.find(s=>s.id===storeId)?.name||"";
     const dim = getDim(year,month);
-    const mainEmps = employees.filter(e=>e.active&&e.mainStore===storeId&&isEmpActiveInMonth(e,year,month));
+    const mainEmps = employees.filter(e=>e.active&&empMainStore(e,year,month)===storeId&&isEmpActiveInMonth(e,year,month));
     const wb = new ExcelJS.Workbook();
     const ws = wb.addWorksheet(`${MONTHS[month]} ${year}`);
 
@@ -3255,7 +3277,7 @@ ${d}${hol?"!":"."}`;
   const exportSchedPdf = () => {
     const storeName = stores.find(s=>s.id===storeId)?.name||"";
     const dim = getDim(year,month);
-    const mainEmps = employees.filter(e=>e.active&&e.mainStore===storeId&&isEmpActiveInMonth(e,year,month));
+    const mainEmps = employees.filter(e=>e.active&&empMainStore(e,year,month)===storeId&&isEmpActiveInMonth(e,year,month));
     const doc = new jsPDF({orientation:"portrait",unit:"mm",format:"a4"});
     const pageW=210; const pageH=297;
     const mL=8; const mR=8; const mT=8; const mB=6;
@@ -3545,7 +3567,7 @@ ${d}${hol?"!":"."}`;
   // Filtruj zaměstnance pro výkaz dle role
   const tsEmpList = (() => {
     if(currentUser.role==="admin") return employees.filter(e=>e.active && isEmpActiveInMonth(e,year,month));
-    if(currentUser.role==="vedouci") return employees.filter(e=>e.active && e.mainStore===storeId && isEmpActiveInMonth(e,year,month));
+    if(currentUser.role==="vedouci") return employees.filter(e=>e.active && empMainStore(e,year,month)===storeId && isEmpActiveInMonth(e,year,month));
     // Zamestnanec – jen sám sebe, primárně podle empId z app_users
     const me = employees.find(e=>
       // 1. Primární: podle ID uloženého v app_users.emp_id
