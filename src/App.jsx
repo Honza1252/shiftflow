@@ -4435,6 +4435,84 @@ function ProgressBar({value, max, color}){
   </div>;
 }
 
+function SimulatorBlock({i, r, c, koefPct, celkPct, simVals, setSimVals, results, calcCommission}){
+  const sk = `${i}`;
+  const sv = simVals[sk] || {};
+  const hasSim = Object.keys(sv).length > 0;
+  const simD = {
+    obrat:     sv.obrat     !== undefined ? sv.obrat     : Number(r.data.obrat)||0,
+    trzba_pz:  sv.trzba_pz  !== undefined ? sv.trzba_pz  : Number(r.data.trzba_pz)||0,
+    trzba_sluzby: sv.trzba_sluzby !== undefined ? sv.trzba_sluzby : Number(r.data.trzba_sluzby)||0,
+    obrat_prislusenstvi: sv.obrat_prislusenstvi !== undefined ? sv.obrat_prislusenstvi : Number(r.data.obrat_prislusenstvi)||0,
+  };
+  const simEmp = {...r.data, ...simD};
+  const simCalc = calcCommission(simEmp, r.settings, results.map(x=>x.data), r.penetraceOverride, r.globalSett);
+  const simKoefPct = Math.round((simCalc?.koef||0)*100);
+  const simCelkPct = Math.round((simCalc?.celkPlneni||0)*100);
+  const simProvize = Math.round(simCalc?.vyslednaProvize||0);
+  const deltaProvize = simProvize - Math.round(c.vyslednaProvize);
+  const deltaKoef = simKoefPct - koefPct;
+  const deltaCelk = simCelkPct - celkPct;
+  const prahy = (r.globalSett?.kraceni||[{od:0,koef:0},{od:10,koef:15},{od:24,koef:30},{od:49,koef:50},{od:79,koef:90},{od:99,koef:100}]).sort((a,b)=>a.od-b.od);
+  const nextP = prahy.find(p => p.od > (hasSim?simCelkPct:celkPct));
+  const updSim = (field, val) => setSimVals(prev => ({...prev, [sk]: {...(prev[sk]||{}), [field]: Number(val)}}));
+  const resetSim = () => setSimVals(prev => {const n={...prev}; delete n[sk]; return n;});
+  const pctC = v => v>=80?"#16a34a":v>=50?"#f97316":"#dc2626";
+  const sliders = [
+    {key:"obrat",               label:"Obrat",         plan:c.planObrat,         actual:Number(r.data.obrat)||0,               max:Math.max(Math.round((c.planObrat||0)*1.3),1000),     step:1000},
+    {key:"trzba_pz",            label:"Záruky (PZ)",   plan:c.planPz,            actual:Number(r.data.trzba_pz)||0,            max:Math.max(Math.round((c.planPz||0)*1.3),1000),        step:500},
+    {key:"trzba_sluzby",        label:"Služby",        plan:c.planSluzby,        actual:Number(r.data.trzba_sluzby)||0,        max:Math.max(Math.round((c.planSluzby||0)*1.3),1000),    step:100},
+    {key:"obrat_prislusenstvi", label:"Příslušenství", plan:c.planPrislusenství, actual:Number(r.data.obrat_prislusenstvi)||0, max:Math.max(Math.round((c.planPrislusenství||0)*1.3),1000), step:500},
+  ];
+  return <div style={{marginBottom:12,background:"#f0f4ff",borderRadius:10,padding:"14px 16px",border:"1px solid #c7d7f8"}}>
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+      <span style={{fontWeight:700,fontSize:13,color:"#1B4F8A"}}>🔢 Simulátor – co kdybych prodal více?</span>
+      {hasSim&&<button onClick={resetSim} style={{fontSize:11,color:"#888",background:"none",border:"none",cursor:"pointer",textDecoration:"underline"}}>Reset</button>}
+    </div>
+    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(260px,1fr))",gap:10,marginBottom:12}}>
+      {sliders.map(sl=>{
+        const val = sv[sl.key] !== undefined ? sv[sl.key] : sl.actual;
+        const p = sl.plan > 0 ? Math.round(val/sl.plan*100) : 0;
+        return <div key={sl.key} style={{background:"#fff",borderRadius:8,padding:"10px 12px"}}>
+          <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}>
+            <span style={{fontSize:12,fontWeight:600,color:"#333"}}>{sl.label}</span>
+            <span style={{fontSize:12,fontWeight:700,color:pctC(p)}}>{p} %</span>
+          </div>
+          <input type="range" min={0} max={sl.max} step={sl.step} value={val}
+            onChange={e=>updSim(sl.key, e.target.value)} style={{width:"100%",marginBottom:4}}/>
+          <div style={{display:"flex",justifyContent:"space-between",fontSize:11,color:"#aaa"}}>
+            <span>{Number(val).toLocaleString("cs-CZ")} Kč</span>
+            <span>Plán: {Math.round(sl.plan||0).toLocaleString("cs-CZ")} Kč</span>
+          </div>
+        </div>;
+      })}
+    </div>
+    <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8}}>
+      <div style={{background:"#fff",borderRadius:8,padding:"8px 12px",textAlign:"center"}}>
+        <div style={{fontSize:10,color:"#888",marginBottom:2}}>Plnění</div>
+        <div style={{fontSize:18,fontWeight:800,color:pctC(simCelkPct)}}>{simCelkPct} %</div>
+        {deltaCelk!==0&&<div style={{fontSize:11,color:deltaCelk>0?"#16a34a":"#dc2626"}}>{deltaCelk>0?"+":""}{deltaCelk} %</div>}
+      </div>
+      <div style={{background:"#fff",borderRadius:8,padding:"8px 12px",textAlign:"center"}}>
+        <div style={{fontSize:10,color:"#888",marginBottom:2}}>Koeficient</div>
+        <div style={{fontSize:18,fontWeight:800,color:simKoefPct>=90?"#16a34a":simKoefPct>=50?"#f97316":"#dc2626"}}>{simKoefPct} %</div>
+        {deltaKoef>0&&<div style={{fontSize:11,color:"#16a34a",fontWeight:700}}>↑ Skok!</div>}
+      </div>
+      <div style={{background:"#fff",borderRadius:8,padding:"8px 12px",textAlign:"center"}}>
+        <div style={{fontSize:10,color:"#888",marginBottom:2}}>Provize</div>
+        <div style={{fontSize:18,fontWeight:800,color:"#1B4F8A"}}>{simProvize.toLocaleString("cs-CZ")} Kč</div>
+        {deltaProvize!==0&&<div style={{fontSize:11,color:deltaProvize>0?"#16a34a":"#dc2626"}}>{deltaProvize>0?"+":""}{deltaProvize.toLocaleString("cs-CZ")} Kč</div>}
+      </div>
+    </div>
+    {nextP&&nextP.koef>(hasSim?simKoefPct:koefPct)&&<div style={{marginTop:8,padding:"6px 10px",background:"#fef9c3",borderRadius:6,fontSize:12,color:"#854d0e"}}>
+      Do koeficientu {nextP.koef} % chybí {nextP.od-(hasSim?simCelkPct:celkPct)} % plnění
+    </div>}
+    {deltaKoef>0&&<div style={{marginTop:8,padding:"6px 10px",background:"#dcfce7",borderRadius:6,fontSize:12,color:"#166534",fontWeight:700}}>
+      Skok na koeficient {simKoefPct} %! Navíc +{deltaProvize.toLocaleString("cs-CZ")} Kč
+    </div>}
+  </div>;
+}
+
 function CommissionResults({employees, stores}){
   const now = new Date();
   const [storeId, setStoreId] = useState(stores[0]?.id||1);
@@ -4840,99 +4918,8 @@ function CommissionResults({employees, stores}){
                 </div>
               </div>}
               {/* Simulátor */}
-              {(()=>{
-                const sk = `${i}`;
-                const sv = simVals[sk] || {};
-                const hasSim = Object.keys(sv).length > 0;
-                const simD = {
-                  obrat:     sv.obrat     ?? Number(r.data.obrat)||0,
-                  trzba_pz:  sv.trzba_pz  ?? Number(r.data.trzba_pz)||0,
-                  trzba_sluzby: sv.trzba_sluzby ?? Number(r.data.trzba_sluzby)||0,
-                  obrat_prislusenstvi: sv.obrat_prislusenstvi ?? Number(r.data.obrat_prislusenstvi)||0,
-                };
-                const simEmp = {...r.data, ...simD};
-                const simCalc = calcCommission(simEmp, r.settings, results.map(x=>x.data), r.penetraceOverride, r.globalSett);
-                const simKoefPct = Math.round((simCalc?.koef||0)*100);
-                const simCelkPct = Math.round((simCalc?.celkPlneni||0)*100);
-                const simProvize = Math.round(simCalc?.vyslednaProvize||0);
-                const deltaProvize = simProvize - Math.round(c.vyslednaProvize);
-                const deltaKoef = simKoefPct - koefPct;
-                const deltaCelk = simCelkPct - celkPct;
-
-                // Nejbližší práh
-                const prahy = (r.globalSett?.kraceni||[{od:0,koef:0},{od:10,koef:15},{od:24,koef:30},{od:49,koef:50},{od:79,koef:90},{od:99,koef:100}])
-                  .sort((a,b)=>a.od-b.od);
-                const nextP = prahy.find(p => p.od > (hasSim?simCelkPct:celkPct));
-
-                const updSim = (field, val) => setSimVals(prev => ({
-                  ...prev, [sk]: {...(prev[sk]||{}), [field]: Number(val)}
-                }));
-                const resetSim = () => setSimVals(prev => {const n={...prev}; delete n[sk]; return n;});
-
-                const sliders = [
-                  {key:"obrat",              label:"Obrat",          plan:c.planObrat,     actual:Number(r.data.obrat)||0,           max:Math.round((c.planObrat||0)*1.3), step:1000},
-                  {key:"trzba_pz",           label:"Záruky (PZ)",    plan:c.planPz,        actual:Number(r.data.trzba_pz)||0,        max:Math.round((c.planPz||0)*1.3),    step:500},
-                  {key:"trzba_sluzby",       label:"Služby",         plan:c.planSluzby,    actual:Number(r.data.trzba_sluzby)||0,    max:Math.round((c.planSluzby||0)*1.3),step:100},
-                  {key:"obrat_prislusenstvi",label:"Příslušenství",  plan:c.planPrislusenství, actual:Number(r.data.obrat_prislusenstvi)||0, max:Math.round((c.planPrislusenství||0)*1.3), step:500},
-                ];
-
-                return <div style={{marginBottom:12,background:"#f0f4ff",borderRadius:10,padding:"14px 16px",border:"1px solid #c7d7f8"}}>
-                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
-                    <span style={{fontWeight:700,fontSize:13,color:"#1B4F8A"}}>🔢 Simulátor – co kdybych prodal více?</span>
-                    {hasSim&&<button onClick={resetSim} style={{fontSize:11,color:"#888",background:"none",border:"none",cursor:"pointer",textDecoration:"underline"}}>Reset</button>}
-                  </div>
-
-                  {/* Posuvníky */}
-                  <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(260px,1fr))",gap:10,marginBottom:12}}>
-                    {sliders.map(sl=>{
-                      const val = sv[sl.key] ?? sl.actual;
-                      const pct = sl.plan > 0 ? Math.round(val/sl.plan*100) : 0;
-                      const pctColor2 = pct>=100?"#16a34a":pct>=79?"#f97316":"#888";
-                      return <div key={sl.key} style={{background:"#fff",borderRadius:8,padding:"10px 12px"}}>
-                        <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}>
-                          <span style={{fontSize:12,fontWeight:600,color:"#333"}}>{sl.label}</span>
-                          <span style={{fontSize:12,fontWeight:700,color:pctColor2}}>{pct} %</span>
-                        </div>
-                        <input type="range" min={0} max={sl.max||100000} step={sl.step}
-                          value={val}
-                          onChange={e=>updSim(sl.key, e.target.value)}
-                          style={{width:"100%",marginBottom:4}}/>
-                        <div style={{display:"flex",justifyContent:"space-between",fontSize:11,color:"#aaa"}}>
-                          <span>{val.toLocaleString("cs-CZ")} Kč</span>
-                          <span>Plán: {Math.round(sl.plan||0).toLocaleString("cs-CZ")} Kč</span>
-                        </div>
-                      </div>;
-                    })}
-                  </div>
-
-                  {/* Výsledek simulace */}
-                  <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8}}>
-                    <div style={{background:"#fff",borderRadius:8,padding:"8px 12px",textAlign:"center"}}>
-                      <div style={{fontSize:10,color:"#888",marginBottom:2}}>Plnění</div>
-                      <div style={{fontSize:18,fontWeight:800,color:pctColor({celkPlneni:simCelkPct/100}.celkPlneni)??pctColor(simCelkPct/100)}}>{simCelkPct} %</div>
-                      {deltaCelk!==0&&<div style={{fontSize:11,color:deltaCelk>0?"#16a34a":"#dc2626"}}>{deltaCelk>0?"+":""}{deltaCelk} %</div>}
-                    </div>
-                    <div style={{background:"#fff",borderRadius:8,padding:"8px 12px",textAlign:"center"}}>
-                      <div style={{fontSize:10,color:"#888",marginBottom:2}}>Koeficient</div>
-                      <div style={{fontSize:18,fontWeight:800,color:simKoefPct>=90?"#16a34a":simKoefPct>=50?"#f97316":"#dc2626"}}>{simKoefPct} %</div>
-                      {deltaKoef!==0&&<div style={{fontSize:11,color:"#16a34a",fontWeight:700}}>↑ Skok!</div>}
-                    </div>
-                    <div style={{background:"#fff",borderRadius:8,padding:"8px 12px",textAlign:"center"}}>
-                      <div style={{fontSize:10,color:"#888",marginBottom:2}}>Provize</div>
-                      <div style={{fontSize:18,fontWeight:800,color:"#1B4F8A"}}>{simProvize.toLocaleString("cs-CZ")} Kč</div>
-                      {deltaProvize!==0&&<div style={{fontSize:11,color:deltaProvize>0?"#16a34a":"#dc2626"}}>{deltaProvize>0?"+":""}{deltaProvize.toLocaleString("cs-CZ")} Kč</div>}
-                    </div>
-                  </div>
-
-                  {/* Tip na nejbližší práh */}
-                  {nextP&&nextP.koef>=(hasSim?simKoefPct:koefPct)&&<div style={{marginTop:8,padding:"6px 10px",background:"#fef9c3",borderRadius:6,fontSize:12,color:"#854d0e"}}>
-                    Do koeficientu {nextP.koef} % chybí {nextP.od-(hasSim?simCelkPct:celkPct)} % plnění – zkus posunout posuvníky
-                  </div>}
-                  {deltaKoef>0&&<div style={{marginTop:8,padding:"6px 10px",background:"#dcfce7",borderRadius:6,fontSize:12,color:"#166534",fontWeight:700}}>
-                    Skok na koeficient {simKoefPct} %! Navíc +{deltaProvize.toLocaleString("cs-CZ")} Kč
-                  </div>}
-                </div>;
-              })()}
+              <SimulatorBlock i={i} r={r} c={c} koefPct={koefPct} celkPct={celkPct}
+                simVals={simVals} setSimVals={setSimVals} results={results} calcCommission={calcCommission}/>
               {/* Výpočet provize */}
               <div style={{background:"#fff",borderRadius:8,padding:"10px 14px",border:"1px solid #e8e8f0",fontSize:12,color:"#555",lineHeight:2}}>
                 <span style={{fontWeight:700,color:"#1a1a2e"}}>Výpočet: </span>
