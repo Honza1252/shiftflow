@@ -4517,14 +4517,16 @@ function SimulatorBlock({i, r, c, koefPct, celkPct, simVals, setSimVals, results
     obrat_prislusenstvi: sv.obrat_prislusenstvi !== undefined ? sv.obrat_prislusenstvi : Number(r.data.obrat_prislusenstvi)||0,
   };
   const simEmp = {...r.data, ...simD};
-  const simCalc = calcCommission(simEmp, r.settings, results.map(x=>x.data), r.penetraceOverride, r.globalSett);
+  // Filtruj speciální role stejně jako originální výpočet – jinak by se lišil soucetHodin a tím i plány
+  const simAllEmps = results.filter(x=>!COMMISSION_SPECIAL_ROLES.has(x.data?.role||"")).map(x=>x.data);
+  const simCalc = calcCommission(simEmp, r.settings, simAllEmps, r.penetraceOverride, r.globalSett);
   const simKoefPct = Math.round((simCalc?.koef||0)*100);
   const simCelkPct = Math.round((simCalc?.celkPlneni||0)*100);
   const simProvize = Math.round(simCalc?.vyslednaProvize||0);
   const deltaProvize = simProvize - Math.round(c.vyslednaProvize);
   const deltaKoef = simKoefPct - koefPct;
   const deltaCelk = simCelkPct - celkPct;
-  const prahy = (r.globalSett?.kraceni||[{od:0,koef:0},{od:10,koef:15},{od:24,koef:30},{od:49,koef:50},{od:79,koef:90},{od:99,koef:100}]).sort((a,b)=>a.od-b.od);
+  const prahy = [...(r.globalSett?.kraceni||[{od:0,koef:0},{od:10,koef:15},{od:24,koef:30},{od:49,koef:50},{od:79,koef:90},{od:99,koef:100}])].sort((a,b)=>a.od-b.od);
   const nextP = prahy.find(p => p.od > (hasSim?simCelkPct:celkPct));
   const updSim = (field, val) => setSimVals(prev => ({...prev, [sk]: {...(prev[sk]||{}), [field]: Number(val)}}));
   const resetSim = () => setSimVals(prev => {const n={...prev}; delete n[sk]; return n;});
