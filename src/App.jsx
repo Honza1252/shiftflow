@@ -4499,17 +4499,19 @@ function ProgressBar({value, max, color}){
 function BannerBlock({c, celkPct, provize100, r}){
   const kraceni=r.globalSett?.kraceni||[{od:0,koef:0},{od:10,koef:15},{od:24,koef:30},{od:49,koef:50},{od:79,koef:90},{od:99,koef:100}];
   const prahy=[...kraceni].sort((a,b)=>a.od-b.od);
-  const nextP=prahy.find(p=>p.od>celkPct);
 
   const nektereSplneny=[c.plneniPz,c.plneniObrat,c.plneniSluzby,c.plneniPrislusenství].some(p=>(p||0)>1);
-  const bannerVeta=nektereSplneny?"Kdybys splnil zbývající složky na 100%, měl bys":"Splněním plánu ve všech složkách bys měl";
+  const bannerVeta=nektereSplneny
+    ? "Kdybys splnil zbývající složky na 100% a dosáhl koef. 100 %, měl bys"
+    : "Splněním všech složek na 100 % a koef. 100 % bys měl";
   const provize100Round=Math.round(provize100);
   const aktProvize=Math.round(c.vyslednaProvize);
   const bannerZaporny=provize100Round<=aktProvize;
 
-  // Data pro tabulku
   const vahaPz=Number(r.globalSett?.vaha_pz)||4;
-  const cilTarget=nextP?`${nextP.koef} %`:"100 %";
+  const vahaSouc=(vahaPz)+(Number(r.globalSett?.vaha_obrat)||1)+(Number(r.globalSett?.vaha_sluzby)||1)+(Number(r.globalSett?.vaha_prisl)||1);
+
+  // Tabulka vždy ukazuje cíl 100% – konzistentní s bannerem
   const rows=[
     {
       label:"Záruky (PZ)", vaha:`váha ${vahaPz}×`, klicova:vahaPz>=4,
@@ -4536,9 +4538,12 @@ function BannerBlock({c, celkPct, provize100, r}){
   const pctColor=p=>p>=1?"#16a34a":p>=0.5?"#f97316":"#dc2626";
   const fmtKc=v=>Math.round(v).toLocaleString("cs-CZ");
 
-  // Celkové plnění při 100% všeho
-  const vahaSouc=(Number(r.globalSett?.vaha_pz)||4)+(Number(r.globalSett?.vaha_obrat)||1)+(Number(r.globalSett?.vaha_sluzby)||1)+(Number(r.globalSett?.vaha_prisl)||1);
-  const celk100=Math.round(((Math.min(c.plneniPz||0,1)*vahaPz + 1*(Number(r.globalSett?.vaha_obrat)||1) + 1*(Number(r.globalSett?.vaha_sluzby)||1) + 1*(Number(r.globalSett?.vaha_prisl)||1))/vahaSouc)*100);
+  // Koef při 100% plnění
+  const koef100Pct=Math.round(calcKoefKraceni(1.0, kraceni)*100);
+
+  // Rozvoz+Admin – zobrazit jen pokud má hodnotu
+  const rozvozKc=Math.round(c.provizeRozvozAdmin||0);
+  const hasRozvoz=rozvozKc>0;
 
   return <div style={{marginBottom:12}}>
     {/* Banner */}
@@ -4556,7 +4561,7 @@ function BannerBlock({c, celkPct, provize100, r}){
     {/* Tabulka cílů */}
     <div style={{border:"1px solid #fde047",borderRadius:"0 0 8px 8px",overflow:"hidden"}}>
       <div style={{padding:"8px 14px",background:"#fffbeb",fontSize:11,fontWeight:700,color:"#92400e",borderBottom:"1px solid #fde047"}}>
-        Co potřebuješ pro koeficient {cilTarget}?
+        Co potřebuješ pro koeficient 100 %?
       </div>
       <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
         <thead>
@@ -4597,11 +4602,25 @@ function BannerBlock({c, celkPct, provize100, r}){
               </td>
             </tr>;
           })}
+          {/* Rozvoz+Admin řádek – jen pokud má hodnotu */}
+          {hasRozvoz&&<tr style={{background:"#f8f9ff",borderBottom:"0.5px solid #fef9c3"}}>
+            <td style={{padding:"9px 14px"}}>
+              <div style={{fontWeight:600,fontSize:12,color:"#1a1a2e"}}>Rozvoz + Admin</div>
+              <div style={{fontSize:10,color:"#aaa"}}>nezávisí na plnění · nekrátí se</div>
+            </td>
+            <td style={{padding:"9px 10px",textAlign:"center"}}>
+              <div style={{fontSize:14,fontWeight:700,color:"#1565c0"}}>{fmtKc(rozvozKc)} Kč</div>
+            </td>
+            <td style={{padding:"9px 10px",textAlign:"right",fontSize:11,color:"#16a34a",fontWeight:600}}>✓ Zahrnuto</td>
+            <td style={{padding:"9px 14px",textAlign:"right",color:"#16a34a"}}>–</td>
+          </tr>}
         </tbody>
         <tfoot>
           <tr style={{background:"#fffde7",borderTop:"1px solid #fde047"}}>
-            <td colSpan={3} style={{padding:"7px 14px",fontSize:11,color:"#92400e"}}>Celkové plnění nyní → při splnění všeho</td>
-            <td style={{padding:"7px 14px",textAlign:"right",fontSize:11,fontWeight:700,color:"#854d0e"}}>{celkPct} % → {celk100} %</td>
+            <td colSpan={3} style={{padding:"7px 14px",fontSize:11,color:"#92400e"}}>
+              Celkové plnění nyní → při splnění všeho = koef. {koef100Pct} %
+            </td>
+            <td style={{padding:"7px 14px",textAlign:"right",fontSize:11,fontWeight:700,color:"#854d0e"}}>{celkPct} % → 100 %</td>
           </tr>
         </tfoot>
       </table>
