@@ -318,6 +318,33 @@ function getWorkingDays(y,m,holidays){
 // Celkový nárok dovolené = vacHours + vacAdjustment
 function empVacTotal(emp){ return (emp.vacHours||0) + (emp.vacAdjustment||0); }
 
+// Kumulativní čerpání dovolené od začátku roku (nebo startDate) do (toYear, toMonth) včetně
+function calcVacUsedCumulative(emp, toYear, toMonth, sched, employees){
+  let vacUsed = 0;
+  // Začni od 1. ledna daného roku (dovolená se počítá v rámci kalendářního roku)
+  let y = toYear, m = 0;
+  // Pokud má zaměstnanec startDate v témže roce – začni od jeho nástupu
+  if(emp.startDate){
+    const sd = new Date(emp.startDate);
+    if(sd.getFullYear() === toYear && sd.getMonth() > 0){
+      m = sd.getMonth();
+    }
+  }
+  while(y < toYear || (y === toYear && m <= toMonth)){
+    const dim = getDim(y, m);
+    for(let d=1; d<=dim; d++){
+      const ds = fmtDate(y, m, d);
+      const cell = getSchedCell(sched, emp.id, ds, employees);
+      if(!cell) continue;
+      for(const seg of cell){
+        if(seg.type==="vacation") vacUsed += (seg.hours||0);
+      }
+    }
+    if(m===11){ y++; m=0; } else { m++; }
+  }
+  return vacUsed;
+}
+
 // Vrátí startDate zaměstnance jako Date objekt nebo null
 function empStartDate(emp){
   if(!emp.startDate) return null;
@@ -1515,7 +1542,7 @@ function LoginModal({emp, onClose}){
   </div>;
 }
 
-function EmployeesView({employees,setEmployees,stores}){
+function EmployeesView({employees,setEmployees,stores,transfers=[],setTransfers}){
   const [editEmp,setEditEmp]=useState(null);
   const [showNew,setShowNew]=useState(false);
   const [loginEmp,setLoginEmp]=useState(null);
@@ -2541,16 +2568,8 @@ function SummaryTable({storeId, employees, year, month, sched, holidays, stores,
             }
           }
 
-          // Ze sched: dovolená hodiny
-          let vacUsed = 0;
-          for(let d=1;d<=dim;d++){
-            const ds  = fmtDate(year,month,d);
-            const cell= getSchedCell(sched, emp.id, ds, employees);
-            if(!cell) continue;
-            for(const seg of cell){
-              if(seg.type==="vacation") vacUsed += (seg.hours||0);
-            }
-          }
+          // Kumulativní dovolená od začátku roku do aktuálního měsíce včetně
+          const vacUsed = calcVacUsedCumulative(emp, year, month, sched, employees);
 
           const overtime   = planned - fund;
           const beforeStart = year<APP_START.year||(year===APP_START.year&&month<APP_START.month);
@@ -3272,7 +3291,7 @@ ${d}${hol?"!":"."}`;
 
     mainEmps.forEach((emp,ri)=>{
       const empIdx=mainEmps.findIndex(e=>e.id===emp.id);
-      let planned=0; let vacUsed=0;
+      let planned=0;
       for(let d=1;d<=dim;d++){
         const dow=getDow(year,month,d);
         const ds=fmtDate(year,month,d);
@@ -3283,7 +3302,6 @@ ${d}${hol?"!":"."}`;
           const oth=cell.find(s=>s.type!=="work"&&s.type!=="vacation"&&s.type!=="sick"&&s.type!=="dayOff");
           if(ws2.length){ planned+=calcSplitWorked(ws2,emp.mainStore,stores); if(vac) planned+=(vac.hours||0); }
           else if(vac||oth) planned+=((vac||oth).hours||0);
-          for(const seg of cell) if(seg.type==="vacation") vacUsed+=(seg.hours||0);
         } else {
           const hol=holidays.find(h=>h.date===ds);
           const pc=getPatCell(patterns,storeId,empIdx,new Date(year,month,d));
@@ -3293,6 +3311,7 @@ ${d}${hol?"!":"."}`;
       const fund2=wd2*empContractDay(emp);
       const ot=planned-fund2;
       const kdp=calcKpdCumulative(emp,year,month,sched,holidays,stores,patterns,employees,timesheetData);
+      const vacUsed=calcVacUsedCumulative(emp,year,month,sched,employees);
       const vacLeft=(emp.vacHours||0)+(emp.vacAdjustment||0)-vacUsed;
       const altBg=ri%2===0?"FFFFFFFF":"FFF8F9FC";
       const sRow=ws.addRow([
@@ -3580,7 +3599,7 @@ ${d}${hol?"!":"."}`;
 
     mainEmps.forEach((emp,ri)=>{
       const empIdx=mainEmps.findIndex(e=>e.id===emp.id);
-      let planned=0; let vacUsed=0;
+      let planned=0;
       for(let d=1;d<=dim;d++){
         const dow=getDow(year,month,d);
         const ds=fmtDate(year,month,d);
@@ -3591,7 +3610,6 @@ ${d}${hol?"!":"."}`;
           const oth=cell.find(s=>s.type!=="work"&&s.type!=="vacation"&&s.type!=="sick"&&s.type!=="dayOff");
           if(ws.length){ planned+=calcSplitWorked(ws,emp.mainStore,stores); if(vac) planned+=(vac.hours||0); }
           else if(vac||oth) planned+=((vac||oth).hours||0);
-          for(const seg of cell) if(seg.type==="vacation") vacUsed+=(seg.hours||0);
         } else {
           const hol=holidays.find(h=>h.date===ds);
           const pc=getPatCell(patterns,storeId,empIdx,new Date(year,month,d));
@@ -3601,6 +3619,7 @@ ${d}${hol?"!":"."}`;
       const fund2=wd*empContractDay(emp);
       const ot=planned-fund2;
       const kdp=calcKpdCumulative(emp,year,month,sched,holidays,stores,patterns,employees,timesheetData);
+      const vacUsed=calcVacUsedCumulative(emp,year,month,sched,employees);
       const vacLeft=(emp.vacHours||0)+(emp.vacAdjustment||0)-vacUsed;
       const altBg=ri%2===0?[255,255,255]:[248,249,252];
       sx=mL;
@@ -3809,7 +3828,7 @@ ${d}${hol?"!":"."}`;
 
       {tab==="employees"&&<div style={{background:"#fff",borderRadius:10,padding:"24px",boxShadow:"0 1px 4px rgba(0,0,0,0.05)"}}>
         {isVedouci
-          ? <EmployeesView employees={employees} setEmployees={setEmployeesDB} stores={stores}/>
+          ? <EmployeesView employees={employees} setEmployees={setEmployeesDB} stores={stores} transfers={transfers} setTransfers={setTransfers}/>
           : <div style={{textAlign:"center",padding:"60px 0",color:"#bbb",fontSize:16}}>🔒 Přístup pouze pro vedoucí</div>}
       </div>}
 
