@@ -2566,15 +2566,21 @@ function SummaryTable({storeId, employees, year, month, sched, holidays, stores,
             }
           }
 
-          // Kumulativní dovolená od začátku roku do aktuálního měsíce včetně
-          const vacUsed = calcVacUsedCumulative(emp, year, month, sched, employees);
+          // Kumulativní dovolená: celkem do konce tohoto měsíce a do konce předchozího měsíce
+          const vacUsedCum = calcVacUsedCumulative(emp, year, month, sched, employees);
+          const prevMonth = month === 0 ? 11 : month - 1;
+          const prevYear  = month === 0 ? year - 1 : year;
+          const vacUsedPrev = calcVacUsedCumulative(emp, prevYear, prevMonth, sched, employees);
+          const vacTotal   = (emp.vacHours||0)+(emp.vacAdjustment||0);
+          const vacNarok   = vacTotal - vacUsedPrev;   // zůstatek na začátku tohoto měsíce
+          const vacUsed    = vacUsedCum - vacUsedPrev; // čerpáno jen v tomto měsíci
+          const vacLeft    = vacTotal - vacUsedCum;    // zbývá celkem
 
           const overtime   = planned - fund;
           const beforeStart = year<APP_START.year||(year===APP_START.year&&month<APP_START.month);
           const kdp        = beforeStart ? null : calcKpdCumulative(emp, year, month, sched, holidays, stores, patterns, employees, timesheetData);
           const kpdPaid    = 0;
           const kdpBalance = kdp!==null ? kdp : null;
-          const vacNarok = (emp.vacHours||0)+(emp.vacAdjustment||0); const vacLeft    = vacNarok - vacUsed;
           const kdpFmt = v => v===null?"—":(v>0?"+":v<0?"-":"")+fmtH(Math.abs(v));
           const kdpStyle = v => v===null
             ? {padding:"8px 10px",textAlign:"center",borderBottom:`1px solid ${C.border}`,color:"#ccc"}
@@ -2589,7 +2595,7 @@ function SummaryTable({storeId, employees, year, month, sched, holidays, stores,
             <td style={{padding:"8px 10px",textAlign:"center",borderBottom:`1px solid ${C.border}`,color:"#1a1a2e",fontWeight:600}}>{fmtH(planned)}</td>
             <td style={colStyle(overtime)}>{overtime>0?"+":""}{fmtH(overtime)}</td>
             <td style={kdpStyle(kdp)}>{kdpFmt(kdp)}</td>
-            <td style={{padding:"8px 10px",textAlign:"center",borderBottom:`1px solid ${C.border}`,color:"#555"}}>{fmtH((emp.vacHours||0)+(emp.vacAdjustment||0))}</td>
+            <td style={{padding:"8px 10px",textAlign:"center",borderBottom:`1px solid ${C.border}`,color:"#555"}}>{fmtH(vacNarok)}</td>
             <td style={{padding:"8px 10px",textAlign:"center",borderBottom:`1px solid ${C.border}`,color:"#1565c0",fontWeight:600}}>{fmtH(vacUsed)}</td>
             <td style={colStyle(vacLeft, "#2e7d32", "#c62828")}>{fmtH(vacLeft)}</td>
           </tr>;
@@ -3309,15 +3315,20 @@ ${d}${hol?"!":"."}`;
       const fund2=wd2*empContractDay(emp);
       const ot=planned-fund2;
       const kdp=calcKpdCumulative(emp,year,month,sched,holidays,stores,patterns,employees,timesheetData);
-      const vacUsed=calcVacUsedCumulative(emp,year,month,sched,employees);
-      const vacLeft=(emp.vacHours||0)+(emp.vacAdjustment||0)-vacUsed;
+      const vacUsedCumXls=calcVacUsedCumulative(emp,year,month,sched,employees);
+      const prevMXls=month===0?11:month-1; const prevYXls=month===0?year-1:year;
+      const vacUsedPrevXls=calcVacUsedCumulative(emp,prevYXls,prevMXls,sched,employees);
+      const vacTotalXls=(emp.vacHours||0)+(emp.vacAdjustment||0);
+      const vacNarokXls=vacTotalXls-vacUsedPrevXls;
+      const vacUsed=vacUsedCumXls-vacUsedPrevXls;
+      const vacLeft=vacTotalXls-vacUsedCumXls;
       const altBg=ri%2===0?"FFFFFFFF":"FFF8F9FC";
       const sRow=ws.addRow([
         `${emp.lastName} ${emp.firstName}`,
         fmtH2(fund2), fmtH2(planned),
         (ot>=0?"+":"")+fmtH2(ot),
         fmtHs(kdp),
-        fmtH2((emp.vacHours||0)+(emp.vacAdjustment||0)), fmtH2(vacUsed), fmtH2(vacLeft),
+        fmtH2(vacNarokXls), fmtH2(vacUsed), fmtH2(vacLeft),
       ]);
       sRow.height=13;
       sRow.eachCell((cell,cn)=>{
@@ -3617,11 +3628,16 @@ ${d}${hol?"!":"."}`;
       const fund2=wd*empContractDay(emp);
       const ot=planned-fund2;
       const kdp=calcKpdCumulative(emp,year,month,sched,holidays,stores,patterns,employees,timesheetData);
-      const vacUsed=calcVacUsedCumulative(emp,year,month,sched,employees);
-      const vacLeft=(emp.vacHours||0)+(emp.vacAdjustment||0)-vacUsed;
+      const vacUsedCumPdf=calcVacUsedCumulative(emp,year,month,sched,employees);
+      const prevMPdf=month===0?11:month-1; const prevYPdf=month===0?year-1:year;
+      const vacUsedPrevPdf=calcVacUsedCumulative(emp,prevYPdf,prevMPdf,sched,employees);
+      const vacTotalPdf=(emp.vacHours||0)+(emp.vacAdjustment||0);
+      const vacNarokPdf=vacTotalPdf-vacUsedPrevPdf;
+      const vacUsed=vacUsedCumPdf-vacUsedPrevPdf;
+      const vacLeft=vacTotalPdf-vacUsedCumPdf;
       const altBg=ri%2===0?[255,255,255]:[248,249,252];
       sx=mL;
-      const vals=[cz(`${emp.lastName} ${emp.firstName}`),fmtH2(fund2),fmtH2(planned),(ot>=0?"+":"")+fmtH2(ot),fmtHs(kdp),fmtH2(empVacTotal(emp)),fmtH2(vacUsed),fmtH2(vacLeft)];
+      const vals=[cz(`${emp.lastName} ${emp.firstName}`),fmtH2(fund2),fmtH2(planned),(ot>=0?"+":"")+fmtH2(ot),fmtHs(kdp),fmtH2(vacNarokPdf),fmtH2(vacUsed),fmtH2(vacLeft)];
       const tcs=[[26,26,46],[80,82,100],[26,26,46],ot>0?[46,125,50]:ot<0?[198,40,40]:[120,120,130],kdp>0?[21,101,192]:kdp<0?[198,40,40]:[120,120,130],[80,82,100],[21,101,192],vacLeft>0?[46,125,50]:[198,40,40]];
       sHdrs.forEach((_,hi)=>{
         doc.setFillColor(altBg[0],altBg[1],altBg[2]);
