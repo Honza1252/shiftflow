@@ -321,14 +321,12 @@ function empVacTotal(emp){ return (emp.vacHours||0) + (emp.vacAdjustment||0); }
 // Kumulativní čerpání dovolené od začátku roku (nebo startDate) do (toYear, toMonth) včetně
 function calcVacUsedCumulative(emp, toYear, toMonth, sched, employees){
   let vacUsed = 0;
-  // Začni od 1. ledna daného roku (dovolená se počítá v rámci kalendářního roku)
-  let y = toYear, m = 0;
-  // Pokud má zaměstnanec startDate v témže roce – začni od jeho nástupu
+  // Začni od APP_START (březen 2026) nebo od data nástupu zaměstnance – podle toho co je pozdější
+  let y = APP_START.year, m = APP_START.month;
   if(emp.startDate){
     const sd = new Date(emp.startDate);
-    if(sd.getFullYear() === toYear && sd.getMonth() > 0){
-      m = sd.getMonth();
-    }
+    const sy = sd.getFullYear(), sm = sd.getMonth();
+    if(sy > y || (sy === y && sm > m)){ y = sy; m = sm; }
   }
   while(y < toYear || (y === toYear && m <= toMonth)){
     const dim = getDim(y, m);
