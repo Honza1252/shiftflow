@@ -3067,7 +3067,7 @@ function MainApp({currentUser, handleLogout}){
   // Reset rozvrhu – smaže všechny ruční úpravy pro danou prodejnu a měsíc
   const onResetMonth=useCallback(async()=>{
     const dim=getDim(year,month);
-    const storeEmps=employees.filter(e=>e.active&&e.mainStore===storeId);
+    const storeEmps=employees.filter(e=>e.active&&empMainStore(e,year,month,transfers)===storeId);
     const empIds=storeEmps.map(e=>e.id);
     // Smaž z DB – všechny záznamy pro zaměstnance prodejny v daném měsíci
     const dateFrom=fmtDate(year,month,1);
@@ -3784,7 +3784,7 @@ ${d}${hol?"!":"."}`;
 
         {/* Přehled čekajících výkazů pro vedoucího */}
         {isVedouci&&(()=>{
-          const pending = employees.filter(e=>e.active&&e.mainStore===storeId).filter(e=>{
+          const pending = employees.filter(e=>e.active&&empMainStore(e,year,month,transfers)===storeId&&isEmpActiveInMonth(e,year,month)).filter(e=>{
             const k=tsKey(e.id,year,month+1);
             return timesheetData[k]?._status==="submitted";
           });
