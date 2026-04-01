@@ -34,6 +34,7 @@ function dbToEmp(r){
     endDate: r.end_date||null,
     active: r.active,
     customTimes: r.custom_times||{},
+    mealTicketMinHours: r.meal_ticket_min_hours||null,
   };
 }
 function empToDB(e){
@@ -52,6 +53,7 @@ function empToDB(e){
     end_date: e.endDate||null,
     active: e.active,
     custom_times: e.customTimes||{},
+    meal_ticket_min_hours: e.mealTicketMinHours||null,
   };
 }
 function dbToHoliday(r){
@@ -633,6 +635,12 @@ function EmployeeForm({initial, stores, onSave, onClose, transfers=[], onTransfe
       </div>
       <div style={{fontSize:11,color:"#888",marginTop:-8}}>Celkový nárok: <strong>{(Number(form.vacHours)||0)+(Number(form.vacAdjustment)||0)}h</strong></div>
       <FInput label="Počáteční KPD (hodiny)" type="number" value={form.kpdStart} onChange={v=>upd("kpdStart",Number(v))}/>
+      <div style={{display:"flex",gap:10,alignItems:"flex-end",flexWrap:"wrap"}}>
+        <FInput label="Min. hodin pro stravenku" type="number" value={form.mealTicketMinHours??""} onChange={v=>upd("mealTicketMinHours",v===""||v===null?null:Number(v))} inputStyle={{width:90}} style={{flex:"0 0 auto"}}/>
+        <div style={{fontSize:11,color:"#888",paddingBottom:8,flex:1}}>
+          Prázdné = použije globální nastavení ({DEFAULT_MEAL_TICKET_MIN_HOURS}h). Zadejte hodnotu pro individuální hranici (např. 4h pro zkrácený úvazek).
+        </div>
+      </div>
       <FInput label="Datum nástupu" type="date" value={form.startDate||""} onChange={v=>upd("startDate",v||null)}/>
       <div style={{fontSize:11,color:"#888",marginTop:-8}}>Pouze u nových zaměstnanců nastoupivších po spuštění aplikace. Před tímto datem se nezobrazuje.</div>
       <FInput label="Datum ukončení PP" type="date" value={form.endDate||""} onChange={v=>upd("endDate",v||null)}/>
@@ -1709,7 +1717,7 @@ function EmployeesView({employees,setEmployees,stores,transfers=[],setTransfers}
   const [editEmp,setEditEmp]=useState(null);
   const [showNew,setShowNew]=useState(false);
   const [loginEmp,setLoginEmp]=useState(null);
-  const newEmpTemplate={firstName:"",lastName:"",mainStore:1,extraStores:[],role:"",contractHoursDay:8,contractHoursWeek:40,vacHours:160,kpdStart:0,active:true,customTimes:{}};
+  const newEmpTemplate={firstName:"",lastName:"",mainStore:1,extraStores:[],role:"",contractHoursDay:8,contractHoursWeek:40,vacHours:160,kpdStart:0,active:true,customTimes:{},mealTicketMinHours:null};
 
   return <div>
     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
@@ -4116,7 +4124,7 @@ ${d}${hol?"!":"."}`;
             canEditKdp={isVedouci}
             tsStatus={tsStatus}
             isVedouci={isVedouci}
-            mealTicketMinHours={appSettings.mealTicketMinHours}
+            mealTicketMinHours={employees.find(e=>e.id===tsEmp)?.mealTicketMinHours ?? appSettings.mealTicketMinHours}
             onSubmit={handleSubmit}
             onApprove={handleApprove}
             onReturn={handleReturn}
