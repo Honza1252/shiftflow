@@ -259,19 +259,23 @@ function getBreakRules(storeId, stores) {
 // ─── VZORY ───────────────────────────────────────────────────
 // Buňka: null=volno | "work"|"morning"|"afternoon"|"fullDay"|"custom1"|"custom2"
 //   nebo objekt {shift, loc} pro sdílené zaměstnance (loc=storeId kde pracuje)
+//
+// Verzovaná struktura: patterns = { storeId: [ {validFrom, note, odd, even, flat}, ... ] }
+// Vždy se použije verze s nejvyšším validFrom <= datum.
+const APP_START_DATE = "2026-03-01";
 const makeDefaultPatterns = () => ({
-  1: {
+  1: [{
+    validFrom: APP_START_DATE, note: "Základní vzor",
     odd: [
-      [null,"work","work","work","work",null,null],   // Voneš
-      ["work","work","work",null,null,"work","work"], // Šusta
-      ["work",null,null,"work","work","work","work"], // Moláček
-      [null,"work","work","work","work",null,null],   // Staněk
-      ["work","work",null,null,"work","work","work"], // Komínková
-      ["afternoon","afternoon","afternoon",null,null,"fullDay","fullDay"], // Přibová
-      ["morning",null,"morning","fullDay","fullDay",null,null],            // Havelka
-      // Kříž: Po/St/Pá=ST(1), Út/Čt=BL(2), So/Ne=volno
+      [null,"work","work","work","work",null,null],
+      ["work","work","work",null,null,"work","work"],
+      ["work",null,null,"work","work","work","work"],
+      [null,"work","work","work","work",null,null],
+      ["work","work",null,null,"work","work","work"],
+      ["afternoon","afternoon","afternoon",null,null,"fullDay","fullDay"],
+      ["morning",null,"morning","fullDay","fullDay",null,null],
       [{shift:"work",loc:1},{shift:"work",loc:2},{shift:"work",loc:1},{shift:"work",loc:2},{shift:"work",loc:1},null,null],
-      [null,null,null,null,null,null,null], // Jankovský
+      [null,null,null,null,null,null,null],
     ],
     even: [
       ["work","work",null,null,"work","work","work"],
@@ -284,16 +288,31 @@ const makeDefaultPatterns = () => ({
       [{shift:"work",loc:1},{shift:"work",loc:2},{shift:"work",loc:1},{shift:"work",loc:2},{shift:"work",loc:1},null,null],
       [null,null,null,null,null,null,null],
     ],
-  },
-  2: {
+    flat: [],
+  }],
+  2: [{
+    validFrom: APP_START_DATE, note: "Základní vzor",
+    odd: [], even: [],
     flat: [
-      ["work","work","work","work","work",null,null], // Míka
-      ["work","work","work","work","work",null,null], // Štefanová
-      ["work","work","work","work","work",null,null], // Michálek
+      ["work","work","work","work","work",null,null],
+      ["work","work","work","work","work",null,null],
+      ["work","work","work","work","work",null,null],
     ],
-  },
-  3: { odd:[], even:[] },
+  }],
+  3: [{
+    validFrom: APP_START_DATE, note: "Základní vzor",
+    odd: [], even: [], flat: [],
+  }],
 });
+
+// Vrátí aktivní verzi vzoru pro danou prodejnu a datum
+function getActivePattern(storeId, date, patterns) {
+  const versions = patterns[storeId];
+  if(!versions?.length) return null;
+  const dateStr = date.getFullYear()+"-"+String(date.getMonth()+1).padStart(2,"0")+"-"+String(date.getDate()).padStart(2,"0");
+  const sorted = [...versions].sort((a,b)=>b.validFrom.localeCompare(a.validFrom));
+  return sorted.find(v=>v.validFrom<=dateStr) || sorted[sorted.length-1];
+}
 
 // ─── HELPERS ────────────────────────────────────────────────
 function getIsoWeek(date) {
@@ -435,10 +454,12 @@ function getHolidayDays(y,m,holidays){
   return c;
 }
 function getPatCell(patterns, storeId, empIdx, date) {
-  const pat=patterns[storeId]; if(!pat) return null;
-  const wt=storeId===2?"flat":getWeekType(date);
-  const rows=pat[wt]; if(!rows||empIdx>=rows.length) return null;
-  const dow=date.getDay()===0?6:date.getDay()-1;
+  const version = getActivePattern(storeId, date, patterns);
+  if(!version) return null;
+  const wt = storeId===2?"flat":getWeekType(date);
+  const rows = version[wt];
+  if(!rows||empIdx>=rows.length) return null;
+  const dow = date.getDay()===0?6:date.getDay()-1;
   return rows[empIdx]?.[dow]??null;
 }
 function schedKey(empId,ds,employees){
@@ -865,10 +886,11 @@ function PatternCellComp({value, emp, storeId, dow, stores, onChange}){
 }
 
 // ─── PATTERN EDITOR ──────────────────────────────────────────
-function PatternEditor({storeId, employees, patterns, stores, onSave, onClose}){
+function PatternEditor({storeId, employees, patterns, stores, onSave, onClose, initData}){
   const emps=employees.filter(e=>e.active&&e.mainStore===storeId);
   const isBlatna=storeId===2;
-  const init=patterns[storeId]||{odd:[],even:[],flat:[]};
+  // initData: konkrétní verze vzoru (při verzování), nebo fallback na první verzi z patterns
+  const init=initData||(Array.isArray(patterns[storeId])?patterns[storeId][0]:patterns[storeId])||{odd:[],even:[],flat:[]};
   const fill=rows=>{
     const r=rows.map(row=>[...(row||[])]);
     while(r.length<emps.length) r.push(Array(7).fill(null));
@@ -1277,12 +1299,134 @@ function ScheduleView({storeId,employees,year,month,sched,onCellEdit,actions,hol
 }
 
 // ─── SETTINGS ────────────────────────────────────────────────
-function SettingsView({holidays,setHolidays,actions,setActions,stores,setStores,employees,patterns,setPatterns}){
+
+// ─── PATTERN VERSION MANAGER ─────────────────────────────────
+// Správce verzí vzorů rozvrhu – zobrazí seznam verzí pro jednu prodejnu
+// a umožní přidat/upravit/smazat verze s validFrom
+function PatternVersionManager({store, employees, patterns, stores, savePatternVersion, deletePatternVersion, onClose}){
+  const storeId=store.id;
+  const versions=[...(patterns[storeId]||[])].sort((a,b)=>a.validFrom.localeCompare(b.validFrom));
+  const [editVer,setEditVer]=useState(null); // {validFrom, isNew}
+  const [showAddForm,setShowAddForm]=useState(false);
+  const [newDate,setNewDate]=useState("");
+  const [newNote,setNewNote]=useState("");
+
+  const today=new Date();
+  const todayStr=today.getFullYear()+"-"+String(today.getMonth()+1).padStart(2,"0")+"-01";
+
+  const handleAddVersion=()=>{
+    if(!newDate){ alert("Zadejte datum platnosti."); return; }
+    // Vždy první den měsíce
+    const d=new Date(newDate+"T00:00:00");
+    const vf=d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-01";
+    if(versions.find(v=>v.validFrom===vf)){ alert("Verze pro tento měsíc již existuje."); return; }
+    // Kopíruj nejbližší předchozí verzi jako základ
+    const sorted=[...versions].sort((a,b)=>b.validFrom.localeCompare(a.validFrom));
+    const base=sorted.find(v=>v.validFrom<=vf)||sorted[sorted.length-1]||{odd:[],even:[],flat:[]};
+    const newVer={
+      validFrom:vf, note:newNote||"Nový vzor",
+      odd:JSON.parse(JSON.stringify(base.odd||[])),
+      even:JSON.parse(JSON.stringify(base.even||[])),
+      flat:JSON.parse(JSON.stringify(base.flat||[])),
+    };
+    savePatternVersion(storeId,vf,newVer);
+    setShowAddForm(false); setNewDate(""); setNewNote("");
+    setEditVer({validFrom:vf});
+  };
+
+  const handleDelete=(vf)=>{
+    if(versions.length<=1){ alert("Nelze smazat jedinou verzi vzoru."); return; }
+    if(!window.confirm(`Smazat verzi od ${vf}? Historické rozvrhy sestavené z tohoto vzoru se přepočítají na předchozí verzi.`)) return;
+    deletePatternVersion(storeId,vf);
+  };
+
+  const fmtVF=vf=>{
+    const [y,m]=vf.split("-");
+    return `${["Leden","Únor","Březen","Duben","Květen","Červen","Červenec","Srpen","Září","Říjen","Listopad","Prosinec"][Number(m)-1]} ${y}`;
+  };
+
+  if(editVer){
+    const ver=versions.find(v=>v.validFrom===editVer.validFrom);
+    if(!ver) { setEditVer(null); return null; }
+    return <div>
+      <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:16}}>
+        <button onClick={()=>setEditVer(null)} style={{border:"none",background:"none",fontSize:18,cursor:"pointer",color:"#888"}}>←</button>
+        <div>
+          <div style={{fontWeight:800,fontSize:15,color:C.topbar}}>{store.name} – Vzor od {fmtVF(ver.validFrom)}</div>
+          <div style={{fontSize:12,color:"#aaa"}}>{ver.note}</div>
+        </div>
+      </div>
+      <PatternEditor storeId={storeId} employees={employees} patterns={patterns} stores={stores}
+        initData={ver}
+        onSave={(sid,pat)=>{
+          savePatternVersion(sid,ver.validFrom,{...pat,validFrom:ver.validFrom,note:ver.note});
+          setEditVer(null);
+        }}
+        onClose={()=>setEditVer(null)}/>
+    </div>;
+  }
+
+  return <div>
+    <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:18}}>
+      <button onClick={onClose} style={{border:"none",background:"none",fontSize:18,cursor:"pointer",color:"#888"}}>←</button>
+      <div style={{fontWeight:800,fontSize:15,color:C.topbar}}>{store.name} – Verze vzorů</div>
+    </div>
+
+    <div style={{fontSize:13,color:"#888",marginBottom:16,padding:"10px 14px",background:"#f8f9ff",borderRadius:8,lineHeight:1.7}}>
+      Každá verze platí od zadaného data. Při generování rozvrhu se vždy použije verze s nejvyšším datem ≤ zobrazovanému měsíci.<br/>
+      <strong>Historické měsíce zůstávají beze změny</strong> – ručně upravené buňky jsou uloženy v rozvrhu a vzor se ignoruje.
+    </div>
+
+    <div style={{display:"flex",flexDirection:"column",gap:8,marginBottom:16}}>
+      {versions.map((ver,i)=>{
+        const isActive=ver.validFrom<=todayStr&&(i===versions.length-1||versions[i+1].validFrom>todayStr);
+        const isFuture=ver.validFrom>todayStr;
+        return <div key={ver.validFrom} style={{display:"flex",alignItems:"center",gap:12,padding:"12px 16px",background:"#fff",border:`1.5px solid ${isActive?"#4f8ef7":isFuture?"#81c784":C.border}`,borderRadius:10}}>
+          <div style={{width:10,height:10,borderRadius:"50%",background:isActive?"#4f8ef7":isFuture?"#81c784":"#ccc",flexShrink:0}}/>
+          <div style={{flex:1}}>
+            <div style={{display:"flex",alignItems:"center",gap:8}}>
+              <span style={{fontWeight:700,fontSize:13,color:C.topbar}}>od {fmtVF(ver.validFrom)}</span>
+              {isActive&&<span style={{fontSize:10,background:"#e8f0fe",color:"#1565c0",padding:"1px 6px",borderRadius:10,fontWeight:700}}>AKTIVNÍ</span>}
+              {isFuture&&<span style={{fontSize:10,background:"#e8f5e9",color:"#2e7d32",padding:"1px 6px",borderRadius:10,fontWeight:700}}>BUDOUCÍ</span>}
+              {!isActive&&!isFuture&&<span style={{fontSize:10,background:"#f5f5f5",color:"#999",padding:"1px 6px",borderRadius:10,fontWeight:600}}>HISTORICKÝ</span>}
+            </div>
+            <div style={{fontSize:12,color:"#aaa",marginTop:2}}>{ver.note||"—"}</div>
+          </div>
+          <div style={{display:"flex",gap:6}}>
+            <Btn small variant="ghost" onClick={()=>setEditVer({validFrom:ver.validFrom})}>✏️ Upravit</Btn>
+            {versions.length>1&&<Btn small variant="danger" onClick={()=>handleDelete(ver.validFrom)}>✕</Btn>}
+          </div>
+        </div>;
+      })}
+    </div>
+
+    {showAddForm
+      ? <div style={{padding:"16px",background:"#f8f9ff",borderRadius:10,border:`1.5px solid ${C.border}`}}>
+          <div style={{fontWeight:700,fontSize:13,color:C.topbar,marginBottom:12}}>Nová verze vzoru</div>
+          <div style={{display:"flex",gap:12,flexWrap:"wrap",alignItems:"flex-end"}}>
+            <FInput label="Platnost od (1. den měsíce)" type="month" value={newDate} onChange={v=>setNewDate(v)} style={{width:180}}/>
+            <FInput label="Název / popis" value={newNote} onChange={v=>setNewNote(v)} placeholder="např. Letní provoz" style={{flex:1,minWidth:160}}/>
+            <div style={{display:"flex",gap:8"}}>
+              <Btn onClick={handleAddVersion}>Vytvořit</Btn>
+              <Btn variant="secondary" onClick={()=>setShowAddForm(false)}>Zrušit</Btn>
+            </div>
+          </div>
+          <div style={{fontSize:11,color:"#aaa",marginTop:8}}>
+            💡 Nová verze se zkopíruje z nejbližší předchozí verze – nemusíte zadávat vše od nuly.
+          </div>
+        </div>
+      : <Btn onClick={()=>setShowAddForm(true)}>+ Přidat verzi od data</Btn>
+    }
+  </div>;
+}
+
+function SettingsView({holidays,setHolidays,actions,setActions,stores,setStores,employees,patterns,setPatterns,savePatternVersion,deletePatternVersion}){
   const [section,setSection]=useState("pattern");
   const [editHol,setEditHol]=useState(null);
   const [showActModal,setShowActModal]=useState(false);
   const [newAct,setNewAct]=useState({name:"",month:new Date().getMonth(),year:new Date().getFullYear(),from:"",to:""});
   const [editPatStore,setEditPatStore]=useState(null);
+  const [editPatVersionStore,setEditPatVersionStore]=useState(null);
   const [editBreakStore,setEditBreakStore]=useState(null);
 
   const secs=[
@@ -1302,31 +1446,49 @@ function SettingsView({holidays,setHolidays,actions,setActions,stores,setStores,
     <div style={{flex:1,paddingLeft:28,overflowX:"auto"}}>
 
       {section==="pattern"&&<div>
-        <div style={{fontWeight:800,fontSize:16,marginBottom:8,color:C.topbar}}>Rozvrh VZOR</div>
-        <div style={{fontSize:13,color:"#888",marginBottom:16,padding:"10px 14px",background:"#f8f9ff",borderRadius:8,lineHeight:1.7}}>
-          Strakonice &amp; Pelhřimov: <strong>Lichý (T1) ↔ Sudý (T2)</strong>. &nbsp;
-          Blatná: <strong>jeden pevný vzor</strong>.<br/>
-          Sdílení zaměstnanci (extraStores ≠ ∅): v buňce volíte i prodejnu.
-        </div>
-        <div style={{display:"flex",flexDirection:"column",gap:10}}>
-          {stores.map(s=><div key={s.id} onClick={()=>setEditPatStore(s)}
-            style={{display:"flex",alignItems:"center",gap:16,padding:"14px 20px",background:"#fff",border:`1.5px solid ${C.border}`,borderRadius:10,cursor:"pointer"}}
-            onMouseEnter={e=>e.currentTarget.style.borderColor="#4f8ef7"}
-            onMouseLeave={e=>e.currentTarget.style.borderColor=C.border}>
-            <div style={{width:40,height:40,background:"#eef2ff",borderRadius:9,display:"flex",alignItems:"center",justifyContent:"center",overflow:"hidden",padding:4}}>
-              <img src="/logo.png" alt="logo" style={{width:"100%",height:"100%",objectFit:"contain"}}/>
+        {editPatVersionStore
+          ? <PatternVersionManager
+              store={editPatVersionStore}
+              employees={employees}
+              patterns={patterns}
+              stores={stores}
+              savePatternVersion={savePatternVersion}
+              deletePatternVersion={deletePatternVersion}
+              onClose={()=>setEditPatVersionStore(null)}/>
+          : <>
+            <div style={{fontWeight:800,fontSize:16,marginBottom:8,color:C.topbar}}>Rozvrh VZOR</div>
+            <div style={{fontSize:13,color:"#888",marginBottom:16,padding:"10px 14px",background:"#f8f9ff",borderRadius:8,lineHeight:1.7}}>
+              Strakonice &amp; Pelhřimov: <strong>Lichý (T1) ↔ Sudý (T2)</strong>. &nbsp;
+              Blatná: <strong>jeden pevný vzor</strong>.<br/>
+              Každá prodejna může mít <strong>více verzí vzoru s datem platnosti</strong> – historické měsíce nejsou ovlivněny.
             </div>
-            <div style={{flex:1}}>
-              <div style={{fontWeight:800,fontSize:14,color:C.topbar}}>{s.name}</div>
-              <div style={{fontSize:12,color:"#aaa"}}>{employees.filter(e=>e.active&&e.mainStore===s.id).length} zaměstnanců · {s.id===2?"Jeden vzor":"T1/T2"}</div>
+            <div style={{display:"flex",flexDirection:"column",gap:10}}>
+              {stores.map(s=>{
+                const versions=(patterns[s.id]||[]);
+                const vCount=Array.isArray(versions)?versions.length:1;
+                const todayStr=new Date().getFullYear()+"-"+String(new Date().getMonth()+1).padStart(2,"0")+"-01";
+                const activeVer=Array.isArray(versions)?[...versions].sort((a,b)=>b.validFrom.localeCompare(a.validFrom)).find(v=>v.validFrom<=todayStr):null;
+                return <div key={s.id}
+                  style={{display:"flex",alignItems:"center",gap:16,padding:"14px 20px",background:"#fff",border:`1.5px solid ${C.border}`,borderRadius:10,cursor:"pointer"}}
+                  onClick={()=>setEditPatVersionStore(s)}
+                  onMouseEnter={e=>e.currentTarget.style.borderColor="#4f8ef7"}
+                  onMouseLeave={e=>e.currentTarget.style.borderColor=C.border}>
+                  <div style={{width:40,height:40,background:"#eef2ff",borderRadius:9,display:"flex",alignItems:"center",justifyContent:"center",overflow:"hidden",padding:4}}>
+                    <img src="/logo.png" alt="logo" style={{width:"100%",height:"100%",objectFit:"contain"}}/>
+                  </div>
+                  <div style={{flex:1}}>
+                    <div style={{fontWeight:800,fontSize:14,color:C.topbar}}>{s.name}</div>
+                    <div style={{fontSize:12,color:"#aaa"}}>
+                      {employees.filter(e=>e.active&&e.mainStore===s.id).length} zaměstnanců · {s.id===2?"Jeden vzor":"T1/T2"} · {vCount} {vCount===1?"verze":"verzí"}
+                      {activeVer&&<span style={{marginLeft:8,color:"#1565c0"}}>aktivní: {activeVer.note||activeVer.validFrom}</span>}
+                    </div>
+                  </div>
+                  <span style={{fontSize:12,color:"#4f8ef7",fontWeight:700}}>Verze →</span>
+                </div>;
+              })}
             </div>
-            <span style={{fontSize:12,color:"#4f8ef7",fontWeight:700}}>Upravit →</span>
-          </div>)}
-        </div>
-        <Modal open={!!editPatStore} onClose={()=>setEditPatStore(null)} title={`Vzor – ${editPatStore?.name}`} width={1040}>
-          {editPatStore&&<PatternEditor storeId={editPatStore.id} employees={employees} patterns={patterns} stores={stores}
-            onSave={(sid,pat)=>setPatterns(p=>({...p,[sid]:pat}))} onClose={()=>setEditPatStore(null)}/>}
-        </Modal>
+          </>
+        }
       </div>}
 
       {section==="breaks"&&<div>
@@ -2742,6 +2904,7 @@ function MainApp({currentUser, handleLogout}){
           {data:schedD,   error:e6},
           {data:tsD,      error:e7},
           {data:transD,   error:e8},
+          {data:pvD},
         ] = await Promise.all([
           supabase.from("stores").select("*").order("id"),
           supabase.from("employees").select("*").order("id"),
@@ -2751,6 +2914,7 @@ function MainApp({currentUser, handleLogout}){
           supabase.from("schedule").select("*"),
           supabase.from("timesheets").select("*"),
           supabase.from("employee_transfers").select("*").order("effective_date"),
+          supabase.from("pattern_versions").select("*").order("valid_from"),
         ]);
         if(e1||e2||e3) throw new Error((e1||e2||e3).message);
 
@@ -2777,15 +2941,36 @@ function MainApp({currentUser, handleLogout}){
           note:r.note||"",
         })));
 
-        // Vzory
-        if(patsD?.length){
+        // Vzory – načti z pattern_versions (primární), fallback na patterns (legacy)
+        if(pvD?.length){
+          const pats={};
+          for(const r of pvD){
+            const sid=r.store_id;
+            if(!pats[sid]) pats[sid]=[];
+            let ver=pats[sid].find(v=>v.validFrom===r.valid_from);
+            if(!ver){
+              ver={validFrom:r.valid_from,note:r.note||"",odd:[],even:[],flat:[]};
+              pats[sid].push(ver);
+            }
+            const wt=r.week_type;
+            while(ver[wt].length<=r.emp_index) ver[wt].push(Array(7).fill(null));
+            ver[wt][r.emp_index]=r.row_data;
+          }
+          // Doplň prodejny bez záznamu výchozím vzorem
+          const def=makeDefaultPatterns();
+          for(const sid of [1,2,3]){
+            if(!pats[sid]) pats[sid]=def[sid];
+          }
+          setPatterns(pats);
+        } else if(patsD?.length){
+          // Legacy fallback: stará tabulka patterns bez verzování
           const pats=makeDefaultPatterns();
           for(const r of patsD){
-            if(!pats[r.store_id]) pats[r.store_id]={odd:[],even:[],flat:[]};
+            if(!pats[r.store_id]) pats[r.store_id]=[{validFrom:APP_START_DATE,note:"Základní vzor",odd:[],even:[],flat:[]}];
+            const ver=pats[r.store_id][0];
             const wt=r.week_type;
-            while(pats[r.store_id][wt].length<=r.emp_index)
-              pats[r.store_id][wt].push(Array(7).fill(null));
-            pats[r.store_id][wt][r.emp_index]=r.row_data;
+            while(ver[wt].length<=r.emp_index) ver[wt].push(Array(7).fill(null));
+            ver[wt][r.emp_index]=r.row_data;
           }
           setPatterns(pats);
         }
@@ -2864,11 +3049,14 @@ function MainApp({currentUser, handleLogout}){
   },[]);
 
   const dbSavePatterns=useCallback(async(pats)=>{
+    // Legacy save pro kompatibilitu – ukládá první verzi do staré tabulky patterns
     const rows=[];
-    for(const [storeIdStr,pat] of Object.entries(pats)){
+    for(const [storeIdStr,versions] of Object.entries(pats)){
       const sid=Number(storeIdStr);
+      const firstVer=Array.isArray(versions)?versions[0]:versions;
+      if(!firstVer) continue;
       for(const wt of ["odd","even","flat"]){
-        const arr=pat[wt]||[];
+        const arr=firstVer[wt]||[];
         arr.forEach((row,idx)=>{
           if(row) rows.push({store_id:sid,week_type:wt,emp_index:idx,row_data:row});
         });
@@ -2876,6 +3064,26 @@ function MainApp({currentUser, handleLogout}){
     }
     await supabase.from("patterns").delete().neq("id",0);
     if(rows.length) await supabase.from("patterns").insert(rows);
+  },[]);
+
+  // Uloží jednu konkrétní verzi vzoru do pattern_versions
+  const dbSavePatternVersion=useCallback(async(storeId,validFrom,ver)=>{
+    // Smaž všechny řádky pro tuto verzi (store_id + valid_from)
+    await supabase.from("pattern_versions")
+      .delete().eq("store_id",storeId).eq("valid_from",validFrom);
+    const rows=[];
+    for(const wt of ["odd","even","flat"]){
+      (ver[wt]||[]).forEach((row,idx)=>{
+        if(row) rows.push({store_id:storeId,valid_from:validFrom,week_type:wt,emp_index:idx,row_data:row,note:ver.note||""});
+      });
+    }
+    if(rows.length) await supabase.from("pattern_versions").insert(rows);
+  },[]);
+
+  // Smaže celou verzi vzoru z pattern_versions
+  const dbDeletePatternVersion=useCallback(async(storeId,validFrom)=>{
+    await supabase.from("pattern_versions")
+      .delete().eq("store_id",storeId).eq("valid_from",validFrom);
   },[]);
 
   const dbSaveSchedCell=useCallback(async(key,segs,empList)=>{
@@ -2970,6 +3178,31 @@ function MainApp({currentUser, handleLogout}){
       return next;
     });
   },[dbSavePatterns]);
+
+  // Uloží konkrétní verzi a aktualizuje state
+  const savePatternVersion=useCallback((storeId,validFrom,ver)=>{
+    setPatterns(prev=>{
+      const versions=[...(prev[storeId]||[])];
+      const idx=versions.findIndex(v=>v.validFrom===validFrom);
+      if(idx>=0) versions[idx]={...versions[idx],...ver,validFrom};
+      else versions.push({...ver,validFrom});
+      versions.sort((a,b)=>a.validFrom.localeCompare(b.validFrom));
+      const next={...prev,[storeId]:versions};
+      dbSavePatternVersion(storeId,validFrom,ver);
+      return next;
+    });
+  },[dbSavePatternVersion]);
+
+  // Smaže verzi ze state i DB (zabrání smazání jediné verze)
+  const deletePatternVersion=useCallback((storeId,validFrom)=>{
+    setPatterns(prev=>{
+      const versions=(prev[storeId]||[]).filter(v=>v.validFrom!==validFrom);
+      if(versions.length===0) return prev; // nesmažeme poslední verzi
+      const next={...prev,[storeId]:versions};
+      dbDeletePatternVersion(storeId,validFrom);
+      return next;
+    });
+  },[dbDeletePatternVersion]);
 
   // Knihovny jsou načteny v index.html ve správném pořadí – nic nedělat
   // XLSX, ExcelJS, jsPDF, jspdf-autotable jsou dostupné jako window.XLSX atd.
@@ -3372,32 +3605,6 @@ ${d}${hol?"!":"."}`;
     const storeName = stores.find(s=>s.id===storeId)?.name||"";
     const dim = getDim(year,month);
     const mainEmps = employees.filter(e=>e.active&&empMainStore(e,year,month,transfers)===storeId&&isEmpActiveInMonth(e,year,month));
-
-    // Sdílení zaměstnanci – stejná logika jako v ScheduleView
-    const mirrorEmps = employees.filter(e=>{
-      if(!e.active||empMainStore(e,year,month,transfers)===storeId) return false;
-      if(!(e.extraStores||[]).includes(storeId)) return false;
-      const mainStoreEmps=employees.filter(x=>x.active&&x.mainStore===e.mainStore);
-      const empIdx=mainStoreEmps.findIndex(x=>x.id===e.id);
-      for(let d=1;d<=dim;d++){
-        const date=new Date(year,month,d);
-        const dateStr=fmtDate(year,month,d);
-        const cell=getSchedCell(sched,e.id,dateStr,employees);
-        if(cell?.length){
-          const hasSegHere=cell.some(s=>s.type==="work"&&(s.locationStoreId||s.loc||e.mainStore)===storeId);
-          if(hasSegHere) return true;
-        }
-        const patCell=getPatCell(patterns,e.mainStore,empIdx,date);
-        if(patCell){
-          const locId=typeof patCell==="object"?(patCell.loc||e.mainStore):e.mainStore;
-          if(locId===storeId) return true;
-        }
-      }
-      return false;
-    });
-
-    const allEmps=[...mainEmps,...mirrorEmps];
-
     const doc = new jsPDF({orientation:"portrait",unit:"mm",format:"a4"});
     const pageW=210; const pageH=297;
     const mL=8; const mR=8; const mT=8; const mB=6;
@@ -3424,55 +3631,36 @@ ${d}${hol?"!":"."}`;
       return [26,26,46];
     };
 
-    // Helper: sestaví label buňky pro daného zaměstnance a den
-    const buildEmpDayLabel=(emp,d,isShared)=>{
-      const date=new Date(year,month,d);
-      const dow=getDow(year,month,d);
-      const ds=fmtDate(year,month,d);
-      const hol=holidays.find(h=>h.date===ds);
-      const cell=getSchedCell(sched,emp.id,ds,employees);
-      let label="";
-      if(cell?.length){
-        const ws2=cell.filter(s=>s.type==="work");
-        if(isShared){
-          // Sdílený: zobraz jen směny v této prodejně
-          const ws2here=ws2.filter(s=>(s.locationStoreId||s.loc||emp.mainStore)===storeId);
-          if(ws2here.length) label=ws2here.map(s=>s.from&&s.to?shiftLabel(s.from,s.to):"Pr").join("/");
-          else if(!ws2.length){ const ab=cell[0]; label=TYPE_SHORT[ab.type]||"V"; }
-          // jinak prázdné = není v této prodejně
-        } else {
+    // Data pro vsechny dny
+    const empDays=mainEmps.map(emp=>{
+      const empIdx=mainEmps.findIndex(e=>e.id===emp.id);
+      const days=[];
+      for(let d=1;d<=dim;d++){
+        const date=new Date(year,month,d);
+        const dow=getDow(year,month,d);
+        const ds=fmtDate(year,month,d);
+        const hol=holidays.find(h=>h.date===ds);
+        const cell=getSchedCell(sched,emp.id,ds,employees);
+        let label="";
+        if(cell?.length){
+          const ws2=cell.filter(s=>s.type==="work");
           if(ws2.length) label=ws2.map(s=>s.from&&s.to?shiftLabel(s.from,s.to):"Pr").join("/");
           else { const ab=cell[0]; label=TYPE_SHORT[ab.type]||"V"; }
-        }
-      } else {
-        // Ze vzoru
-        const mainStoreEmps=employees.filter(x=>x.active&&x.mainStore===emp.mainStore);
-        const empIdx=mainStoreEmps.findIndex(x=>x.id===emp.id);
-        const patLookupStore=isShared?emp.mainStore:storeId;
-        const pc=getPatCell(patterns,patLookupStore,empIdx,date);
-        if(!pc){ label=dow>=5?"":"V"; }
-        else if(pc==="work"||typeof pc==="object"){
-          const st=typeof pc==="object"?pc.shift||"work":pc;
-          const lId=typeof pc==="object"?(pc.loc||emp.mainStore):emp.mainStore;
-          // Sdílený: zobraz jen pokud vzor říká tuto prodejnu
-          if(isShared&&lId!==storeId){ label=""; }
-          else {
+        } else {
+          const pc=getPatCell(patterns,storeId,empIdx,date);
+          if(!pc){ label=dow>=5?"":"V"; }
+          else if(pc==="work"||typeof pc==="object"){
+            const st=typeof pc==="object"?pc.shift||"work":pc;
+            const lId=typeof pc==="object"?(pc.loc||storeId):storeId;
             const[fr,to]=getEmpShiftTimes(emp,lId,st,dow,stores,typeof pc==="object"?pc:null,hol);
             if(fr&&to) label=shiftLabel(fr,to);
-          }
-        } else { label=pc==="vacation"?"DOV":pc==="sick"?"NEM":"V"; }
+          } else { label=pc==="vacation"?"DOV":pc==="sick"?"NEM":"V"; }
+        }
+        if(hol&&!hol.open&&!["DOV","NEM"].includes(label)) label="SZ";
+        if(hol&&hol.open&&!label) label="SO";
+        days.push({label,dow,d,hol});
       }
-      if(hol&&!hol.open&&!["DOV","NEM"].includes(label)&&label) label="SZ";
-      if(hol&&hol.open&&!label) label="SO";
-      return {label,dow,d,hol};
-    };
-
-    // Data pro vsechny dny
-    const empDays=allEmps.map(emp=>{
-      const isShared=mirrorEmps.some(e=>e.id===emp.id);
-      const days=[];
-      for(let d=1;d<=dim;d++) days.push(buildEmpDayLabel(emp,d,isShared));
-      return {emp,days,isShared};
+      return {emp,days};
     });
 
     // Generuj tydny
@@ -3497,7 +3685,7 @@ ${d}${hol?"!":"."}`;
     const hdrH=8;
     const available=pageH-mT-mB-pageHeaderH-legendH-(weeks.length-1)*gapH;
     const oneWeekH=available/weeks.length;
-    const rowH=(oneWeekH-weekLabelH-hdrH)/allEmps.length;
+    const rowH=(oneWeekH-weekLabelH-hdrH)/mainEmps.length;
     // Fonty podle rowH
     const fNameSize=Math.min(6.5, rowH*1.2);
     const fCellSize=Math.min(6, rowH*1.1);
@@ -3508,8 +3696,7 @@ ${d}${hol?"!":"."}`;
     doc.text(cz(`Rozvrh – ${storeName} – ${MONTHS[month]} ${year}`), mL, mT+5);
     doc.setFont("helvetica","normal"); doc.setFontSize(6.5); doc.setTextColor(90,90,110);
     const wd=getWorkingDays(year,month,holidays);
-    const sharedCount=mirrorEmps.length;
-    doc.text(cz(`${wd} pracovnich dni  |  fond ${wd*8}h  |  ${mainEmps.length} kmenovych${sharedCount>0?` + ${sharedCount} sdilenych`:""} zamestnancu`), mL, mT+10);
+    doc.text(cz(`${wd} pracovnich dni  |  fond ${wd*8}h  |  ${mainEmps.length} zamestnancu`), mL, mT+10);
     doc.setDrawColor(190,192,210);
     doc.line(mL, mT+11.5, pageW-mR, mT+11.5);
 
@@ -3563,20 +3750,14 @@ ${d}${hol?"!":"."}`;
       curY+=hdrH;
 
       // Radky zamestnancu
-      empDays.forEach(({emp,days,isShared},ri)=>{
+      empDays.forEach(({emp,days},ri)=>{
         const y=curY+ri*rowH;
-        // Sdílení zaměstnanci mají světle modré pozadí jména
-        const nameBg=isShared
-          ? (ri%2===0?[232,240,255]:[220,232,255])
-          : (ri%2===0?[255,255,255]:[248,249,253]);
+        const altBg=ri%2===0?[255,255,255]:[248,249,253];
         // Jmeno
-        doc.setFillColor(nameBg[0],nameBg[1],nameBg[2]);
+        doc.setFillColor(altBg[0],altBg[1],altBg[2]);
         doc.rect(mL, y, nameW, rowH, "F");
-        doc.setFont("helvetica",isShared?"normal":"bold");
-        doc.setFontSize(fNameSize);
-        doc.setTextColor(isShared?30:26,isShared?80:26,isShared?180:46);
-        const nameLabel=cz(`${emp.lastName} ${emp.firstName}`).substring(0,20);
-        doc.text(nameLabel+(isShared?" *":""), mL+2, y+rowH*0.65);
+        doc.setFont("helvetica","bold"); doc.setFontSize(fNameSize); doc.setTextColor(26,26,46);
+        doc.text(cz(`${emp.lastName} ${emp.firstName}`).substring(0,20), mL+2, y+rowH*0.65);
         // 7 dnu
         for(let di=0;di<7;di++){
           const d=wDays[di];
@@ -3589,39 +3770,30 @@ ${d}${hol?"!":"."}`;
             const{label,dow}=days[d-1];
             const bg=cellBg(label,dow);
             const tc=cellTc(label,dow);
-            // Sdílený bez směny v této prodejně – šedá buňka
-            if(isShared&&!label){
-              doc.setFillColor(242,242,248);
-              doc.rect(x, y, dayW, rowH, "F");
-            } else {
-              doc.setFillColor(bg[0],bg[1],bg[2]);
-              doc.rect(x, y, dayW, rowH, "F");
-              if(label){
-                doc.setTextColor(tc[0],tc[1],tc[2]);
-                doc.setFont("helvetica",label.includes("–")?"bold":"normal");
-                doc.setFontSize(fCellSize);
-                doc.text(label, x+dayW/2, y+rowH*0.65, {align:"center"});
-              }
+            doc.setFillColor(bg[0],bg[1],bg[2]);
+            doc.rect(x, y, dayW, rowH, "F");
+            if(label){
+              doc.setTextColor(tc[0],tc[1],tc[2]);
+              doc.setFont("helvetica",label.includes("–")?"bold":"normal");
+              doc.setFontSize(fCellSize);
+              doc.text(label, x+dayW/2, y+rowH*0.65, {align:"center"});
             }
           }
         }
-        // Horizontalni linka – silnější před sdílenými zaměstnanci (oddělovač)
-        const isFirstShared=isShared&&(ri===0||!empDays[ri-1].isShared);
-        doc.setDrawColor(isFirstShared?100:218, isFirstShared?130:220, isFirstShared?200:230);
-        doc.setLineWidth(isFirstShared?0.4:0.2);
+        // Horizontalni linka
+        doc.setDrawColor(218,220,230);
         doc.line(mL, y+rowH, mL+usableW, y+rowH);
-        doc.setLineWidth(0.2);
       });
 
       // Ohraniceni tydne
-      const tblH=hdrH+allEmps.length*rowH;
+      const tblH=hdrH+mainEmps.length*rowH;
       doc.setDrawColor(85,88,118);
       doc.rect(mL, curY-hdrH, usableW, tblH);
       doc.setDrawColor(155,158,190);
       doc.line(mL+nameW, curY-hdrH, mL+nameW, curY-hdrH+tblH);
       doc.setDrawColor(212,214,228);
       for(let di=1;di<7;di++) doc.line(mL+nameW+di*dayW, curY-hdrH, mL+nameW+di*dayW, curY-hdrH+tblH);
-      curY+=allEmps.length*rowH;
+      curY+=mainEmps.length*rowH;
     });
 
     // Legenda
@@ -3641,18 +3813,13 @@ ${d}${hol?"!":"."}`;
       doc.text(l, lx+4, curY+2.3);
       lx+=doc.getTextWidth(l)+9;
     });
-    // Poznamka ke sdilenym zamestnancum
-    if(mirrorEmps.length>0){
-      doc.setFont("helvetica","normal"); doc.setFontSize(5); doc.setTextColor(30,80,180);
-      doc.text(cz(`* sdileny zamestnanec (kmenova prodejna: jina)`), lx+4, curY+2.3);
-    }
 
     // === STRANA 2: PREHLED HODIN ===
     doc.addPage();
     doc.setFont("helvetica","bold"); doc.setFontSize(12); doc.setTextColor(26,26,46);
     doc.text(cz(`Prehled hodin – ${storeName} – ${MONTHS[month]} ${year}`), mL, mT+6);
     doc.setFont("helvetica","normal"); doc.setFontSize(7.5); doc.setTextColor(90,90,110);
-    doc.text(cz(`${wd} pracovnich dni  |  fond ${wd*8}h  |  ${mainEmps.length} kmenovych${mirrorEmps.length>0?` + ${mirrorEmps.length} sdilenych`:""} zamestnancu`), mL, mT+12);
+    doc.text(cz(`${wd} pracovnich dni  |  fond ${wd*8}h  |  ${mainEmps.length} zamestnancu`), mL, mT+12);
     doc.setDrawColor(190,192,210);
     doc.line(mL, mT+14, pageW-mR, mT+14);
 
@@ -3916,7 +4083,8 @@ ${d}${hol?"!":"."}`;
         {isVedouci
           ? <><h2 style={{margin:"0 0 20px 0",fontSize:20,fontWeight:800,color:C.topbar}}>Nastavení</h2>
               <SettingsView holidays={holidays} setHolidays={setHolidaysDB} actions={actions} setActions={setActionsDB}
-                stores={stores} setStores={setStoresDB} employees={employees} patterns={patterns} setPatterns={setPatternsDB}/></>
+                stores={stores} setStores={setStoresDB} employees={employees} patterns={patterns} setPatterns={setPatternsDB}
+                savePatternVersion={savePatternVersion} deletePatternVersion={deletePatternVersion}/></>
           : <div style={{textAlign:"center",padding:"60px 0",color:"#bbb",fontSize:16}}>🔒 Přístup pouze pro vedoucí</div>}
       </div>}
 
