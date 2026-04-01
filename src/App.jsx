@@ -91,16 +91,9 @@ function cz(s){ return String(s)
   .replace(/[ťŤ]/g,"t").replace(/[žŽ]/g,"z").replace(/[ľĽ]/g,"l")
   .replace(/[ôÔ]/g,"o").replace(/[ä]/g,"a").replace(/[ö]/g,"o");
 }
-// Zajistí velké první písmeno každého slova (pro PDF)
-function capitalize(s){ return String(s||"").replace(/\b\w/g,c=>c.toUpperCase()); }
-// Jméno pro PDF: každé slovo začíná velkým písmenem, celé bez diakritiky
-function capName(s){ return cz(capitalize(String(s||""))); }
-
 const DOW_LBL = ["Po","Út","St","Čt","Pá","So","Ne"];
 const MONTHS = ["Leden","Únor","Březen","Duben","Květen","Červen","Červenec","Srpen","Září","Říjen","Listopad","Prosinec"];
 
-// Výchozí min. počet odpracovaných hodin pro nárok na stravenku
-const DEFAULT_MEAL_TICKET_MIN_HOURS = 5;
 const HALF_HOURS = [];
 for(let h=0;h<24;h++) for(let m=0;m<60;m+=30)
   HALF_HOURS.push(`${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")}`);
@@ -1284,7 +1277,7 @@ function ScheduleView({storeId,employees,year,month,sched,onCellEdit,actions,hol
 }
 
 // ─── SETTINGS ────────────────────────────────────────────────
-function SettingsView({holidays,setHolidays,actions,setActions,stores,setStores,employees,patterns,setPatterns,appSettings,setAppSettings}){
+function SettingsView({holidays,setHolidays,actions,setActions,stores,setStores,employees,patterns,setPatterns}){
   const [section,setSection]=useState("pattern");
   const [editHol,setEditHol]=useState(null);
   const [showActModal,setShowActModal]=useState(false);
@@ -1295,7 +1288,6 @@ function SettingsView({holidays,setHolidays,actions,setActions,stores,setStores,
   const secs=[
     {key:"pattern", label:"📋 Rozvrh VZOR"},
     {key:"breaks",  label:"⏱️ Přestávky"},
-    {key:"stravenky", label:"🍽️ Stravenky"},
     {key:"holidays",label:"🗓️ Státní svátky"},
     {key:"actions", label:"🎯 Akce"},
   ];
@@ -1356,35 +1348,6 @@ function SettingsView({holidays,setHolidays,actions,setActions,stores,setStores,
               }}/>
             </div>}
           </div>)}
-        </div>
-      </div>}
-
-      {section==="stravenky"&&<div>
-        <div style={{fontWeight:800,fontSize:16,marginBottom:8,color:C.topbar}}>Nastavení stravenek</div>
-        <div style={{fontSize:13,color:"#888",marginBottom:20,padding:"10px 14px",background:"#f8f9ff",borderRadius:8,lineHeight:1.7}}>
-          Nastavte minimální počet odpracovaných hodin za den pro vznik nároku na stravenku.<br/>
-          Výchozí hodnota je <strong>5 hodin</strong>.
-        </div>
-        <div style={{background:"#fff",border:`1.5px solid ${C.border}`,borderRadius:10,padding:"20px 24px",maxWidth:420}}>
-          <label style={{display:"block",fontSize:12,fontWeight:700,color:"#888",textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:10}}>
-            Minimální hodiny pro nárok na stravenku
-          </label>
-          <div style={{display:"flex",alignItems:"center",gap:14}}>
-            <input
-              type="number"
-              min={1} max={12} step={0.5}
-              value={appSettings?.mealTicketMinHours ?? 5}
-              onChange={e=>{
-                const v=Math.max(0.5,Math.min(12,parseFloat(e.target.value)||5));
-                setAppSettings("mealTicketMinHours",v);
-              }}
-              style={{width:100,padding:"9px 12px",borderRadius:8,border:`1.5px solid ${C.border}`,fontSize:18,fontWeight:700,color:C.topbar,textAlign:"center"}}
-            />
-            <span style={{fontSize:15,color:"#555",fontWeight:600}}>hodin</span>
-          </div>
-          <div style={{marginTop:12,fontSize:12,color:"#aaa"}}>
-            Zaměstnanec odpracuje alespoň <strong>{appSettings?.mealTicketMinHours ?? 5}h</strong> → nárok na 1 stravenku.
-          </div>
         </div>
       </div>}
 
@@ -1679,7 +1642,7 @@ function EmployeesView({employees,setEmployees,stores,transfers=[],setTransfers}
 }
 
 // ─── TIMESHEET ───────────────────────────────────────────────
-function TimesheetView({employee, year, month, holidays, stores, sched, employees, patterns, rows, onRowChange, timesheetData, onKdpPaidChange, canEditKdp=true, tsStatus="draft", onSubmit, onApprove, onReturn, isVedouci=false, mealTicketMinHours=5}){
+function TimesheetView({employee, year, month, holidays, stores, sched, employees, patterns, rows, onRowChange, timesheetData, onKdpPaidChange, canEditKdp=true, tsStatus="draft", onSubmit, onApprove, onReturn, isVedouci=false}){
   const dim = getDim(year, month);
   const brRules = getBreakRules(employee.mainStore, stores);
   const fund = getEmpFund(employee, year, month, holidays);
@@ -1871,8 +1834,8 @@ function TimesheetView({employee, year, month, holidays, stores, sched, employee
     totOcr+=oc; totOther+=otc;
     if(wc>0&&dow===5) soH+=wc;
     if(wc>0&&dow===6) neH+=wc;
-    // Stravenka: ≥mealTicketMinHours odpracováno bez ohledu na typ (včetně "extra" mimo rozvrh)
-    if(worked>=mealTicketMinHours) tix++;
+    // Stravenka: ≥5h odpracováno bez ohledu na typ (včetně "extra" mimo rozvrh)
+    if(worked>=5) tix++;
     const admin = row.admin ? Number(row.admin) : 0;
     const roz1  = row.roz1  ? Number(row.roz1)  : 0;
     const roz2  = row.roz2  ? Number(row.roz2)  : 0;
@@ -2036,7 +1999,7 @@ function TimesheetView({employee, year, month, holidays, stores, sched, employee
     // ── Záhlaví ──
     doc.setFont("helvetica","bold");
     doc.setFontSize(13);
-    doc.text(cz(`Výkaz práce – ${capitalize(employee.lastName)} ${capitalize(employee.firstName)}`), marginL, 14);
+    doc.text(cz(`Výkaz práce – ${employee.lastName} ${employee.firstName}`), marginL, 14);
     doc.setFont("helvetica","normal");
     doc.setFontSize(8);
     doc.text(cz(`${MONTHS[month]} ${year}  |  Fond: ${fund}h  |  Prodejna: ${storeName}  |  Role: ${employee.role}`), marginL, 20);
@@ -2200,7 +2163,7 @@ function TimesheetView({employee, year, month, holidays, stores, sched, employee
     doc.line(podpisX + podpisLabelW + 1, pageH - 14, pageW - marginL, pageH - 14);
     doc.setFontSize(7);
     doc.setTextColor(160,160,160);
-    doc.text(cz(`${capitalize(employee.lastName)} ${capitalize(employee.firstName)}`), podpisX + podpisLabelW + 1, pageH - 10);
+    doc.text(cz(`${employee.lastName} ${employee.firstName}`), podpisX + podpisLabelW + 1, pageH - 10);
 
     doc.save(`Vykaz_${employee.firstName}_${employee.lastName}_${MONTHS[month]}_${year}.pdf`);
   };
@@ -2422,20 +2385,15 @@ function TimesheetView({employee, year, month, holidays, stores, sched, employee
           <div style={{background:"#fff3e0",borderRadius:8,padding:"10px 12px",textAlign:"center"}}>
             <div style={{fontSize:9,fontWeight:700,color:"#e65100",textTransform:"uppercase",marginBottom:6}}>KPD proplaceno (vedoucí)</div>
             {canEditKdp
-              ? <input
-                  type="number"
-                  min={0}
-                  step={0.5}
+              ? <select
                   value={kpdPaidThis}
-                  onChange={e=>{
-                    const raw=e.target.value;
-                    if(raw===""||raw==="-") return;
-                    const v=parseFloat(raw);
-                    if(isNaN(v)||v<0) return;
-                    onKdpPaidChange(v);
-                  }}
-                  style={{padding:"5px 8px",borderRadius:6,border:"1.5px solid #ffcc80",fontSize:14,fontWeight:700,color:"#e65100",background:"#fff",width:"100%",textAlign:"center",boxSizing:"border-box"}}
-                />
+                  onChange={e=>onKdpPaidChange(Number(e.target.value))}
+                  style={{padding:"5px 8px",borderRadius:6,border:`1.5px solid #ffcc80`,fontSize:14,fontWeight:700,color:"#e65100",background:"#fff",width:"100%",textAlign:"center"}}
+                >
+                  {[0,0.5,1,1.5,2,2.5,3,3.5,4,4.5,5,6,7,8,9,10,12,14,16,20,24,32,40].map(v=>(
+                    <option key={v} value={v}>{v===0?"— (nic)":v%1===0?`${v}h`:`${v}h`}</option>
+                  ))}
+                </select>
               : <div style={{fontSize:16,fontWeight:800,color:"#e65100",padding:"4px 0"}}>
                   {kpdPaidThis===0?"— (nic)":kpdPaidThis%1===0?`${kpdPaidThis}h`:`${kpdPaidThis}h`}
                 </div>
@@ -2766,7 +2724,6 @@ function MainApp({currentUser, handleLogout}){
   const [saving,setSaving]=useState(false);
   const [showResetConfirm,setShowResetConfirm]=useState(false);
   const [showResetTsConfirm,setShowResetTsConfirm]=useState(false);
-  const [appSettings,setAppSettings]=useState({mealTicketMinHours:DEFAULT_MEAL_TICKET_MIN_HOURS});
 
   // Debounce timery pro úspory volání DB
   const saveTimers=useRef({});
@@ -2785,7 +2742,6 @@ function MainApp({currentUser, handleLogout}){
           {data:schedD,   error:e6},
           {data:tsD,      error:e7},
           {data:transD,   error:e8},
-          {data:settD},
         ] = await Promise.all([
           supabase.from("stores").select("*").order("id"),
           supabase.from("employees").select("*").order("id"),
@@ -2795,7 +2751,6 @@ function MainApp({currentUser, handleLogout}){
           supabase.from("schedule").select("*"),
           supabase.from("timesheets").select("*"),
           supabase.from("employee_transfers").select("*").order("effective_date"),
-          supabase.from("app_settings").select("*"),
         ]);
         if(e1||e2||e3) throw new Error((e1||e2||e3).message);
 
@@ -2821,15 +2776,6 @@ function MainApp({currentUser, handleLogout}){
           new_store:r.new_store,
           note:r.note||"",
         })));
-
-        // Globální nastavení aplikace
-        if(settD?.length){
-          const merged={mealTicketMinHours:DEFAULT_MEAL_TICKET_MIN_HOURS};
-          for(const r of settD){
-            if(r.key==="meal_ticket_min_hours") merged.mealTicketMinHours=Number(r.value)||DEFAULT_MEAL_TICKET_MIN_HOURS;
-          }
-          setAppSettings(merged);
-        }
 
         // Vzory
         if(patsD?.length){
@@ -2932,10 +2878,6 @@ function MainApp({currentUser, handleLogout}){
     if(rows.length) await supabase.from("patterns").insert(rows);
   },[]);
 
-  const dbSaveAppSetting=useCallback(async(key,value)=>{
-    await supabase.from("app_settings").upsert({key,value:String(value)},{onConflict:"key"});
-  },[]);
-
   const dbSaveSchedCell=useCallback(async(key,segs,empList)=>{
     // key = "mainStore-empId-date"
     const parts=key.split("-");
@@ -3028,11 +2970,6 @@ function MainApp({currentUser, handleLogout}){
       return next;
     });
   },[dbSavePatterns]);
-
-  const setAppSettingsDB=useCallback((key,value)=>{
-    setAppSettings(prev=>({...prev,[key]:value}));
-    debounceSave(`appSetting-${key}`,()=>dbSaveAppSetting(key,value),800);
-  },[dbSaveAppSetting]);
 
   // Knihovny jsou načteny v index.html ve správném pořadí – nic nedělat
   // XLSX, ExcelJS, jsPDF, jspdf-autotable jsou dostupné jako window.XLSX atd.
@@ -3435,6 +3372,32 @@ ${d}${hol?"!":"."}`;
     const storeName = stores.find(s=>s.id===storeId)?.name||"";
     const dim = getDim(year,month);
     const mainEmps = employees.filter(e=>e.active&&empMainStore(e,year,month,transfers)===storeId&&isEmpActiveInMonth(e,year,month));
+
+    // Sdílení zaměstnanci – stejná logika jako v ScheduleView
+    const mirrorEmps = employees.filter(e=>{
+      if(!e.active||empMainStore(e,year,month,transfers)===storeId) return false;
+      if(!(e.extraStores||[]).includes(storeId)) return false;
+      const mainStoreEmps=employees.filter(x=>x.active&&x.mainStore===e.mainStore);
+      const empIdx=mainStoreEmps.findIndex(x=>x.id===e.id);
+      for(let d=1;d<=dim;d++){
+        const date=new Date(year,month,d);
+        const dateStr=fmtDate(year,month,d);
+        const cell=getSchedCell(sched,e.id,dateStr,employees);
+        if(cell?.length){
+          const hasSegHere=cell.some(s=>s.type==="work"&&(s.locationStoreId||s.loc||e.mainStore)===storeId);
+          if(hasSegHere) return true;
+        }
+        const patCell=getPatCell(patterns,e.mainStore,empIdx,date);
+        if(patCell){
+          const locId=typeof patCell==="object"?(patCell.loc||e.mainStore):e.mainStore;
+          if(locId===storeId) return true;
+        }
+      }
+      return false;
+    });
+
+    const allEmps=[...mainEmps,...mirrorEmps];
+
     const doc = new jsPDF({orientation:"portrait",unit:"mm",format:"a4"});
     const pageW=210; const pageH=297;
     const mL=8; const mR=8; const mT=8; const mB=6;
@@ -3461,36 +3424,55 @@ ${d}${hol?"!":"."}`;
       return [26,26,46];
     };
 
-    // Data pro vsechny dny
-    const empDays=mainEmps.map(emp=>{
-      const empIdx=mainEmps.findIndex(e=>e.id===emp.id);
-      const days=[];
-      for(let d=1;d<=dim;d++){
-        const date=new Date(year,month,d);
-        const dow=getDow(year,month,d);
-        const ds=fmtDate(year,month,d);
-        const hol=holidays.find(h=>h.date===ds);
-        const cell=getSchedCell(sched,emp.id,ds,employees);
-        let label="";
-        if(cell?.length){
-          const ws2=cell.filter(s=>s.type==="work");
+    // Helper: sestaví label buňky pro daného zaměstnance a den
+    const buildEmpDayLabel=(emp,d,isShared)=>{
+      const date=new Date(year,month,d);
+      const dow=getDow(year,month,d);
+      const ds=fmtDate(year,month,d);
+      const hol=holidays.find(h=>h.date===ds);
+      const cell=getSchedCell(sched,emp.id,ds,employees);
+      let label="";
+      if(cell?.length){
+        const ws2=cell.filter(s=>s.type==="work");
+        if(isShared){
+          // Sdílený: zobraz jen směny v této prodejně
+          const ws2here=ws2.filter(s=>(s.locationStoreId||s.loc||emp.mainStore)===storeId);
+          if(ws2here.length) label=ws2here.map(s=>s.from&&s.to?shiftLabel(s.from,s.to):"Pr").join("/");
+          else if(!ws2.length){ const ab=cell[0]; label=TYPE_SHORT[ab.type]||"V"; }
+          // jinak prázdné = není v této prodejně
+        } else {
           if(ws2.length) label=ws2.map(s=>s.from&&s.to?shiftLabel(s.from,s.to):"Pr").join("/");
           else { const ab=cell[0]; label=TYPE_SHORT[ab.type]||"V"; }
-        } else {
-          const pc=getPatCell(patterns,storeId,empIdx,date);
-          if(!pc){ label=dow>=5?"":"V"; }
-          else if(pc==="work"||typeof pc==="object"){
-            const st=typeof pc==="object"?pc.shift||"work":pc;
-            const lId=typeof pc==="object"?(pc.loc||storeId):storeId;
+        }
+      } else {
+        // Ze vzoru
+        const mainStoreEmps=employees.filter(x=>x.active&&x.mainStore===emp.mainStore);
+        const empIdx=mainStoreEmps.findIndex(x=>x.id===emp.id);
+        const patLookupStore=isShared?emp.mainStore:storeId;
+        const pc=getPatCell(patterns,patLookupStore,empIdx,date);
+        if(!pc){ label=dow>=5?"":"V"; }
+        else if(pc==="work"||typeof pc==="object"){
+          const st=typeof pc==="object"?pc.shift||"work":pc;
+          const lId=typeof pc==="object"?(pc.loc||emp.mainStore):emp.mainStore;
+          // Sdílený: zobraz jen pokud vzor říká tuto prodejnu
+          if(isShared&&lId!==storeId){ label=""; }
+          else {
             const[fr,to]=getEmpShiftTimes(emp,lId,st,dow,stores,typeof pc==="object"?pc:null,hol);
             if(fr&&to) label=shiftLabel(fr,to);
-          } else { label=pc==="vacation"?"DOV":pc==="sick"?"NEM":"V"; }
-        }
-        if(hol&&!hol.open&&!["DOV","NEM"].includes(label)) label="SZ";
-        if(hol&&hol.open&&!label) label="SO";
-        days.push({label,dow,d,hol});
+          }
+        } else { label=pc==="vacation"?"DOV":pc==="sick"?"NEM":"V"; }
       }
-      return {emp,days};
+      if(hol&&!hol.open&&!["DOV","NEM"].includes(label)&&label) label="SZ";
+      if(hol&&hol.open&&!label) label="SO";
+      return {label,dow,d,hol};
+    };
+
+    // Data pro vsechny dny
+    const empDays=allEmps.map(emp=>{
+      const isShared=mirrorEmps.some(e=>e.id===emp.id);
+      const days=[];
+      for(let d=1;d<=dim;d++) days.push(buildEmpDayLabel(emp,d,isShared));
+      return {emp,days,isShared};
     });
 
     // Generuj tydny
@@ -3515,7 +3497,7 @@ ${d}${hol?"!":"."}`;
     const hdrH=8;
     const available=pageH-mT-mB-pageHeaderH-legendH-(weeks.length-1)*gapH;
     const oneWeekH=available/weeks.length;
-    const rowH=(oneWeekH-weekLabelH-hdrH)/mainEmps.length;
+    const rowH=(oneWeekH-weekLabelH-hdrH)/allEmps.length;
     // Fonty podle rowH
     const fNameSize=Math.min(6.5, rowH*1.2);
     const fCellSize=Math.min(6, rowH*1.1);
@@ -3526,7 +3508,8 @@ ${d}${hol?"!":"."}`;
     doc.text(cz(`Rozvrh – ${storeName} – ${MONTHS[month]} ${year}`), mL, mT+5);
     doc.setFont("helvetica","normal"); doc.setFontSize(6.5); doc.setTextColor(90,90,110);
     const wd=getWorkingDays(year,month,holidays);
-    doc.text(cz(`${wd} pracovnich dni  |  fond ${wd*8}h  |  ${mainEmps.length} zamestnancu`), mL, mT+10);
+    const sharedCount=mirrorEmps.length;
+    doc.text(cz(`${wd} pracovnich dni  |  fond ${wd*8}h  |  ${mainEmps.length} kmenovych${sharedCount>0?` + ${sharedCount} sdilenych`:""} zamestnancu`), mL, mT+10);
     doc.setDrawColor(190,192,210);
     doc.line(mL, mT+11.5, pageW-mR, mT+11.5);
 
@@ -3580,14 +3563,20 @@ ${d}${hol?"!":"."}`;
       curY+=hdrH;
 
       // Radky zamestnancu
-      empDays.forEach(({emp,days},ri)=>{
+      empDays.forEach(({emp,days,isShared},ri)=>{
         const y=curY+ri*rowH;
-        const altBg=ri%2===0?[255,255,255]:[248,249,253];
+        // Sdílení zaměstnanci mají světle modré pozadí jména
+        const nameBg=isShared
+          ? (ri%2===0?[232,240,255]:[220,232,255])
+          : (ri%2===0?[255,255,255]:[248,249,253]);
         // Jmeno
-        doc.setFillColor(altBg[0],altBg[1],altBg[2]);
+        doc.setFillColor(nameBg[0],nameBg[1],nameBg[2]);
         doc.rect(mL, y, nameW, rowH, "F");
-        doc.setFont("helvetica","bold"); doc.setFontSize(fNameSize); doc.setTextColor(26,26,46);
-        doc.text(cz(`${emp.lastName} ${emp.firstName}`).substring(0,20), mL+2, y+rowH*0.65);
+        doc.setFont("helvetica",isShared?"normal":"bold");
+        doc.setFontSize(fNameSize);
+        doc.setTextColor(isShared?30:26,isShared?80:26,isShared?180:46);
+        const nameLabel=cz(`${emp.lastName} ${emp.firstName}`).substring(0,20);
+        doc.text(nameLabel+(isShared?" *":""), mL+2, y+rowH*0.65);
         // 7 dnu
         for(let di=0;di<7;di++){
           const d=wDays[di];
@@ -3600,30 +3589,39 @@ ${d}${hol?"!":"."}`;
             const{label,dow}=days[d-1];
             const bg=cellBg(label,dow);
             const tc=cellTc(label,dow);
-            doc.setFillColor(bg[0],bg[1],bg[2]);
-            doc.rect(x, y, dayW, rowH, "F");
-            if(label){
-              doc.setTextColor(tc[0],tc[1],tc[2]);
-              doc.setFont("helvetica",label.includes("–")?"bold":"normal");
-              doc.setFontSize(fCellSize);
-              doc.text(label, x+dayW/2, y+rowH*0.65, {align:"center"});
+            // Sdílený bez směny v této prodejně – šedá buňka
+            if(isShared&&!label){
+              doc.setFillColor(242,242,248);
+              doc.rect(x, y, dayW, rowH, "F");
+            } else {
+              doc.setFillColor(bg[0],bg[1],bg[2]);
+              doc.rect(x, y, dayW, rowH, "F");
+              if(label){
+                doc.setTextColor(tc[0],tc[1],tc[2]);
+                doc.setFont("helvetica",label.includes("–")?"bold":"normal");
+                doc.setFontSize(fCellSize);
+                doc.text(label, x+dayW/2, y+rowH*0.65, {align:"center"});
+              }
             }
           }
         }
-        // Horizontalni linka
-        doc.setDrawColor(218,220,230);
+        // Horizontalni linka – silnější před sdílenými zaměstnanci (oddělovač)
+        const isFirstShared=isShared&&(ri===0||!empDays[ri-1].isShared);
+        doc.setDrawColor(isFirstShared?100:218, isFirstShared?130:220, isFirstShared?200:230);
+        doc.setLineWidth(isFirstShared?0.4:0.2);
         doc.line(mL, y+rowH, mL+usableW, y+rowH);
+        doc.setLineWidth(0.2);
       });
 
       // Ohraniceni tydne
-      const tblH=hdrH+mainEmps.length*rowH;
+      const tblH=hdrH+allEmps.length*rowH;
       doc.setDrawColor(85,88,118);
       doc.rect(mL, curY-hdrH, usableW, tblH);
       doc.setDrawColor(155,158,190);
       doc.line(mL+nameW, curY-hdrH, mL+nameW, curY-hdrH+tblH);
       doc.setDrawColor(212,214,228);
       for(let di=1;di<7;di++) doc.line(mL+nameW+di*dayW, curY-hdrH, mL+nameW+di*dayW, curY-hdrH+tblH);
-      curY+=mainEmps.length*rowH;
+      curY+=allEmps.length*rowH;
     });
 
     // Legenda
@@ -3643,13 +3641,18 @@ ${d}${hol?"!":"."}`;
       doc.text(l, lx+4, curY+2.3);
       lx+=doc.getTextWidth(l)+9;
     });
+    // Poznamka ke sdilenym zamestnancum
+    if(mirrorEmps.length>0){
+      doc.setFont("helvetica","normal"); doc.setFontSize(5); doc.setTextColor(30,80,180);
+      doc.text(cz(`* sdileny zamestnanec (kmenova prodejna: jina)`), lx+4, curY+2.3);
+    }
 
     // === STRANA 2: PREHLED HODIN ===
     doc.addPage();
     doc.setFont("helvetica","bold"); doc.setFontSize(12); doc.setTextColor(26,26,46);
     doc.text(cz(`Prehled hodin – ${storeName} – ${MONTHS[month]} ${year}`), mL, mT+6);
     doc.setFont("helvetica","normal"); doc.setFontSize(7.5); doc.setTextColor(90,90,110);
-    doc.text(cz(`${wd} pracovnich dni  |  fond ${wd*8}h  |  ${mainEmps.length} zamestnancu`), mL, mT+12);
+    doc.text(cz(`${wd} pracovnich dni  |  fond ${wd*8}h  |  ${mainEmps.length} kmenovych${mirrorEmps.length>0?` + ${mirrorEmps.length} sdilenych`:""} zamestnancu`), mL, mT+12);
     doc.setDrawColor(190,192,210);
     doc.line(mL, mT+14, pageW-mR, mT+14);
 
@@ -3742,7 +3745,7 @@ ${d}${hol?"!":"."}`;
     );
     return me ? [me] : [];
   })();
-  const eOpts=[{value:"",label:"— vyberte zaměstnance —"},...[...tsEmpList].sort((a,b)=>(a.lastName+a.firstName).localeCompare(b.lastName+b.firstName,"cs")).map(e=>({value:e.id,label:`${e.lastName} ${e.firstName}`}))];
+  const eOpts=[{value:"",label:"— vyberte zaměstnance —"},...tsEmpList.map(e=>({value:e.id,label:`${e.lastName} ${e.firstName}`}))];
   const tabs=[
     {key:"schedule",  label:"📅 Rozvrh"},
     {key:"timesheet", label:"📋 Výkaz"},
@@ -3893,7 +3896,6 @@ ${d}${hol?"!":"."}`;
             onSubmit={handleSubmit}
             onApprove={handleApprove}
             onReturn={handleReturn}
-            mealTicketMinHours={appSettings.mealTicketMinHours}
             onKdpPaidChange={isLocked&&!isVedouci?null:async v=>{
               const k2=tsKey(tsEmp,year,month+1);
               setTimesheetData(prev=>({...prev,[k2]:{...(prev[k2]||{}),kpdPaid:v}}));
@@ -3914,8 +3916,7 @@ ${d}${hol?"!":"."}`;
         {isVedouci
           ? <><h2 style={{margin:"0 0 20px 0",fontSize:20,fontWeight:800,color:C.topbar}}>Nastavení</h2>
               <SettingsView holidays={holidays} setHolidays={setHolidaysDB} actions={actions} setActions={setActionsDB}
-                stores={stores} setStores={setStoresDB} employees={employees} patterns={patterns} setPatterns={setPatternsDB}
-                appSettings={appSettings} setAppSettings={setAppSettingsDB}/></>
+                stores={stores} setStores={setStoresDB} employees={employees} patterns={patterns} setPatterns={setPatternsDB}/></>
           : <div style={{textAlign:"center",padding:"60px 0",color:"#bbb",fontSize:16}}>🔒 Přístup pouze pro vedoucí</div>}
       </div>}
 
