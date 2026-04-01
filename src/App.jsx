@@ -86,14 +86,17 @@ const STORE_SHORT = {1:"ST", 2:"BL", 3:"PE"};
 
 // Převod české diakritiky na ASCII pro PDF export (jsPDF helvetica nepodporuje Unicode)
 function cz(s){ return String(s)
-  .replace(/[áÁ]/g,"a").replace(/[éÉ]/g,"e").replace(/[íÍ]/g,"i")
-  .replace(/[óÓ]/g,"o").replace(/[úÚůŮ]/g,"u").replace(/[ýÝ]/g,"y")
-  .replace(/[čČ]/g,"c").replace(/[ďĎ]/g,"d").replace(/[ěĚ]/g,"e")
-  .replace(/[ňŇ]/g,"n").replace(/[řŘ]/g,"r").replace(/[šŠ]/g,"s")
-  .replace(/[ťŤ]/g,"t").replace(/[žŽ]/g,"z").replace(/[ľĽ]/g,"l")
-  .replace(/[ôÔ]/g,"o").replace(/[ä]/g,"a").replace(/[ö]/g,"o");
+  .replace(/[á]/g,"a").replace(/[Á]/g,"A").replace(/[é]/g,"e").replace(/[É]/g,"E")
+  .replace(/[í]/g,"i").replace(/[Í]/g,"I").replace(/[ó]/g,"o").replace(/[Ó]/g,"O")
+  .replace(/[úů]/g,"u").replace(/[ÚŮ]/g,"U").replace(/[ý]/g,"y").replace(/[Ý]/g,"Y")
+  .replace(/[č]/g,"c").replace(/[Č]/g,"C").replace(/[ď]/g,"d").replace(/[Ď]/g,"D")
+  .replace(/[ě]/g,"e").replace(/[Ě]/g,"E").replace(/[ň]/g,"n").replace(/[Ň]/g,"N")
+  .replace(/[ř]/g,"r").replace(/[Ř]/g,"R").replace(/[š]/g,"s").replace(/[Š]/g,"S")
+  .replace(/[ť]/g,"t").replace(/[Ť]/g,"T").replace(/[ž]/g,"z").replace(/[Ž]/g,"Z")
+  .replace(/[ľ]/g,"l").replace(/[Ľ]/g,"L").replace(/[ô]/g,"o").replace(/[Ô]/g,"O")
+  .replace(/[ä]/g,"a").replace(/[ö]/g,"o");
 }
-function capitalize(s){ return String(s||"").replace(/\b\w/g,c=>c.toUpperCase()); }
+function capitalize(s){ return String(s||"").replace(/(^|\s)\S/g,c=>c.toUpperCase()); }
 function capName(s){ return cz(capitalize(String(s||""))); }
 const DOW_LBL = ["Po","Út","St","Čt","Pá","So","Ne"];
 const MONTHS = ["Leden","Únor","Březen","Duben","Květen","Červen","Červenec","Srpen","Září","Říjen","Listopad","Prosinec"];
