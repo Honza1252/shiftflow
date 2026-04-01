@@ -91,9 +91,12 @@ function cz(s){ return String(s)
   .replace(/[ťŤ]/g,"t").replace(/[žŽ]/g,"z").replace(/[ľĽ]/g,"l")
   .replace(/[ôÔ]/g,"o").replace(/[ä]/g,"a").replace(/[ö]/g,"o");
 }
+function capitalize(s){ return String(s||"").replace(/\b\w/g,c=>c.toUpperCase()); }
+function capName(s){ return cz(capitalize(String(s||""))); }
 const DOW_LBL = ["Po","Út","St","Čt","Pá","So","Ne"];
 const MONTHS = ["Leden","Únor","Březen","Duben","Květen","Červen","Červenec","Srpen","Září","Říjen","Listopad","Prosinec"];
 
+const DEFAULT_MEAL_TICKET_MIN_HOURS = 5;
 const HALF_HOURS = [];
 for(let h=0;h<24;h++) for(let m=0;m<60;m+=30)
   HALF_HOURS.push(`${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")}`);
@@ -1804,7 +1807,7 @@ function EmployeesView({employees,setEmployees,stores,transfers=[],setTransfers}
 }
 
 // ─── TIMESHEET ───────────────────────────────────────────────
-function TimesheetView({employee, year, month, holidays, stores, sched, employees, patterns, rows, onRowChange, timesheetData, onKdpPaidChange, canEditKdp=true, tsStatus="draft", onSubmit, onApprove, onReturn, isVedouci=false}){
+function TimesheetView({employee, year, month, holidays, stores, sched, employees, patterns, rows, onRowChange, timesheetData, onKdpPaidChange, canEditKdp=true, tsStatus="draft", onSubmit, onApprove, onReturn, isVedouci=false, mealTicketMinHours=DEFAULT_MEAL_TICKET_MIN_HOURS}){
   const dim = getDim(year, month);
   const brRules = getBreakRules(employee.mainStore, stores);
   const fund = getEmpFund(employee, year, month, holidays);
@@ -1996,8 +1999,8 @@ function TimesheetView({employee, year, month, holidays, stores, sched, employee
     totOcr+=oc; totOther+=otc;
     if(wc>0&&dow===5) soH+=wc;
     if(wc>0&&dow===6) neH+=wc;
-    // Stravenka: ≥5h odpracováno bez ohledu na typ (včetně "extra" mimo rozvrh)
-    if(worked>=5) tix++;
+    // Stravenka: ≥mealTicketMinHours odpracováno bez ohledu na typ (včetně "extra" mimo rozvrh)
+    if(worked>=mealTicketMinHours) tix++;
     const admin = row.admin ? Number(row.admin) : 0;
     const roz1  = row.roz1  ? Number(row.roz1)  : 0;
     const roz2  = row.roz2  ? Number(row.roz2)  : 0;
@@ -2886,6 +2889,7 @@ function MainApp({currentUser, handleLogout}){
   const [saving,setSaving]=useState(false);
   const [showResetConfirm,setShowResetConfirm]=useState(false);
   const [showResetTsConfirm,setShowResetTsConfirm]=useState(false);
+  const [appSettings,setAppSettings]=useState({mealTicketMinHours:DEFAULT_MEAL_TICKET_MIN_HOURS});
 
   // Debounce timery pro úspory volání DB
   const saveTimers=useRef({});
@@ -2905,6 +2909,7 @@ function MainApp({currentUser, handleLogout}){
           {data:tsD,      error:e7},
           {data:transD,   error:e8},
           {data:pvD},
+          {data:settD},
         ] = await Promise.all([
           supabase.from("stores").select("*").order("id"),
           supabase.from("employees").select("*").order("id"),
@@ -2915,6 +2920,7 @@ function MainApp({currentUser, handleLogout}){
           supabase.from("timesheets").select("*"),
           supabase.from("employee_transfers").select("*").order("effective_date"),
           supabase.from("pattern_versions").select("*").order("valid_from"),
+          supabase.from("app_settings").select("*"),
         ]);
         if(e1||e2||e3) throw new Error((e1||e2||e3).message);
 
@@ -2940,6 +2946,15 @@ function MainApp({currentUser, handleLogout}){
           new_store:r.new_store,
           note:r.note||"",
         })));
+
+        // Globální nastavení aplikace
+        if(settD?.length){
+          const merged={mealTicketMinHours:DEFAULT_MEAL_TICKET_MIN_HOURS};
+          for(const r of settD){
+            if(r.key==="meal_ticket_min_hours") merged.mealTicketMinHours=Number(r.value)||DEFAULT_MEAL_TICKET_MIN_HOURS;
+          }
+          setAppSettings(merged);
+        }
 
         // Vzory – načti z pattern_versions (primární), fallback na patterns (legacy)
         if(pvD?.length){
@@ -3605,6 +3620,29 @@ ${d}${hol?"!":"."}`;
     const storeName = stores.find(s=>s.id===storeId)?.name||"";
     const dim = getDim(year,month);
     const mainEmps = employees.filter(e=>e.active&&empMainStore(e,year,month,transfers)===storeId&&isEmpActiveInMonth(e,year,month));
+    const mirrorPdfEmps = employees.filter(e=>{
+      if(!e.active||empMainStore(e,year,month,transfers)===storeId) return false;
+      if(!(e.extraStores||[]).includes(storeId)) return false;
+      const dim2=getDim(year,month);
+      const mainStoreEmps2=employees.filter(x=>x.active&&x.mainStore===e.mainStore);
+      const empIdx2=mainStoreEmps2.findIndex(x=>x.id===e.id);
+      for(let d=1;d<=dim2;d++){
+        const dateStr2=fmtDate(year,month,d);
+        const date2=new Date(year,month,d);
+        const cell2=getSchedCell(sched,e.id,dateStr2,employees);
+        if(cell2?.length){
+          const hasSegHere=cell2.some(s=>s.type==="work"&&(s.locationStoreId||s.loc||e.mainStore)===storeId);
+          if(hasSegHere) return true;
+        }
+        const patCell2=getPatCell(patterns,e.mainStore,empIdx2,date2);
+        if(patCell2){
+          const locId2=typeof patCell2==="object"?(patCell2.loc||e.mainStore):e.mainStore;
+          if(locId2===storeId) return true;
+        }
+      }
+      return false;
+    });
+    const allPdfEmps=[...mainEmps,...mirrorPdfEmps];
     const doc = new jsPDF({orientation:"portrait",unit:"mm",format:"a4"});
     const pageW=210; const pageH=297;
     const mL=8; const mR=8; const mT=8; const mB=6;
@@ -3632,8 +3670,8 @@ ${d}${hol?"!":"."}`;
     };
 
     // Data pro vsechny dny
-    const empDays=mainEmps.map(emp=>{
-      const empIdx=mainEmps.findIndex(e=>e.id===emp.id);
+    const empDays=allPdfEmps.map(emp=>{
+      const empIdx=allPdfEmps.findIndex(e=>e.id===emp.id);
       const days=[];
       for(let d=1;d<=dim;d++){
         const date=new Date(year,month,d);
@@ -3647,11 +3685,11 @@ ${d}${hol?"!":"."}`;
           if(ws2.length) label=ws2.map(s=>s.from&&s.to?shiftLabel(s.from,s.to):"Pr").join("/");
           else { const ab=cell[0]; label=TYPE_SHORT[ab.type]||"V"; }
         } else {
-          const pc=getPatCell(patterns,storeId,empIdx,date);
+          const pc=getPatCell(patterns,emp.mainStore,empIdx,date);
           if(!pc){ label=dow>=5?"":"V"; }
           else if(pc==="work"||typeof pc==="object"){
             const st=typeof pc==="object"?pc.shift||"work":pc;
-            const lId=typeof pc==="object"?(pc.loc||storeId):storeId;
+            const lId=typeof pc==="object"?(pc.loc||emp.mainStore):emp.mainStore;
             const[fr,to]=getEmpShiftTimes(emp,lId,st,dow,stores,typeof pc==="object"?pc:null,hol);
             if(fr&&to) label=shiftLabel(fr,to);
           } else { label=pc==="vacation"?"DOV":pc==="sick"?"NEM":"V"; }
@@ -3685,7 +3723,7 @@ ${d}${hol?"!":"."}`;
     const hdrH=8;
     const available=pageH-mT-mB-pageHeaderH-legendH-(weeks.length-1)*gapH;
     const oneWeekH=available/weeks.length;
-    const rowH=(oneWeekH-weekLabelH-hdrH)/mainEmps.length;
+    const rowH=(oneWeekH-weekLabelH-hdrH)/allPdfEmps.length;
     // Fonty podle rowH
     const fNameSize=Math.min(6.5, rowH*1.2);
     const fCellSize=Math.min(6, rowH*1.1);
@@ -3696,7 +3734,7 @@ ${d}${hol?"!":"."}`;
     doc.text(cz(`Rozvrh – ${storeName} – ${MONTHS[month]} ${year}`), mL, mT+5);
     doc.setFont("helvetica","normal"); doc.setFontSize(6.5); doc.setTextColor(90,90,110);
     const wd=getWorkingDays(year,month,holidays);
-    doc.text(cz(`${wd} pracovnich dni  |  fond ${wd*8}h  |  ${mainEmps.length} zamestnancu`), mL, mT+10);
+    doc.text(cz(`${wd} pracovnich dni  |  fond ${wd*8}h  |  ${allPdfEmps.length} zamestnancu`), mL, mT+10);
     doc.setDrawColor(190,192,210);
     doc.line(mL, mT+11.5, pageW-mR, mT+11.5);
 
@@ -3786,14 +3824,14 @@ ${d}${hol?"!":"."}`;
       });
 
       // Ohraniceni tydne
-      const tblH=hdrH+mainEmps.length*rowH;
+      const tblH=hdrH+allPdfEmps.length*rowH;
       doc.setDrawColor(85,88,118);
       doc.rect(mL, curY-hdrH, usableW, tblH);
       doc.setDrawColor(155,158,190);
       doc.line(mL+nameW, curY-hdrH, mL+nameW, curY-hdrH+tblH);
       doc.setDrawColor(212,214,228);
       for(let di=1;di<7;di++) doc.line(mL+nameW+di*dayW, curY-hdrH, mL+nameW+di*dayW, curY-hdrH+tblH);
-      curY+=mainEmps.length*rowH;
+      curY+=allPdfEmps.length*rowH;
     });
 
     // Legenda
@@ -3819,7 +3857,7 @@ ${d}${hol?"!":"."}`;
     doc.setFont("helvetica","bold"); doc.setFontSize(12); doc.setTextColor(26,26,46);
     doc.text(cz(`Prehled hodin – ${storeName} – ${MONTHS[month]} ${year}`), mL, mT+6);
     doc.setFont("helvetica","normal"); doc.setFontSize(7.5); doc.setTextColor(90,90,110);
-    doc.text(cz(`${wd} pracovnich dni  |  fond ${wd*8}h  |  ${mainEmps.length} zamestnancu`), mL, mT+12);
+    doc.text(cz(`${wd} pracovnich dni  |  fond ${wd*8}h  |  ${allPdfEmps.length} zamestnancu`), mL, mT+12);
     doc.setDrawColor(190,192,210);
     doc.line(mL, mT+14, pageW-mR, mT+14);
 
@@ -3839,8 +3877,8 @@ ${d}${hol?"!":"."}`;
     const fmtH2=h=>h===0?"0h":(h%1===0?`${h}h`:`${h.toFixed(1)}h`);
     const fmtHs=v=>v===null?"—":(v>=0?"+":"")+fmtH2(v||0);
 
-    mainEmps.forEach((emp,ri)=>{
-      const empIdx=mainEmps.findIndex(e=>e.id===emp.id);
+    allPdfEmps.forEach((emp,ri)=>{
+      const empIdx=allPdfEmps.findIndex(e=>e.id===emp.id);
       let planned=0;
       for(let d=1;d<=dim;d++){
         const dow=getDow(year,month,d);
@@ -3885,7 +3923,7 @@ ${d}${hol?"!":"."}`;
       sy+=sRowH;
     });
     doc.setDrawColor(80,85,115);
-    doc.rect(mL, mT+28, totalSW, mainEmps.length*sRowH+9);
+    doc.rect(mL, mT+28, totalSW, allPdfEmps.length*sRowH+9);
 
     doc.save(`Rozvrh_${storeName}_${MONTHS[month]}_${year}.pdf`);
   };
@@ -4060,6 +4098,7 @@ ${d}${hol?"!":"."}`;
             canEditKdp={isVedouci}
             tsStatus={tsStatus}
             isVedouci={isVedouci}
+            mealTicketMinHours={appSettings.mealTicketMinHours}
             onSubmit={handleSubmit}
             onApprove={handleApprove}
             onReturn={handleReturn}
