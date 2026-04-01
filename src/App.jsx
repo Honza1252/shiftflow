@@ -1406,7 +1406,7 @@ function PatternVersionManager({store, employees, patterns, stores, savePatternV
           <div style={{display:"flex",gap:12,flexWrap:"wrap",alignItems:"flex-end"}}>
             <FInput label="Platnost od (1. den měsíce)" type="month" value={newDate} onChange={v=>setNewDate(v)} style={{width:180}}/>
             <FInput label="Název / popis" value={newNote} onChange={v=>setNewNote(v)} placeholder="např. Letní provoz" style={{flex:1,minWidth:160}}/>
-            <div style={{display:"flex",gap:8"}}>
+            <div style={{display:"flex",gap:8}}>
               <Btn onClick={handleAddVersion}>Vytvořit</Btn>
               <Btn variant="secondary" onClick={()=>setShowAddForm(false)}>Zrušit</Btn>
             </div>
