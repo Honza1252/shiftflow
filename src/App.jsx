@@ -1099,10 +1099,13 @@ function ScheduleView({storeId,employees,year,month,sched,onCellEdit,actions,hol
 
   // Sdílení zaměstnanci se zobrazí pokud mají v tomto měsíci alespoň jednu směnu (nebo část směny) v této prodejně
   const mirrorEmps=employees.filter(e=>{
-    if(!e.active||empMainStore(e,year,month,transfers)===storeId) return false;
+    if(!e.active) return false;
+    const empStore=empMainStore(e,year,month,transfers);
+    if(empStore===storeId) return false;  // je hlavní → patří do mainEmps
     if(!(e.extraStores||[]).includes(storeId)) return false;
     const dim=getDim(year,month);
-    const mainStoreEmps=employees.filter(x=>x.active&&x.mainStore===e.mainStore);
+    // empIdx hledáme ve vzoru jeho AKTUÁLNÍ prodejny (ne statické mainStore)
+    const mainStoreEmps=employees.filter(x=>x.active&&empMainStore(x,year,month,transfers)===empStore);
     const empIdx=mainStoreEmps.findIndex(x=>x.id===e.id);
     for(let d=1;d<=dim;d++){
       const date=new Date(year,month,d);
@@ -1110,13 +1113,13 @@ function ScheduleView({storeId,employees,year,month,sched,onCellEdit,actions,hol
       // Zkontroluj ruční zadání – jakýkoli work segment pro tuto prodejnu
       const cell=getSchedCell(sched,e.id,dateStr,employees);
       if(cell?.length){
-        const hasSegHere=cell.some(s=>s.type==="work"&&(s.locationStoreId||s.loc||e.mainStore)===storeId);
+        const hasSegHere=cell.some(s=>s.type==="work"&&(s.locationStoreId||s.loc||empStore)===storeId);
         if(hasSegHere) return true;
       }
-      // Zkontroluj vzor
-      const patCell=getPatCell(patterns,e.mainStore,empIdx,date);
+      // Zkontroluj vzor – hledáme ve vzoru aktuální prodejny zaměstnance
+      const patCell=getPatCell(patterns,empStore,empIdx,date);
       if(patCell){
-        const locId=typeof patCell==="object"?(patCell.loc||e.mainStore):e.mainStore;
+        const locId=typeof patCell==="object"?(patCell.loc||empStore):empStore;
         if(locId===storeId) return true;
       }
     }
@@ -3641,20 +3644,21 @@ ${d}${hol?"!":"."}`;
     const mirrorPdfEmps = employees.filter(e=>{
       if(!e.active||empMainStore(e,year,month,transfers)===storeId) return false;
       if(!(e.extraStores||[]).includes(storeId)) return false;
+      const empStore2=empMainStore(e,year,month,transfers);
       const dim2=getDim(year,month);
-      const mainStoreEmps2=employees.filter(x=>x.active&&x.mainStore===e.mainStore);
+      const mainStoreEmps2=employees.filter(x=>x.active&&empMainStore(x,year,month,transfers)===empStore2);
       const empIdx2=mainStoreEmps2.findIndex(x=>x.id===e.id);
       for(let d=1;d<=dim2;d++){
         const dateStr2=fmtDate(year,month,d);
         const date2=new Date(year,month,d);
         const cell2=getSchedCell(sched,e.id,dateStr2,employees);
         if(cell2?.length){
-          const hasSegHere=cell2.some(s=>s.type==="work"&&(s.locationStoreId||s.loc||e.mainStore)===storeId);
+          const hasSegHere=cell2.some(s=>s.type==="work"&&(s.locationStoreId||s.loc||empStore2)===storeId);
           if(hasSegHere) return true;
         }
-        const patCell2=getPatCell(patterns,e.mainStore,empIdx2,date2);
+        const patCell2=getPatCell(patterns,empStore2,empIdx2,date2);
         if(patCell2){
-          const locId2=typeof patCell2==="object"?(patCell2.loc||e.mainStore):e.mainStore;
+          const locId2=typeof patCell2==="object"?(patCell2.loc||empStore2):empStore2;
           if(locId2===storeId) return true;
         }
       }
