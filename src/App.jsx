@@ -3734,7 +3734,7 @@ ${d}${hol?"!":"."}`;
     doc.text(cz(`Rozvrh – ${storeName} – ${MONTHS[month]} ${year}`), mL, mT+5);
     doc.setFont("helvetica","normal"); doc.setFontSize(6.5); doc.setTextColor(90,90,110);
     const wd=getWorkingDays(year,month,holidays);
-    doc.text(cz(`${wd} pracovnich dni  |  fond ${wd*8}h  |  ${allPdfEmps.length} zamestnancu`), mL, mT+10);
+    doc.text(cz(`${wd} pracovnich dni  |  fond ${wd*8}h  |  ${mainEmps.length} kmenovych + ${mirrorPdfEmps.length} sdilenych zamestnancu`), mL, mT+10);
     doc.setDrawColor(190,192,210);
     doc.line(mL, mT+11.5, pageW-mR, mT+11.5);
 
@@ -3790,12 +3790,23 @@ ${d}${hol?"!":"."}`;
       // Radky zamestnancu
       empDays.forEach(({emp,days},ri)=>{
         const y=curY+ri*rowH;
-        const altBg=ri%2===0?[255,255,255]:[248,249,253];
+        const isMirror=mirrorPdfEmps.some(m=>m.id===emp.id);
+        const altBg=isMirror
+          ? (ri%2===0?[237,237,245]:[230,230,242])
+          : (ri%2===0?[255,255,255]:[248,249,253]);
         // Jmeno
         doc.setFillColor(altBg[0],altBg[1],altBg[2]);
         doc.rect(mL, y, nameW, rowH, "F");
-        doc.setFont("helvetica","bold"); doc.setFontSize(fNameSize); doc.setTextColor(26,26,46);
-        doc.text(cz(`${emp.lastName} ${emp.firstName}`).substring(0,20), mL+2, y+rowH*0.65);
+        doc.setFont("helvetica","bold"); doc.setFontSize(fNameSize);
+        doc.setTextColor(isMirror?[80,80,140]:[26,26,46]); doc.setTextColor(...(isMirror?[80,80,140]:[26,26,46]));
+        const empLabel=cz(`${emp.lastName} ${emp.firstName}${isMirror?" *":""}`).substring(0,22);
+        doc.text(empLabel, mL+2, y+rowH*0.65);
+        // oddelovaci linka pred prvnim sdilenym
+        if(isMirror && (ri===0 || !mirrorPdfEmps.some(m=>m.id===empDays[ri-1]?.emp?.id))){
+          doc.setDrawColor(120,120,180); doc.setLineWidth(0.4);
+          doc.line(mL, y, mL+usableW, y);
+          doc.setLineWidth(0.2);
+        }
         // 7 dnu
         for(let di=0;di<7;di++){
           const d=wDays[di];
@@ -3806,7 +3817,9 @@ ${d}${hol?"!":"."}`;
             doc.rect(x, y, dayW, rowH, "F");
           } else {
             const{label,dow}=days[d-1];
-            const bg=cellBg(label,dow);
+            const bg=isMirror
+              ? (label?cellBg(label,dow).map((c,i)=>Math.round(c*0.93+altBg[i]*0.07)):altBg)
+              : cellBg(label,dow);
             const tc=cellTc(label,dow);
             doc.setFillColor(bg[0],bg[1],bg[2]);
             doc.rect(x, y, dayW, rowH, "F");
@@ -3851,13 +3864,17 @@ ${d}${hol?"!":"."}`;
       doc.text(l, lx+4, curY+2.3);
       lx+=doc.getTextWidth(l)+9;
     });
+    if(mirrorPdfEmps.length>0){
+      doc.setFont("helvetica","bold"); doc.setFontSize(5.5); doc.setTextColor(80,80,140);
+      doc.text("* sdileny zamestnanec (kmenova prodejna: jina)", lx+2, curY+2.3);
+    }
 
     // === STRANA 2: PREHLED HODIN ===
     doc.addPage();
     doc.setFont("helvetica","bold"); doc.setFontSize(12); doc.setTextColor(26,26,46);
     doc.text(cz(`Prehled hodin – ${storeName} – ${MONTHS[month]} ${year}`), mL, mT+6);
     doc.setFont("helvetica","normal"); doc.setFontSize(7.5); doc.setTextColor(90,90,110);
-    doc.text(cz(`${wd} pracovnich dni  |  fond ${wd*8}h  |  ${allPdfEmps.length} zamestnancu`), mL, mT+12);
+    doc.text(cz(`${wd} pracovnich dni  |  fond ${wd*8}h  |  ${mainEmps.length} kmenovych zamestnancu`), mL, mT+12);
     doc.setDrawColor(190,192,210);
     doc.line(mL, mT+14, pageW-mR, mT+14);
 
@@ -3877,8 +3894,8 @@ ${d}${hol?"!":"."}`;
     const fmtH2=h=>h===0?"0h":(h%1===0?`${h}h`:`${h.toFixed(1)}h`);
     const fmtHs=v=>v===null?"—":(v>=0?"+":"")+fmtH2(v||0);
 
-    allPdfEmps.forEach((emp,ri)=>{
-      const empIdx=allPdfEmps.findIndex(e=>e.id===emp.id);
+    mainEmps.forEach((emp,ri)=>{
+      const empIdx=mainEmps.findIndex(e=>e.id===emp.id);
       let planned=0;
       for(let d=1;d<=dim;d++){
         const dow=getDow(year,month,d);
@@ -3923,7 +3940,7 @@ ${d}${hol?"!":"."}`;
       sy+=sRowH;
     });
     doc.setDrawColor(80,85,115);
-    doc.rect(mL, mT+28, totalSW, allPdfEmps.length*sRowH+9);
+    doc.rect(mL, mT+28, totalSW, mainEmps.length*sRowH+9);
 
     doc.save(`Rozvrh_${storeName}_${MONTHS[month]}_${year}.pdf`);
   };
