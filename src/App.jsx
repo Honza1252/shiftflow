@@ -3798,7 +3798,8 @@ ${d}${hol?"!":"."}`;
         doc.setFillColor(altBg[0],altBg[1],altBg[2]);
         doc.rect(mL, y, nameW, rowH, "F");
         doc.setFont("helvetica","bold"); doc.setFontSize(fNameSize);
-        doc.setTextColor(isMirror?[80,80,140]:[26,26,46]); doc.setTextColor(...(isMirror?[80,80,140]:[26,26,46]));
+        const nameTc=isMirror?[80,80,140]:[26,26,46];
+        doc.setTextColor(nameTc[0],nameTc[1],nameTc[2]);
         const empLabel=cz(`${emp.lastName} ${emp.firstName}${isMirror?" *":""}`).substring(0,22);
         doc.text(empLabel, mL+2, y+rowH*0.65);
         // oddelovaci linka pred prvnim sdilenym
