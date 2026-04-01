@@ -351,7 +351,7 @@ function calcVacUsedCumulative(emp, toYear, toMonth, sched, employees){
   // Začni od APP_START (březen 2026) nebo od data nástupu – podle toho co je pozdější
   let y = APP_START.year, m = APP_START.month;
   if(emp.startDate){
-    const sd = new Date(emp.startDate);
+    const sd = parseDateLocal(emp.startDate);
     const sy = sd.getFullYear(), sm = sd.getMonth();
     if(sy > y || (sy === y && sm > m)){ y = sy; m = sm; }
   }
@@ -370,17 +370,20 @@ function calcVacUsedCumulative(emp, toYear, toMonth, sched, employees){
   return vacUsed;
 }
 
+// Parsuje datum string "YYYY-MM-DD" jako lokální čas (ne UTC)
+function parseDateLocal(s){
+  if(!s) return null;
+  const parts = s.split("-").map(Number);
+  if(parts.length!==3||parts.some(isNaN)) return null;
+  return new Date(parts[0], parts[1]-1, parts[2]);
+}
 // Vrátí startDate zaměstnance jako Date objekt nebo null
 function empStartDate(emp){
-  if(!emp.startDate) return null;
-  const d = new Date(emp.startDate);
-  return isNaN(d) ? null : d;
+  return parseDateLocal(emp.startDate);
 }
 // Vrátí endDate zaměstnance jako Date objekt nebo null
 function empEndDate(emp){
-  if(!emp.endDate) return null;
-  const d = new Date(emp.endDate);
-  return isNaN(d) ? null : d;
+  return parseDateLocal(emp.endDate);
 }
 // Vrátí aktuální hlavní prodejnu zaměstnance pro daný měsíc (zohledňuje historii přesunů)
 // transfers = pole [{employee_id, effective_date, new_store}] načtené z DB
@@ -389,12 +392,16 @@ function empMainStore(emp, year, month, transfers){
   // Vezmi první den daného měsíce jako referenční bod
   const refDate = new Date(year, month, 1);
   // Všechny přesuny tohoto zaměstnance před nebo v daném měsíci, seřazené sestupně
+  // DŮLEŽITÉ: effective_date parsujeme jako lokální čas (split na části), ne UTC (new Date(string))
   const empTransfers = transfers
     .filter(t => t.employee_id === emp.id)
-    .map(t => ({...t, date: new Date(t.effective_date)}))
+    .map(t => {
+      const [y,m,d] = t.effective_date.split("-").map(Number);
+      return {...t, date: new Date(y, m-1, d)};
+    })
     .filter(t => t.date <= refDate)
     .sort((a,b) => b.date - a.date);
-  // Poslední přesun před daným měsícem určuje prodejnu
+  // Poslední přesun před nebo v daném měsíci určuje prodejnu
   if(empTransfers.length) return empTransfers[0].new_store;
   return emp.mainStore;
 }
@@ -2621,7 +2628,7 @@ function calcKpdCumulative(emp, toYear, toMonth, sched, holidays, stores, patter
   // Začni od data nástupu zaměstnance (pokud je novější než APP_START)
   let y = APP_START.year, m = APP_START.month;
   if(emp.startDate){
-    const sd = new Date(emp.startDate);
+    const sd = parseDateLocal(emp.startDate);
     const sy = sd.getFullYear(), sm = sd.getMonth();
     if(sy > y || (sy === y && sm > m)){ y = sy; m = sm; }
   }
