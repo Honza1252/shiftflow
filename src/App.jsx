@@ -91,9 +91,16 @@ function cz(s){ return String(s)
   .replace(/[ťŤ]/g,"t").replace(/[žŽ]/g,"z").replace(/[ľĽ]/g,"l")
   .replace(/[ôÔ]/g,"o").replace(/[ä]/g,"a").replace(/[ö]/g,"o");
 }
+// Zajistí velké první písmeno každého slova (pro PDF)
+function capitalize(s){ return String(s||"").replace(/\b\w/g,c=>c.toUpperCase()); }
+// Jméno pro PDF: každé slovo začíná velkým písmenem, celé bez diakritiky
+function capName(s){ return cz(capitalize(String(s||""))); }
+
 const DOW_LBL = ["Po","Út","St","Čt","Pá","So","Ne"];
 const MONTHS = ["Leden","Únor","Březen","Duben","Květen","Červen","Červenec","Srpen","Září","Říjen","Listopad","Prosinec"];
 
+// Výchozí min. počet odpracovaných hodin pro nárok na stravenku
+const DEFAULT_MEAL_TICKET_MIN_HOURS = 5;
 const HALF_HOURS = [];
 for(let h=0;h<24;h++) for(let m=0;m<60;m+=30)
   HALF_HOURS.push(`${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")}`);
@@ -1277,7 +1284,7 @@ function ScheduleView({storeId,employees,year,month,sched,onCellEdit,actions,hol
 }
 
 // ─── SETTINGS ────────────────────────────────────────────────
-function SettingsView({holidays,setHolidays,actions,setActions,stores,setStores,employees,patterns,setPatterns}){
+function SettingsView({holidays,setHolidays,actions,setActions,stores,setStores,employees,patterns,setPatterns,appSettings,setAppSettings}){
   const [section,setSection]=useState("pattern");
   const [editHol,setEditHol]=useState(null);
   const [showActModal,setShowActModal]=useState(false);
@@ -1288,6 +1295,7 @@ function SettingsView({holidays,setHolidays,actions,setActions,stores,setStores,
   const secs=[
     {key:"pattern", label:"📋 Rozvrh VZOR"},
     {key:"breaks",  label:"⏱️ Přestávky"},
+    {key:"stravenky", label:"🍽️ Stravenky"},
     {key:"holidays",label:"🗓️ Státní svátky"},
     {key:"actions", label:"🎯 Akce"},
   ];
@@ -1348,6 +1356,35 @@ function SettingsView({holidays,setHolidays,actions,setActions,stores,setStores,
               }}/>
             </div>}
           </div>)}
+        </div>
+      </div>}
+
+      {section==="stravenky"&&<div>
+        <div style={{fontWeight:800,fontSize:16,marginBottom:8,color:C.topbar}}>Nastavení stravenek</div>
+        <div style={{fontSize:13,color:"#888",marginBottom:20,padding:"10px 14px",background:"#f8f9ff",borderRadius:8,lineHeight:1.7}}>
+          Nastavte minimální počet odpracovaných hodin za den pro vznik nároku na stravenku.<br/>
+          Výchozí hodnota je <strong>5 hodin</strong>.
+        </div>
+        <div style={{background:"#fff",border:`1.5px solid ${C.border}`,borderRadius:10,padding:"20px 24px",maxWidth:420}}>
+          <label style={{display:"block",fontSize:12,fontWeight:700,color:"#888",textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:10}}>
+            Minimální hodiny pro nárok na stravenku
+          </label>
+          <div style={{display:"flex",alignItems:"center",gap:14}}>
+            <input
+              type="number"
+              min={1} max={12} step={0.5}
+              value={appSettings?.mealTicketMinHours ?? 5}
+              onChange={e=>{
+                const v=Math.max(0.5,Math.min(12,parseFloat(e.target.value)||5));
+                setAppSettings("mealTicketMinHours",v);
+              }}
+              style={{width:100,padding:"9px 12px",borderRadius:8,border:`1.5px solid ${C.border}`,fontSize:18,fontWeight:700,color:C.topbar,textAlign:"center"}}
+            />
+            <span style={{fontSize:15,color:"#555",fontWeight:600}}>hodin</span>
+          </div>
+          <div style={{marginTop:12,fontSize:12,color:"#aaa"}}>
+            Zaměstnanec odpracuje alespoň <strong>{appSettings?.mealTicketMinHours ?? 5}h</strong> → nárok na 1 stravenku.
+          </div>
         </div>
       </div>}
 
@@ -1642,7 +1679,7 @@ function EmployeesView({employees,setEmployees,stores,transfers=[],setTransfers}
 }
 
 // ─── TIMESHEET ───────────────────────────────────────────────
-function TimesheetView({employee, year, month, holidays, stores, sched, employees, patterns, rows, onRowChange, timesheetData, onKdpPaidChange, canEditKdp=true, tsStatus="draft", onSubmit, onApprove, onReturn, isVedouci=false}){
+function TimesheetView({employee, year, month, holidays, stores, sched, employees, patterns, rows, onRowChange, timesheetData, onKdpPaidChange, canEditKdp=true, tsStatus="draft", onSubmit, onApprove, onReturn, isVedouci=false, mealTicketMinHours=5}){
   const dim = getDim(year, month);
   const brRules = getBreakRules(employee.mainStore, stores);
   const fund = getEmpFund(employee, year, month, holidays);
@@ -1834,8 +1871,8 @@ function TimesheetView({employee, year, month, holidays, stores, sched, employee
     totOcr+=oc; totOther+=otc;
     if(wc>0&&dow===5) soH+=wc;
     if(wc>0&&dow===6) neH+=wc;
-    // Stravenka: ≥5h odpracováno bez ohledu na typ (včetně "extra" mimo rozvrh)
-    if(worked>=5) tix++;
+    // Stravenka: ≥mealTicketMinHours odpracováno bez ohledu na typ (včetně "extra" mimo rozvrh)
+    if(worked>=mealTicketMinHours) tix++;
     const admin = row.admin ? Number(row.admin) : 0;
     const roz1  = row.roz1  ? Number(row.roz1)  : 0;
     const roz2  = row.roz2  ? Number(row.roz2)  : 0;
@@ -1999,7 +2036,7 @@ function TimesheetView({employee, year, month, holidays, stores, sched, employee
     // ── Záhlaví ──
     doc.setFont("helvetica","bold");
     doc.setFontSize(13);
-    doc.text(cz(`Výkaz práce – ${employee.lastName} ${employee.firstName}`), marginL, 14);
+    doc.text(cz(`Výkaz práce – ${capitalize(employee.lastName)} ${capitalize(employee.firstName)}`), marginL, 14);
     doc.setFont("helvetica","normal");
     doc.setFontSize(8);
     doc.text(cz(`${MONTHS[month]} ${year}  |  Fond: ${fund}h  |  Prodejna: ${storeName}  |  Role: ${employee.role}`), marginL, 20);
@@ -2163,7 +2200,7 @@ function TimesheetView({employee, year, month, holidays, stores, sched, employee
     doc.line(podpisX + podpisLabelW + 1, pageH - 14, pageW - marginL, pageH - 14);
     doc.setFontSize(7);
     doc.setTextColor(160,160,160);
-    doc.text(cz(`${employee.lastName} ${employee.firstName}`), podpisX + podpisLabelW + 1, pageH - 10);
+    doc.text(cz(`${capitalize(employee.lastName)} ${capitalize(employee.firstName)}`), podpisX + podpisLabelW + 1, pageH - 10);
 
     doc.save(`Vykaz_${employee.firstName}_${employee.lastName}_${MONTHS[month]}_${year}.pdf`);
   };
@@ -2385,15 +2422,20 @@ function TimesheetView({employee, year, month, holidays, stores, sched, employee
           <div style={{background:"#fff3e0",borderRadius:8,padding:"10px 12px",textAlign:"center"}}>
             <div style={{fontSize:9,fontWeight:700,color:"#e65100",textTransform:"uppercase",marginBottom:6}}>KPD proplaceno (vedoucí)</div>
             {canEditKdp
-              ? <select
+              ? <input
+                  type="number"
+                  min={0}
+                  step={0.5}
                   value={kpdPaidThis}
-                  onChange={e=>onKdpPaidChange(Number(e.target.value))}
-                  style={{padding:"5px 8px",borderRadius:6,border:`1.5px solid #ffcc80`,fontSize:14,fontWeight:700,color:"#e65100",background:"#fff",width:"100%",textAlign:"center"}}
-                >
-                  {[0,0.5,1,1.5,2,2.5,3,3.5,4,4.5,5,6,7,8,9,10,12,14,16,20,24,32,40].map(v=>(
-                    <option key={v} value={v}>{v===0?"— (nic)":v%1===0?`${v}h`:`${v}h`}</option>
-                  ))}
-                </select>
+                  onChange={e=>{
+                    const raw=e.target.value;
+                    if(raw===""||raw==="-") return;
+                    const v=parseFloat(raw);
+                    if(isNaN(v)||v<0) return;
+                    onKdpPaidChange(v);
+                  }}
+                  style={{padding:"5px 8px",borderRadius:6,border:"1.5px solid #ffcc80",fontSize:14,fontWeight:700,color:"#e65100",background:"#fff",width:"100%",textAlign:"center",boxSizing:"border-box"}}
+                />
               : <div style={{fontSize:16,fontWeight:800,color:"#e65100",padding:"4px 0"}}>
                   {kpdPaidThis===0?"— (nic)":kpdPaidThis%1===0?`${kpdPaidThis}h`:`${kpdPaidThis}h`}
                 </div>
@@ -2724,6 +2766,7 @@ function MainApp({currentUser, handleLogout}){
   const [saving,setSaving]=useState(false);
   const [showResetConfirm,setShowResetConfirm]=useState(false);
   const [showResetTsConfirm,setShowResetTsConfirm]=useState(false);
+  const [appSettings,setAppSettings]=useState({mealTicketMinHours:DEFAULT_MEAL_TICKET_MIN_HOURS});
 
   // Debounce timery pro úspory volání DB
   const saveTimers=useRef({});
@@ -2742,6 +2785,7 @@ function MainApp({currentUser, handleLogout}){
           {data:schedD,   error:e6},
           {data:tsD,      error:e7},
           {data:transD,   error:e8},
+          {data:settD},
         ] = await Promise.all([
           supabase.from("stores").select("*").order("id"),
           supabase.from("employees").select("*").order("id"),
@@ -2751,6 +2795,7 @@ function MainApp({currentUser, handleLogout}){
           supabase.from("schedule").select("*"),
           supabase.from("timesheets").select("*"),
           supabase.from("employee_transfers").select("*").order("effective_date"),
+          supabase.from("app_settings").select("*"),
         ]);
         if(e1||e2||e3) throw new Error((e1||e2||e3).message);
 
@@ -2776,6 +2821,15 @@ function MainApp({currentUser, handleLogout}){
           new_store:r.new_store,
           note:r.note||"",
         })));
+
+        // Globální nastavení aplikace
+        if(settD?.length){
+          const merged={mealTicketMinHours:DEFAULT_MEAL_TICKET_MIN_HOURS};
+          for(const r of settD){
+            if(r.key==="meal_ticket_min_hours") merged.mealTicketMinHours=Number(r.value)||DEFAULT_MEAL_TICKET_MIN_HOURS;
+          }
+          setAppSettings(merged);
+        }
 
         // Vzory
         if(patsD?.length){
@@ -2878,6 +2932,10 @@ function MainApp({currentUser, handleLogout}){
     if(rows.length) await supabase.from("patterns").insert(rows);
   },[]);
 
+  const dbSaveAppSetting=useCallback(async(key,value)=>{
+    await supabase.from("app_settings").upsert({key,value:String(value)},{onConflict:"key"});
+  },[]);
+
   const dbSaveSchedCell=useCallback(async(key,segs,empList)=>{
     // key = "mainStore-empId-date"
     const parts=key.split("-");
@@ -2970,6 +3028,11 @@ function MainApp({currentUser, handleLogout}){
       return next;
     });
   },[dbSavePatterns]);
+
+  const setAppSettingsDB=useCallback((key,value)=>{
+    setAppSettings(prev=>({...prev,[key]:value}));
+    debounceSave(`appSetting-${key}`,()=>dbSaveAppSetting(key,value),800);
+  },[dbSaveAppSetting]);
 
   // Knihovny jsou načteny v index.html ve správném pořadí – nic nedělat
   // XLSX, ExcelJS, jsPDF, jspdf-autotable jsou dostupné jako window.XLSX atd.
@@ -3679,7 +3742,7 @@ ${d}${hol?"!":"."}`;
     );
     return me ? [me] : [];
   })();
-  const eOpts=[{value:"",label:"— vyberte zaměstnance —"},...tsEmpList.map(e=>({value:e.id,label:`${e.lastName} ${e.firstName}`}))];
+  const eOpts=[{value:"",label:"— vyberte zaměstnance —"},...[...tsEmpList].sort((a,b)=>(a.lastName+a.firstName).localeCompare(b.lastName+b.firstName,"cs")).map(e=>({value:e.id,label:`${e.lastName} ${e.firstName}`}))];
   const tabs=[
     {key:"schedule",  label:"📅 Rozvrh"},
     {key:"timesheet", label:"📋 Výkaz"},
@@ -3830,6 +3893,7 @@ ${d}${hol?"!":"."}`;
             onSubmit={handleSubmit}
             onApprove={handleApprove}
             onReturn={handleReturn}
+            mealTicketMinHours={appSettings.mealTicketMinHours}
             onKdpPaidChange={isLocked&&!isVedouci?null:async v=>{
               const k2=tsKey(tsEmp,year,month+1);
               setTimesheetData(prev=>({...prev,[k2]:{...(prev[k2]||{}),kpdPaid:v}}));
@@ -3850,7 +3914,8 @@ ${d}${hol?"!":"."}`;
         {isVedouci
           ? <><h2 style={{margin:"0 0 20px 0",fontSize:20,fontWeight:800,color:C.topbar}}>Nastavení</h2>
               <SettingsView holidays={holidays} setHolidays={setHolidaysDB} actions={actions} setActions={setActionsDB}
-                stores={stores} setStores={setStoresDB} employees={employees} patterns={patterns} setPatterns={setPatternsDB}/></>
+                stores={stores} setStores={setStoresDB} employees={employees} patterns={patterns} setPatterns={setPatternsDB}
+                appSettings={appSettings} setAppSettings={setAppSettingsDB}/></>
           : <div style={{textAlign:"center",padding:"60px 0",color:"#bbb",fontSize:16}}>🔒 Přístup pouze pro vedoucí</div>}
       </div>}
 
