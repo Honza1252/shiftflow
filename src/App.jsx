@@ -2172,7 +2172,7 @@ function TimesheetView({employee, year, month, holidays, stores, sched, employee
     // ── Záhlaví ──
     doc.setFont("helvetica","bold");
     doc.setFontSize(13);
-    doc.text(cz(`Výkaz práce – ${employee.lastName} ${employee.firstName}`), marginL, 14);
+    doc.text(`${cz("Výkaz práce")} – ${capName(employee.lastName)} ${capName(employee.firstName)}`, marginL, 14);
     doc.setFont("helvetica","normal");
     doc.setFontSize(8);
     doc.text(cz(`${MONTHS[month]} ${year}  |  Fond: ${fund}h  |  Prodejna: ${storeName}  |  Role: ${employee.role}`), marginL, 20);
@@ -2336,7 +2336,7 @@ function TimesheetView({employee, year, month, holidays, stores, sched, employee
     doc.line(podpisX + podpisLabelW + 1, pageH - 14, pageW - marginL, pageH - 14);
     doc.setFontSize(7);
     doc.setTextColor(160,160,160);
-    doc.text(cz(`${employee.lastName} ${employee.firstName}`), podpisX + podpisLabelW + 1, pageH - 10);
+    doc.text(`${capName(employee.lastName)} ${capName(employee.firstName)}`, podpisX + podpisLabelW + 1, pageH - 10);
 
     doc.save(`Vykaz_${employee.firstName}_${employee.lastName}_${MONTHS[month]}_${year}.pdf`);
   };
@@ -3962,8 +3962,13 @@ ${d}${hol?"!":"."}`;
 
   // Filtruj zaměstnance pro výkaz dle role
   const tsEmpList = (() => {
-    if(currentUser.role==="admin") return employees.filter(e=>e.active && isEmpActiveInMonth(e,year,month));
-    if(currentUser.role==="vedouci") return employees.filter(e=>e.active && empMainStore(e,year,month,transfers)===storeId && isEmpActiveInMonth(e,year,month));
+    const sortAlpha = arr => [...arr].sort((a,b)=>{
+      const la=`${a.lastName} ${a.firstName}`.toLowerCase();
+      const lb=`${b.lastName} ${b.firstName}`.toLowerCase();
+      return la.localeCompare(lb,"cs");
+    });
+    if(currentUser.role==="admin") return sortAlpha(employees.filter(e=>e.active && isEmpActiveInMonth(e,year,month)));
+    if(currentUser.role==="vedouci") return sortAlpha(employees.filter(e=>e.active && empMainStore(e,year,month,transfers)===storeId && isEmpActiveInMonth(e,year,month)));
     // Zamestnanec – jen sám sebe, primárně podle empId z app_users
     const me = employees.find(e=>
       // 1. Primární: podle ID uloženého v app_users.emp_id
