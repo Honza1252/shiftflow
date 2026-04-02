@@ -914,8 +914,8 @@ function PatternCellComp({value, emp, storeId, dow, stores, onChange}){
 }
 
 // ─── PATTERN EDITOR ──────────────────────────────────────────
-function PatternEditor({storeId, employees, patterns, stores, onSave, onClose, initData}){
-  const emps=employees.filter(e=>e.active&&e.mainStore===storeId);
+function PatternEditor({storeId, employees, patterns, stores, onSave, onClose, initData, transfers=[]}){
+  const emps=sortByOrder(employees.filter(e=>e.active&&e.mainStore===storeId));
   const isBlatna=storeId===2;
   // initData: konkrétní verze vzoru (při verzování), nebo fallback na první verzi z patterns
   const init=initData||(Array.isArray(patterns[storeId])?patterns[storeId][0]:patterns[storeId])||{odd:[],even:[],flat:[]};
@@ -1334,7 +1334,7 @@ function ScheduleView({storeId,employees,year,month,sched,onCellEdit,actions,hol
 // ─── PATTERN VERSION MANAGER ─────────────────────────────────
 // Správce verzí vzorů rozvrhu – zobrazí seznam verzí pro jednu prodejnu
 // a umožní přidat/upravit/smazat verze s validFrom
-function PatternVersionManager({store, employees, patterns, stores, savePatternVersion, deletePatternVersion, onClose}){
+function PatternVersionManager({store, employees, patterns, stores, savePatternVersion, deletePatternVersion, onClose, transfers=[]}){
   const storeId=store.id;
   const versions=[...(patterns[storeId]||[])].sort((a,b)=>a.validFrom.localeCompare(b.validFrom));
   const [editVer,setEditVer]=useState(null); // {validFrom, isNew}
@@ -1388,6 +1388,7 @@ function PatternVersionManager({store, employees, patterns, stores, savePatternV
         </div>
       </div>
       <PatternEditor storeId={storeId} employees={employees} patterns={patterns} stores={stores}
+        transfers={transfers}
         initData={ver}
         onSave={(sid,pat)=>{
           savePatternVersion(sid,ver.validFrom,{...pat,validFrom:ver.validFrom,note:ver.note});
@@ -1451,7 +1452,7 @@ function PatternVersionManager({store, employees, patterns, stores, savePatternV
   </div>;
 }
 
-function SettingsView({holidays,setHolidays,actions,setActions,stores,setStores,employees,patterns,setPatterns,savePatternVersion,deletePatternVersion}){
+function SettingsView({holidays,setHolidays,actions,setActions,stores,setStores,employees,patterns,setPatterns,savePatternVersion,deletePatternVersion,transfers=[]}){
   const [section,setSection]=useState("pattern");
   const [editHol,setEditHol]=useState(null);
   const [showActModal,setShowActModal]=useState(false);
@@ -1483,6 +1484,7 @@ function SettingsView({holidays,setHolidays,actions,setActions,stores,setStores,
               employees={employees}
               patterns={patterns}
               stores={stores}
+              transfers={transfers}
               savePatternVersion={savePatternVersion}
               deletePatternVersion={deletePatternVersion}
               onClose={()=>setEditPatVersionStore(null)}/>
@@ -1748,37 +1750,29 @@ function EmployeesView({employees,setEmployees,stores,transfers=[],setTransfers}
     const idx = storeEmps.findIndex(e=>e.id===emp.id);
     const swapIdx = idx + dir;
     if(swapIdx < 0 || swapIdx >= storeEmps.length) return;
-    // Pokud ještě nejsou sort_order inicializované (všichni mají 999),
-    // inicializujeme celou skupinu podle aktuálního pořadí 0,1,2,...
-    const needsInit = storeEmps.every(e=>(e.sortOrder??999)===999);
-    if(needsInit){
-      await Promise.all(storeEmps.map((e,i)=>supabase.from("employees").update({sort_order:i}).eq("id",e.id)));
-      setEmployees(p=>p.map(e=>{
-        const i=storeEmps.findIndex(x=>x.id===e.id);
-        return i>=0?{...e,sortOrder:i}:e;
-      }));
-      // Po inicializaci znovu načteme aktualizovaný stav a prohodíme
-      const updatedEmps = storeEmps.map((e,i)=>({...e,sortOrder:i}));
-      const empA = updatedEmps[idx];
-      const empB = updatedEmps[swapIdx];
-      await supabase.from("employees").update({sort_order: swapIdx}).eq("id", empA.id);
-      await supabase.from("employees").update({sort_order: idx}).eq("id", empB.id);
-      setEmployees(p=>p.map(e=>{
-        if(e.id===empA.id) return {...e, sortOrder:swapIdx};
-        if(e.id===empB.id) return {...e, sortOrder:idx};
-        return e;
-      }));
-      return;
+    // Vždy inicializuj celou skupinu sekvenčně (0,1,2,...) a pak prohoď
+    // Tím se vyhneme problému kdy všichni mají sort_order=999
+    const withOrder = storeEmps.map((e,i)=>({...e, sortOrder:i}));
+    // Prohod pozice idx a swapIdx
+    const tmp = withOrder[idx].sortOrder;
+    withOrder[idx] = {...withOrder[idx], sortOrder: withOrder[swapIdx].sortOrder};
+    withOrder[swapIdx] = {...withOrder[swapIdx], sortOrder: tmp};
+    // Ulož všechny do DB (jen ty co se změnily = idx a swapIdx)
+    const empA = withOrder[idx];
+    const empB = withOrder[swapIdx];
+    await Promise.all([
+      supabase.from("employees").update({sort_order: empA.sortOrder}).eq("id", empA.id),
+      supabase.from("employees").update({sort_order: empB.sortOrder}).eq("id", empB.id),
+    ]);
+    // Ulož i ostatní pokud ještě nemají inicializované sort_order
+    const uninited = withOrder.filter((e,i)=>i!==idx&&i!==swapIdx&&(storeEmps[i].sortOrder??999)===999);
+    if(uninited.length>0){
+      await Promise.all(uninited.map(e=>supabase.from("employees").update({sort_order:e.sortOrder}).eq("id",e.id)));
     }
-    const other = storeEmps[swapIdx];
-    const orderA = emp.sortOrder??idx;
-    const orderB = other.sortOrder??swapIdx;
-    await supabase.from("employees").update({sort_order: orderB}).eq("id", emp.id);
-    await supabase.from("employees").update({sort_order: orderA}).eq("id", other.id);
+    // Aktualizuj React state jedním voláním
     setEmployees(p=>p.map(e=>{
-      if(e.id===emp.id) return {...e, sortOrder:orderB};
-      if(e.id===other.id) return {...e, sortOrder:orderA};
-      return e;
+      const found = withOrder.find(x=>x.id===e.id);
+      return found ? {...e, sortOrder:found.sortOrder} : e;
     }));
   };
 
@@ -4269,7 +4263,7 @@ ${d}${hol?"!":"."}`;
           ? <><h2 style={{margin:"0 0 20px 0",fontSize:20,fontWeight:800,color:C.topbar}}>Nastavení</h2>
               <SettingsView holidays={holidays} setHolidays={setHolidaysDB} actions={actions} setActions={setActionsDB}
                 stores={stores} setStores={setStoresDB} employees={employees} patterns={patterns} setPatterns={setPatternsDB}
-                savePatternVersion={savePatternVersion} deletePatternVersion={deletePatternVersion}/></>
+                savePatternVersion={savePatternVersion} deletePatternVersion={deletePatternVersion} transfers={transfers}/></>
           : <div style={{textAlign:"center",padding:"60px 0",color:"#bbb",fontSize:16}}>🔒 Přístup pouze pro vedoucí</div>}
       </div>}
 
