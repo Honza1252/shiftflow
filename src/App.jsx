@@ -1309,7 +1309,7 @@ function ScheduleView({storeId,employees,year,month,sched,onCellEdit,actions,hol
             })}
           </tr></thead>
           <tbody>{allEmps.map((emp,ei)=>{
-            const isMirrorRow=emp.mainStore!==storeId;
+            const isMirrorRow=empMainStore(emp,year,month,transfers)!==storeId;
             return <tr key={emp.id} style={{background:ei%2===0?"#fff":"#fafafe"}}>
               <td style={{padding:"4px 10px",fontSize:12,fontWeight:600,borderBottom:`1px solid ${C.border}`,whiteSpace:"nowrap"}}>
                 <div style={{color:isMirrorRow?"#888":C.topbar,display:"flex",alignItems:"center",gap:4}}>
@@ -1803,7 +1803,7 @@ function EmployeesView({employees,setEmployees,stores,transfers=[],setTransfers}
         {archiveEmps.length===0
           ? <div style={{color:"#aaa",textAlign:"center",padding:40,fontSize:14}}>Žádní archivovaní zaměstnanci</div>
           : stores.map(store=>{
-              const emps = archiveEmps.filter(e=>e.mainStore===store.id).sort((a,b)=>(a.sortOrder??999)-(b.sortOrder??999)||(a.lastName||"").localeCompare(b.lastName||"","cs"));
+              const emps = archiveEmps.filter(e=>empMainStore(e,curYear,curMonth,transfers)===store.id).sort((a,b)=>(a.sortOrder??999)-(b.sortOrder??999)||(a.lastName||"").localeCompare(b.lastName||"","cs"));
               if(emps.length===0) return null;
               return <div key={store.id} style={{marginBottom:28}}>
                 <div style={{fontSize:11,fontWeight:800,color:"#aaa",textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:8,padding:"4px 10px",background:"#f8f9ff",borderRadius:5,display:"inline-block"}}>{store.name} · {emps.length}</div>
@@ -1832,7 +1832,7 @@ function EmployeesView({employees,setEmployees,stores,transfers=[],setTransfers}
       </div>
     ) : (
       stores.map(store=>{
-        const emps = activeEmps.filter(e=>e.mainStore===store.id).sort((a,b)=>(a.sortOrder??999)-(b.sortOrder??999)||(a.lastName||"").localeCompare(b.lastName||"","cs"));
+        const emps = activeEmps.filter(e=>empMainStore(e,curYear,curMonth,transfers)===store.id).sort((a,b)=>(a.sortOrder??999)-(b.sortOrder??999)||(a.lastName||"").localeCompare(b.lastName||"","cs"));
         return <div key={store.id} style={{marginBottom:28}}>
           <div style={{fontSize:11,fontWeight:800,color:"#aaa",textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:8,padding:"4px 10px",background:"#f8f9ff",borderRadius:5,display:"inline-block"}}>{store.name} · {emps.length}</div>
           <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
