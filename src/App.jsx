@@ -408,6 +408,11 @@ function empMainStore(emp, year, month, transfers){
   return emp.mainStore;
 }
 
+// Seřadí zaměstnance podle sort_order, při shodě abecedně
+function sortByOrder(arr){
+  return [...arr].sort((a,b)=>(a.sortOrder??999)-(b.sortOrder??999)||(a.lastName||"").localeCompare(b.lastName||"","cs")||(a.firstName||"").localeCompare(b.firstName||"","cs"));
+}
+
 // Vrátí true pokud je zaměstnanec aktivní v daném měsíci (year, month 0-indexed)
 function isEmpActiveInMonth(emp, year, month){
   const appStart = new Date(2026,1,1);
@@ -1097,7 +1102,7 @@ function CellEditor({emp, date, year, month, current, viewStoreId, stores, emplo
 
 // ─── SCHEDULE VIEW ───────────────────────────────────────────
 function ScheduleView({storeId,employees,year,month,sched,onCellEdit,actions,holidays,stores,patterns,transfers=[]}){
-  const mainEmps=employees.filter(e=>e.active&&empMainStore(e,year,month,transfers)===storeId&&isEmpActiveInMonth(e,year,month));
+  const mainEmps=sortByOrder(employees.filter(e=>e.active&&empMainStore(e,year,month,transfers)===storeId&&isEmpActiveInMonth(e,year,month)));
 
   // Sdílení zaměstnanci se zobrazí pokud mají v tomto měsíci alespoň jednu směnu (nebo část směny) v této prodejně
   const mirrorEmps=employees.filter(e=>{
@@ -1743,14 +1748,36 @@ function EmployeesView({employees,setEmployees,stores,transfers=[],setTransfers}
     const idx = storeEmps.findIndex(e=>e.id===emp.id);
     const swapIdx = idx + dir;
     if(swapIdx < 0 || swapIdx >= storeEmps.length) return;
+    // Pokud ještě nejsou sort_order inicializované (všichni mají 999),
+    // inicializujeme celou skupinu podle aktuálního pořadí 0,1,2,...
+    const needsInit = storeEmps.every(e=>(e.sortOrder??999)===999);
+    if(needsInit){
+      await Promise.all(storeEmps.map((e,i)=>supabase.from("employees").update({sort_order:i}).eq("id",e.id)));
+      setEmployees(p=>p.map(e=>{
+        const i=storeEmps.findIndex(x=>x.id===e.id);
+        return i>=0?{...e,sortOrder:i}:e;
+      }));
+      // Po inicializaci znovu načteme aktualizovaný stav a prohodíme
+      const updatedEmps = storeEmps.map((e,i)=>({...e,sortOrder:i}));
+      const empA = updatedEmps[idx];
+      const empB = updatedEmps[swapIdx];
+      await supabase.from("employees").update({sort_order: swapIdx}).eq("id", empA.id);
+      await supabase.from("employees").update({sort_order: idx}).eq("id", empB.id);
+      setEmployees(p=>p.map(e=>{
+        if(e.id===empA.id) return {...e, sortOrder:swapIdx};
+        if(e.id===empB.id) return {...e, sortOrder:idx};
+        return e;
+      }));
+      return;
+    }
     const other = storeEmps[swapIdx];
-    const newOrderA = other.sortOrder??swapIdx;
-    const newOrderB = emp.sortOrder??idx;
-    await supabase.from("employees").update({sort_order: newOrderA}).eq("id", emp.id);
-    await supabase.from("employees").update({sort_order: newOrderB}).eq("id", other.id);
+    const orderA = emp.sortOrder??idx;
+    const orderB = other.sortOrder??swapIdx;
+    await supabase.from("employees").update({sort_order: orderB}).eq("id", emp.id);
+    await supabase.from("employees").update({sort_order: orderA}).eq("id", other.id);
     setEmployees(p=>p.map(e=>{
-      if(e.id===emp.id) return {...e, sortOrder:newOrderA};
-      if(e.id===other.id) return {...e, sortOrder:newOrderB};
+      if(e.id===emp.id) return {...e, sortOrder:orderB};
+      if(e.id===other.id) return {...e, sortOrder:orderA};
       return e;
     }));
   };
@@ -2756,7 +2783,7 @@ function calcKpdCumulative(emp, toYear, toMonth, sched, holidays, stores, patter
 }
 
 function SummaryTable({storeId, employees, year, month, sched, holidays, stores, patterns, timesheetData, transfers=[]}){
-  const emps = employees.filter(e=>e.active && empMainStore(e,year,month,transfers)===storeId && isEmpActiveInMonth(e,year,month));
+  const emps = sortByOrder(employees.filter(e=>e.active && empMainStore(e,year,month,transfers)===storeId && isEmpActiveInMonth(e,year,month)));
   const dim  = getDim(year, month);
   const wd   = getWorkingDays(year, month, holidays);
 
@@ -3415,7 +3442,7 @@ function MainApp({currentUser, handleLogout}){
   // Reset rozvrhu – smaže všechny ruční úpravy pro danou prodejnu a měsíc
   const onResetMonth=useCallback(async()=>{
     const dim=getDim(year,month);
-    const storeEmps=employees.filter(e=>e.active&&empMainStore(e,year,month,transfers)===storeId);
+    const storeEmps=sortByOrder(employees.filter(e=>e.active&&empMainStore(e,year,month,transfers)===storeId));
     const empIds=storeEmps.map(e=>e.id);
     // Smaž z DB – všechny záznamy pro zaměstnance prodejny v daném měsíci
     const dateFrom=fmtDate(year,month,1);
@@ -3463,7 +3490,7 @@ function MainApp({currentUser, handleLogout}){
   const exportSchedExcel = async () => {
     const storeName = stores.find(s=>s.id===storeId)?.name||"";
     const dim = getDim(year,month);
-    const mainEmps = employees.filter(e=>e.active&&empMainStore(e,year,month,transfers)===storeId&&isEmpActiveInMonth(e,year,month));
+    const mainEmps = sortByOrder(employees.filter(e=>e.active&&empMainStore(e,year,month,transfers)===storeId&&isEmpActiveInMonth(e,year,month)));
     const wb = new ExcelJS.Workbook();
     const ws = wb.addWorksheet(`${MONTHS[month]} ${year}`);
 
@@ -3719,7 +3746,7 @@ ${d}${hol?"!":"."}`;
   const exportSchedPdf = () => {
     const storeName = stores.find(s=>s.id===storeId)?.name||"";
     const dim = getDim(year,month);
-    const mainEmps = employees.filter(e=>e.active&&empMainStore(e,year,month,transfers)===storeId&&isEmpActiveInMonth(e,year,month));
+    const mainEmps = sortByOrder(employees.filter(e=>e.active&&empMainStore(e,year,month,transfers)===storeId&&isEmpActiveInMonth(e,year,month)));
     const mirrorPdfEmps = employees.filter(e=>{
       if(!e.active||empMainStore(e,year,month,transfers)===storeId) return false;
       if(!(e.extraStores||[]).includes(storeId)) return false;
@@ -4055,13 +4082,8 @@ ${d}${hol?"!":"."}`;
 
   // Filtruj zaměstnance pro výkaz dle role
   const tsEmpList = (() => {
-    const sortAlpha = arr => [...arr].sort((a,b)=>{
-      const la=`${a.lastName} ${a.firstName}`.toLowerCase();
-      const lb=`${b.lastName} ${b.firstName}`.toLowerCase();
-      return la.localeCompare(lb,"cs");
-    });
-    if(currentUser.role==="admin") return sortAlpha(employees.filter(e=>e.active && isEmpActiveInMonth(e,year,month)));
-    if(currentUser.role==="vedouci") return sortAlpha(employees.filter(e=>e.active && empMainStore(e,year,month,transfers)===storeId && isEmpActiveInMonth(e,year,month)));
+    if(currentUser.role==="admin") return sortByOrder(employees.filter(e=>e.active && isEmpActiveInMonth(e,year,month)));
+    if(currentUser.role==="vedouci") return sortByOrder(employees.filter(e=>e.active && empMainStore(e,year,month,transfers)===storeId && isEmpActiveInMonth(e,year,month)));
     // Zamestnanec – jen sám sebe, primárně podle empId z app_users
     const me = employees.find(e=>
       // 1. Primární: podle ID uloženého v app_users.emp_id
