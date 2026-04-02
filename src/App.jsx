@@ -1195,7 +1195,8 @@ function ScheduleView({storeId,employees,year,month,sched,onCellEdit,actions,hol
 
     const cell=getSchedCell(sched,emp.id,dateStr,employees);
     const patternDay=getPatternForDay(emp,d);
-    const showLoc=(emp.extraStores||[]).length>0;
+    const empCurStore=empMainStore(emp,year,month,transfers);
+    const showLoc=(emp.extraStores||[]).length>0 && empCurStore!==storeId;
 
     let bg=C.work, lines=[], hrs=null, txtColor="#1a1a2e", clickable=canEditRow;
     let isModified=false; // změna oproti vzoru
