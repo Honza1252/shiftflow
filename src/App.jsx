@@ -35,6 +35,7 @@ function dbToEmp(r){
     active: r.active,
     customTimes: r.custom_times||{},
     mealTicketMinHours: r.meal_ticket_min_hours||null,
+    sortOrder: r.sort_order??999,
   };
 }
 function empToDB(e){
@@ -54,6 +55,7 @@ function empToDB(e){
     active: e.active,
     custom_times: e.customTimes||{},
     meal_ticket_min_hours: e.mealTicketMinHours||null,
+    sort_order: e.sortOrder??999,
   };
 }
 function dbToHoliday(r){
@@ -1730,51 +1732,130 @@ function EmployeesView({employees,setEmployees,stores,transfers=[],setTransfers}
   const [editEmp,setEditEmp]=useState(null);
   const [showNew,setShowNew]=useState(false);
   const [loginEmp,setLoginEmp]=useState(null);
-  const newEmpTemplate={firstName:"",lastName:"",mainStore:1,extraStores:[],role:"",contractHoursDay:8,contractHoursWeek:40,vacHours:160,kpdStart:0,active:true,customTimes:{},mealTicketMinHours:null};
+  const [archiveTab,setArchiveTab]=useState(false);
+  const newEmpTemplate={firstName:"",lastName:"",mainStore:1,extraStores:[],role:"",contractHoursDay:8,contractHoursWeek:40,vacHours:160,kpdStart:0,active:true,customTimes:{},mealTicketMinHours:null,sortOrder:999};
+
+  const now = new Date();
+  const curYear = now.getFullYear();
+  const curMonth = now.getMonth();
+
+  const moveEmp = async (emp, dir, storeEmps) => {
+    const idx = storeEmps.findIndex(e=>e.id===emp.id);
+    const swapIdx = idx + dir;
+    if(swapIdx < 0 || swapIdx >= storeEmps.length) return;
+    const other = storeEmps[swapIdx];
+    const newOrderA = other.sortOrder??swapIdx;
+    const newOrderB = emp.sortOrder??idx;
+    await supabase.from("employees").update({sort_order: newOrderA}).eq("id", emp.id);
+    await supabase.from("employees").update({sort_order: newOrderB}).eq("id", other.id);
+    setEmployees(p=>p.map(e=>{
+      if(e.id===emp.id) return {...e, sortOrder:newOrderA};
+      if(e.id===other.id) return {...e, sortOrder:newOrderB};
+      return e;
+    }));
+  };
+
+  const activeEmps = employees.filter(e=>e.active);
+  const archiveEmps = employees.filter(e=>!e.active);
 
   return <div>
-    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
       <h2 style={{margin:0,fontSize:20,fontWeight:800,color:C.topbar}}>Zaměstnanci</h2>
-      <Btn onClick={()=>setShowNew(true)}>+ Přidat zaměstnance</Btn>
+      <div style={{display:"flex",gap:8,alignItems:"center"}}>
+        <div style={{display:"flex",background:"#f0f0f8",borderRadius:8,padding:2,gap:2}}>
+          <button onClick={()=>setArchiveTab(false)} style={{padding:"5px 14px",borderRadius:6,border:"none",cursor:"pointer",fontWeight:archiveTab?500:700,fontSize:13,background:archiveTab?"transparent":"#fff",color:archiveTab?"#888":C.topbar,boxShadow:archiveTab?"none":"0 1px 3px rgba(0,0,0,0.1)"}}>Aktivní</button>
+          <button onClick={()=>setArchiveTab(true)} style={{padding:"5px 14px",borderRadius:6,border:"none",cursor:"pointer",fontWeight:archiveTab?700:500,fontSize:13,background:archiveTab?"#fff":"transparent",color:archiveTab?C.topbar:"#888",boxShadow:archiveTab?"0 1px 3px rgba(0,0,0,0.1)":"none"}}>Archiv{archiveEmps.length>0&&<span style={{background:"#ffebee",color:"#c62828",borderRadius:10,padding:"1px 7px",fontSize:11,marginLeft:4}}>{archiveEmps.length}</span>}</button>
+        </div>
+        {!archiveTab&&<Btn onClick={()=>setShowNew(true)}>+ Přidat zaměstnance</Btn>}
+      </div>
     </div>
-    {stores.map(store=>{
-      const emps=employees.filter(e=>e.mainStore===store.id);
-      return <div key={store.id} style={{marginBottom:28}}>
-        <div style={{fontSize:11,fontWeight:800,color:"#aaa",textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:8,padding:"4px 10px",background:"#f8f9ff",borderRadius:5,display:"inline-block"}}>{store.name} · {emps.length}</div>
-        <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
-          <thead><tr style={{background:"#f8f9ff"}}>
-            {["Jméno","Role","Úvazek","Hlavní prodejna","Sdílení do","Vlastní časy","Dov. nárok","Stav",""].map(h=>
-              <th key={h} style={{padding:"7px 10px",textAlign:"left",fontSize:11,fontWeight:700,color:"#888",textTransform:"uppercase",borderBottom:`2px solid ${C.border}`,whiteSpace:"nowrap"}}>{h}</th>)}
-          </tr></thead>
-          <tbody>{emps.map((emp,i)=>{
-            const shared=(emp.extraStores||[]).length>0;
-            const hasCT=Object.keys(emp.customTimes||{}).length>0;
-            return <tr key={emp.id} style={{background:i%2===0?"#fff":"#fafafe"}}>
-              <td style={{padding:"8px 10px",fontWeight:600,color:C.topbar,borderBottom:`1px solid ${C.border}`}}>{emp.lastName} {emp.firstName}</td>
-              <td style={{padding:"8px 10px",color:"#666",borderBottom:`1px solid ${C.border}`}}>{emp.role}</td>
-              <td style={{padding:"8px 10px",borderBottom:`1px solid ${C.border}`}}><Badge color="#e8f5e9" textColor="#2e7d32">{empContractDay(emp)}h / {empContractWeek(emp)}h týdně</Badge></td>
-              <td style={{padding:"8px 10px",borderBottom:`1px solid ${C.border}`}}>{stores.find(s=>s.id===emp.mainStore)?.name}</td>
-              <td style={{padding:"8px 10px",borderBottom:`1px solid ${C.border}`}}>
-                {shared
-                  ?<Badge color="#e8f0fe" textColor="#1565c0">{(emp.extraStores||[]).map(id=>stores.find(s=>s.id===id)?.name).join(", ")}</Badge>
-                  :<span style={{color:"#ddd"}}>—</span>}
-              </td>
-              <td style={{padding:"8px 10px",borderBottom:`1px solid ${C.border}`}}>
-                {hasCT
-                  ?<Badge color="#fff3e0" textColor="#e65100">{Object.keys(emp.customTimes||{}).map(id=>STORE_SHORT[id]).join(", ")}</Badge>
-                  :<span style={{color:"#ddd"}}>—</span>}
-              </td>
-              <td style={{padding:"8px 10px",borderBottom:`1px solid ${C.border}`}}>{emp.vacHours}h/rok</td>
-              <td style={{padding:"8px 10px",borderBottom:`1px solid ${C.border}`}}><Badge color={emp.active?"#e8f5e9":"#ffebee"} textColor={emp.active?"#2e7d32":"#c62828"}>{emp.active?"Aktivní":"Neaktivní"}</Badge></td>
-              <td style={{padding:"8px 10px",borderBottom:`1px solid ${C.border}`,whiteSpace:"nowrap"}}>
-                <Btn small variant="secondary" onClick={()=>setEditEmp(emp)} style={{marginRight:6}}>Upravit</Btn>
-                <Btn small variant="ghost" onClick={()=>setLoginEmp(emp)}>🔑 Přihlášení</Btn>
-              </td>
-            </tr>;
-          })}</tbody>
-        </table>
-      </div>;
-    })}
+
+    {archiveTab ? (
+      <div>
+        {archiveEmps.length===0
+          ? <div style={{color:"#aaa",textAlign:"center",padding:40,fontSize:14}}>Žádní archivovaní zaměstnanci</div>
+          : stores.map(store=>{
+              const emps = archiveEmps.filter(e=>e.mainStore===store.id).sort((a,b)=>(a.sortOrder??999)-(b.sortOrder??999)||(a.lastName||"").localeCompare(b.lastName||"","cs"));
+              if(emps.length===0) return null;
+              return <div key={store.id} style={{marginBottom:28}}>
+                <div style={{fontSize:11,fontWeight:800,color:"#aaa",textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:8,padding:"4px 10px",background:"#f8f9ff",borderRadius:5,display:"inline-block"}}>{store.name} · {emps.length}</div>
+                <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
+                  <thead><tr style={{background:"#f8f9ff"}}>
+                    {["Jméno","Role","Úvazek","Hlavní prodejna","Dov. nárok","Konec",""].map(h=>
+                      <th key={h} style={{padding:"7px 10px",textAlign:"left",fontSize:11,fontWeight:700,color:"#888",textTransform:"uppercase",borderBottom:`2px solid ${C.border}`,whiteSpace:"nowrap"}}>{h}</th>)}
+                  </tr></thead>
+                  <tbody>{emps.map((emp,i)=>(
+                    <tr key={emp.id} style={{background:i%2===0?"#fff":"#fafafe",opacity:0.7}}>
+                      <td style={{padding:"8px 10px",fontWeight:600,color:C.topbar,borderBottom:`1px solid ${C.border}`}}>{emp.lastName} {emp.firstName}</td>
+                      <td style={{padding:"8px 10px",color:"#666",borderBottom:`1px solid ${C.border}`}}>{emp.role}</td>
+                      <td style={{padding:"8px 10px",borderBottom:`1px solid ${C.border}`}}><Badge color="#f5f5f5" textColor="#888">{empContractDay(emp)}h / {empContractWeek(emp)}h týdně</Badge></td>
+                      <td style={{padding:"8px 10px",borderBottom:`1px solid ${C.border}`}}>{stores.find(s=>s.id===emp.mainStore)?.name}</td>
+                      <td style={{padding:"8px 10px",borderBottom:`1px solid ${C.border}`}}>{emp.vacHours}h/rok</td>
+                      <td style={{padding:"8px 10px",borderBottom:`1px solid ${C.border}`,color:"#c62828",fontSize:12}}>{emp.endDate||"—"}</td>
+                      <td style={{padding:"8px 10px",borderBottom:`1px solid ${C.border}`,whiteSpace:"nowrap"}}>
+                        <Btn small variant="secondary" onClick={()=>setEditEmp(emp)}>Upravit</Btn>
+                      </td>
+                    </tr>
+                  ))}</tbody>
+                </table>
+              </div>;
+            })
+        }
+      </div>
+    ) : (
+      stores.map(store=>{
+        const emps = activeEmps.filter(e=>e.mainStore===store.id).sort((a,b)=>(a.sortOrder??999)-(b.sortOrder??999)||(a.lastName||"").localeCompare(b.lastName||"","cs"));
+        return <div key={store.id} style={{marginBottom:28}}>
+          <div style={{fontSize:11,fontWeight:800,color:"#aaa",textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:8,padding:"4px 10px",background:"#f8f9ff",borderRadius:5,display:"inline-block"}}>{store.name} · {emps.length}</div>
+          <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
+            <thead><tr style={{background:"#f8f9ff"}}>
+              {["↕","Jméno","Role","Úvazek","Kmen. prodejna","Aktuální prodejna","Sdílení do","Vlastní časy","Dov. nárok","Stav",""].map(h=>
+                <th key={h} style={{padding:"7px 10px",textAlign:"left",fontSize:11,fontWeight:700,color:"#888",textTransform:"uppercase",borderBottom:`2px solid ${C.border}`,whiteSpace:"nowrap"}}>{h}</th>)}
+            </tr></thead>
+            <tbody>{emps.map((emp,i)=>{
+              const shared=(emp.extraStores||[]).length>0;
+              const hasCT=Object.keys(emp.customTimes||{}).length>0;
+              const currStore = empMainStore(emp, curYear, curMonth, transfers);
+              const currStoreName = stores.find(s=>s.id===currStore)?.name;
+              const isTransferred = currStore !== emp.mainStore;
+              return <tr key={emp.id} style={{background:i%2===0?"#fff":"#fafafe"}}>
+                <td style={{padding:"4px 6px",borderBottom:`1px solid ${C.border}`,whiteSpace:"nowrap"}}>
+                  <div style={{display:"flex",flexDirection:"column",gap:1}}>
+                    <button onClick={()=>moveEmp(emp,-1,emps)} disabled={i===0} style={{background:"none",border:"none",cursor:i===0?"default":"pointer",color:i===0?"#ddd":"#888",padding:"1px 4px",fontSize:12,lineHeight:1}}>▲</button>
+                    <button onClick={()=>moveEmp(emp,1,emps)} disabled={i===emps.length-1} style={{background:"none",border:"none",cursor:i===emps.length-1?"default":"pointer",color:i===emps.length-1?"#ddd":"#888",padding:"1px 4px",fontSize:12,lineHeight:1}}>▼</button>
+                  </div>
+                </td>
+                <td style={{padding:"8px 10px",fontWeight:600,color:C.topbar,borderBottom:`1px solid ${C.border}`}}>{emp.lastName} {emp.firstName}</td>
+                <td style={{padding:"8px 10px",color:"#666",borderBottom:`1px solid ${C.border}`}}>{emp.role}</td>
+                <td style={{padding:"8px 10px",borderBottom:`1px solid ${C.border}`}}><Badge color="#e8f5e9" textColor="#2e7d32">{empContractDay(emp)}h / {empContractWeek(emp)}h týdně</Badge></td>
+                <td style={{padding:"8px 10px",borderBottom:`1px solid ${C.border}`}}>{stores.find(s=>s.id===emp.mainStore)?.name}</td>
+                <td style={{padding:"8px 10px",borderBottom:`1px solid ${C.border}`}}>
+                  {isTransferred
+                    ? <Badge color="#fce4ec" textColor="#880e4f">🔀 {currStoreName}</Badge>
+                    : <span style={{color:"#bbb",fontSize:12}}>—</span>}
+                </td>
+                <td style={{padding:"8px 10px",borderBottom:`1px solid ${C.border}`}}>
+                  {shared
+                    ?<Badge color="#e8f0fe" textColor="#1565c0">{(emp.extraStores||[]).map(id=>stores.find(s=>s.id===id)?.name).join(", ")}</Badge>
+                    :<span style={{color:"#ddd"}}>—</span>}
+                </td>
+                <td style={{padding:"8px 10px",borderBottom:`1px solid ${C.border}`}}>
+                  {hasCT
+                    ?<Badge color="#fff3e0" textColor="#e65100">{Object.keys(emp.customTimes||{}).map(id=>STORE_SHORT[id]).join(", ")}</Badge>
+                    :<span style={{color:"#ddd"}}>—</span>}
+                </td>
+                <td style={{padding:"8px 10px",borderBottom:`1px solid ${C.border}`}}>{emp.vacHours}h/rok</td>
+                <td style={{padding:"8px 10px",borderBottom:`1px solid ${C.border}`}}><Badge color={emp.active?"#e8f5e9":"#ffebee"} textColor={emp.active?"#2e7d32":"#c62828"}>{emp.active?"Aktivní":"Neaktivní"}</Badge></td>
+                <td style={{padding:"8px 10px",borderBottom:`1px solid ${C.border}`,whiteSpace:"nowrap"}}>
+                  <Btn small variant="secondary" onClick={()=>setEditEmp(emp)} style={{marginRight:6}}>Upravit</Btn>
+                  <Btn small variant="ghost" onClick={()=>setLoginEmp(emp)}>🔑 Přihlášení</Btn>
+                </td>
+              </tr>;
+            })}</tbody>
+          </table>
+        </div>;
+      })
+    )}
     <Modal open={!!editEmp} onClose={()=>setEditEmp(null)} title={`Upravit – ${editEmp?.lastName} ${editEmp?.firstName}`} width={600}>
       {editEmp&&<EmployeeForm initial={editEmp} stores={stores}
         transfers={transfers}
@@ -1795,7 +1876,6 @@ function EmployeesView({employees,setEmployees,stores,transfers=[],setTransfers}
     <Modal open={showNew} onClose={()=>setShowNew(false)} title="Přidat zaměstnance" width={600}>
       <EmployeeForm initial={newEmpTemplate} stores={stores}
         onSave={async f=>{
-          // Sestav DB radek BEZ id – Supabase (serial/sequence) prideli id automaticky
           const rowData = {
             first_name: f.firstName, last_name: f.lastName||"",
             main_store: f.mainStore,
@@ -1807,8 +1887,8 @@ function EmployeesView({employees,setEmployees,stores,transfers=[],setTransfers}
             kpd_start: f.kpdStart||0,
             active: f.active,
             custom_times: f.customTimes||{},
+            sort_order: f.sortOrder??999,
           };
-          // Zadne id = Supabase priradi automaticky (bez chyby duplicate key)
           const {data, error} = await supabase
             .from("employees")
             .insert(rowData)
@@ -1826,7 +1906,6 @@ function EmployeesView({employees,setEmployees,stores,transfers=[],setTransfers}
     </Modal>
   </div>;
 }
-
 // ─── TIMESHEET ───────────────────────────────────────────────
 function TimesheetView({employee, year, month, holidays, stores, sched, employees, patterns, rows, onRowChange, timesheetData, onKdpPaidChange, canEditKdp=true, tsStatus="draft", onSubmit, onApprove, onReturn, isVedouci=false, mealTicketMinHours=DEFAULT_MEAL_TICKET_MIN_HOURS}){
   const dim = getDim(year, month);
