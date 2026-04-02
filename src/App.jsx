@@ -2161,7 +2161,7 @@ function TimesheetView({employee, year, month, holidays, stores, sched, employee
   const exportExcel = async () => {
     if(!ExcelJS){ alert("Excel export se načítá, zkuste za chvíli."); return; }
     const fmtHx = h => h>0?(h%1===0?`${h}h`:`${h.toFixed(1)}h`):"";
-    const storeName = stores.find(s=>s.id===employee.mainStore)?.name||"";
+    const storeName = stores.find(s=>s.id===empMainStore(employee,year,month,transfers))?.name||"";
 
     const wb = new ExcelJS.Workbook();
     const ws = wb.addWorksheet(`${MONTHS[month]} ${year}`);
@@ -2287,7 +2287,7 @@ function TimesheetView({employee, year, month, holidays, stores, sched, employee
     const jsPDFLib = jsPDF;
     // A4 portrait: 210 x 297 mm, použitelná šířka ~182 mm (margin 14 mm)
     const doc = new jsPDFLib({ orientation:"portrait", unit:"mm", format:"a4" });
-    const storeName = stores.find(s=>s.id===employee.mainStore)?.name||"";
+    const storeName = stores.find(s=>s.id===empMainStore(employee,year,month,transfers))?.name||"";
     const pageW = 210;
     const marginL = 14;
     const usableW = pageW - marginL * 2; // 182 mm
@@ -2401,29 +2401,33 @@ function TimesheetView({employee, year, month, holidays, stores, sched, employee
       { label:"Presc./minus", val:(overtime>=0?"+":"")+fmtHx(Math.abs(overtime)), bg:overtime>=0?[232,245,233]:[255,235,238], tc:overtime>=0?[46,125,50]:[198,40,40] },
       { label:"Admin prace",   val:totAdmin>0?fmtHx(totAdmin):"—",     bg:[241,248,241], tc:[46,125,50]  },
       { label:"Stravenky",     val:tix>0?`${tix} ks`:"—",              bg:[249,251,231], tc:[130,119,23] },
+      { label:"Rozvoz 1",      val:totRoz1>0?`${totRoz1}x`:"—",        bg:[232,244,253], tc:[21,101,192] },
+      { label:"Rozvoz 2",      val:totRoz2>0?`${totRoz2}x`:"—",        bg:[232,244,253], tc:[21,101,192] },
     ];
 
-    const drawTiles = (tiles, startX, startY) => {
+    const drawTiles = (tiles, startX, startY, cols=6) => {
+      const w = (usableW - (cols-1)*tileGap) / cols;
       tiles.forEach((t, i)=>{
-        const tx = startX + i*(tileW+tileGap);
-        // Barevné pozadí
+        const col = i % cols;
+        const row = Math.floor(i / cols);
+        const tx = startX + col*(w+tileGap);
+        const ty = startY + row*(tileH+tileGap);
         doc.setFillColor(...t.bg);
-        doc.roundedRect(tx, startY+1, tileW, tileH, 1, 1, "F");
-        // Label
+        doc.roundedRect(tx, ty+1, w, tileH, 1, 1, "F");
         doc.setFont("helvetica","normal"); doc.setFontSize(5.5);
         doc.setTextColor(...t.tc);
-        doc.text(cz(t.label).toUpperCase(), tx+tileW/2, startY+4.5, {align:"center"});
-        // Hodnota
+        doc.text(cz(t.label).toUpperCase(), tx+w/2, ty+4.5, {align:"center"});
         doc.setFont("helvetica","bold"); doc.setFontSize(9);
-        doc.text(cz(t.val), tx+tileW/2, startY+10, {align:"center"});
+        doc.text(cz(t.val), tx+w/2, ty+10, {align:"center"});
       });
+      return Math.ceil(tiles.length/cols) * (tileH+tileGap);
     };
 
-    drawTiles(tiles1, marginL, sy+1);
-    drawTiles(tiles2, marginL, sy+1+tileH+tileGap);
+    const h1 = drawTiles(tiles1, marginL, sy+1, 6);
+    const h2 = drawTiles(tiles2, marginL, sy+1+h1, 6);
 
     // ── KPD – vizuální blok ──
-    const ky = sy + 1 + (tileH+tileGap)*2 + 6;
+    const ky = sy + 1 + h1 + h2 + 4;
     doc.setFont("helvetica","bold"); doc.setFontSize(8.5);
     doc.setTextColor(26,26,46);
     doc.text(cz("KPD – Konto presc. hodin"), marginL, ky);
