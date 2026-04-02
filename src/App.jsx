@@ -994,19 +994,20 @@ function PatternEditor({storeId, employees, patterns, stores, onSave, onClose, i
 }
 
 // ─── CELL EDITOR (klik v rozvrhu) ────────────────────────────
-function CellEditor({emp, date, year, month, current, viewStoreId, stores, employees, patterns, onSave, onClose, onRangeApply, onRangeDelete}){
+function CellEditor({emp, date, year, month, current, viewStoreId, stores, employees, patterns, transfers=[], onSave, onClose, onRangeApply, onRangeDelete}){
   const isShared=(emp.extraStores||[]).length>0;
   const ownerStore=stores.find(s=>s.id===emp.mainStore);
   const locOptions=[emp.mainStore,...(emp.extraStores||[])].map(sid=>({value:sid,label:`${STORE_SHORT[sid]} – ${stores.find(s=>s.id===sid)?.name}`}));
   const dow=date.getDay()===0?6:date.getDay()-1;
 
   const getPatternHours=()=>{
-    const mainStoreEmps=employees.filter(e=>e.active&&e.mainStore===emp.mainStore);
+    const empStore=empMainStore(emp,year,month,transfers);
+    const mainStoreEmps=sortByOrder(employees.filter(e=>e.active&&empMainStore(e,year,month,transfers)===empStore&&isEmpActiveInMonth(e,year,month)));
     const empIdx=mainStoreEmps.findIndex(e=>e.id===emp.id);
-    const pc=getPatCell(patterns,emp.mainStore,empIdx,date);
+    const pc=getPatCell(patterns,empStore,empIdx,date);
     if(!pc) return empContractDay(emp);
     const st=typeof pc==="object"?pc.shift||"work":pc;
-    const lId=typeof pc==="object"?(pc.loc||emp.mainStore):emp.mainStore;
+    const lId=typeof pc==="object"?(pc.loc||empStore):empStore;
     const [fr,to]=getEmpShiftTimes(emp,lId,st,dow,stores,typeof pc==="object"?pc:null);
     const h=calcWorked(fr,to,getBreakRules(lId,stores));
     return h>0?h:empContractDay(emp);
@@ -1155,14 +1156,16 @@ function ScheduleView({storeId,employees,year,month,sched,onCellEdit,actions,hol
   const getPatternForDay=(emp,d)=>{
     const dow=d.getDay()===0?6:d.getDay()-1;
     const hol=getHol(d);
-    const mainStoreEmps=employees.filter(e=>e.active&&e.mainStore===emp.mainStore);
+    // Použij aktuální prodejnu zaměstnance pro daný měsíc (respektuje přesuny)
+    const empStore=empMainStore(emp,year,month,transfers);
+    const mainStoreEmps=sortByOrder(employees.filter(e=>e.active&&empMainStore(e,year,month,transfers)===empStore&&isEmpActiveInMonth(e,year,month)));
     const empIdx=mainStoreEmps.findIndex(e=>e.id===emp.id);
-    const patCell=getPatCell(patterns,emp.mainStore,empIdx,d);
+    const patCell=getPatCell(patterns,empStore,empIdx,d);
     if(!patCell) return null;
     const isObj=typeof patCell==="object";
     const patShift=isObj?(patCell.shift||"work"):(patCell||"work");
     if(!patShift||patShift==="null") return null;
-    const patLoc=isObj?(patCell.loc||emp.mainStore):emp.mainStore;
+    const patLoc=isObj?(patCell.loc||empStore):empStore;
     if(isObj&&patCell.shift==="custom"&&!(hol?.holidayFrom)){
       return {from:patCell.from,to:patCell.to,loc:patLoc};
     }
@@ -1932,7 +1935,7 @@ function EmployeesView({employees,setEmployees,stores,transfers=[],setTransfers}
   </div>;
 }
 // ─── TIMESHEET ───────────────────────────────────────────────
-function TimesheetView({employee, year, month, holidays, stores, sched, employees, patterns, rows, onRowChange, timesheetData, onKdpPaidChange, canEditKdp=true, tsStatus="draft", onSubmit, onApprove, onReturn, isVedouci=false, mealTicketMinHours=DEFAULT_MEAL_TICKET_MIN_HOURS}){
+function TimesheetView({employee, year, month, holidays, stores, sched, employees, patterns, transfers=[], rows, onRowChange, timesheetData, onKdpPaidChange, canEditKdp=true, tsStatus="draft", onSubmit, onApprove, onReturn, isVedouci=false, mealTicketMinHours=DEFAULT_MEAL_TICKET_MIN_HOURS}){
   const dim = getDim(year, month);
   const brRules = getBreakRules(employee.mainStore, stores);
   const fund = getEmpFund(employee, year, month, holidays);
@@ -1967,13 +1970,14 @@ function TimesheetView({employee, year, month, holidays, stores, sched, employee
   const getPatternShiftHours = (d) => {
     const date = new Date(year, month, d);
     const dow  = getDow(year, month, d);
-    const mainStoreEmps = employees.filter(e=>e.active && e.mainStore===employee.mainStore);
+    const empStore = empMainStore(employee,year,month,transfers||[]);
+    const mainStoreEmps = sortByOrder(employees.filter(e=>e.active && empMainStore(e,year,month,transfers||[])===empStore && isEmpActiveInMonth(e,year,month)));
     const empIdx = mainStoreEmps.findIndex(e=>e.id===employee.id);
-    const pc = getPatCell(patterns, employee.mainStore, empIdx, date);
+    const pc = getPatCell(patterns, empStore, empIdx, date);
     if(!pc) return 0;
     const st  = typeof pc==="object"?pc.shift||"work":pc;
     if(!st || st==="null") return 0;
-    const lId = typeof pc==="object"?(pc.loc||employee.mainStore):employee.mainStore;
+    const lId = typeof pc==="object"?(pc.loc||empStore):empStore;
     if(typeof pc==="object" && pc.shift==="custom" && pc.from && pc.to)
       return calcWorked(pc.from, pc.to, getBreakRules(lId, stores));
     const [fr,to] = getEmpShiftTimes(employee, lId, st, dow, stores, typeof pc==="object"?pc:null);
@@ -1986,7 +1990,8 @@ function TimesheetView({employee, year, month, holidays, stores, sched, employee
     const dow  = getDow(year, month, d);
     const dateStr = fmtDate(year, month, d);
     const hol = holidays.find(h=>h.date===dateStr);
-    const mainStoreEmps = employees.filter(e=>e.active && e.mainStore===employee.mainStore);
+    const empStoreSD = empMainStore(employee,year,month,transfers);
+    const mainStoreEmps = sortByOrder(employees.filter(e=>e.active && empMainStore(e,year,month,transfers)===empStoreSD && isEmpActiveInMonth(e,year,month)));
     const empIdx = mainStoreEmps.findIndex(e=>e.id===employee.id);
     const cell = getSchedCell(sched, employee.id, dateStr, employees);
     if(cell?.length){
@@ -2006,11 +2011,11 @@ function TimesheetView({employee, year, month, holidays, stores, sched, employee
       if(obstacleSeg) return {type:"obstacle", vacHours:obstacleSeg.hours||0};
       return null;
     }
-    const pc = getPatCell(patterns, employee.mainStore, empIdx, date);
+    const pc = getPatCell(patterns, empStoreSD, empIdx, date);
     if(!pc) return null;
     const st = typeof pc==="object"?pc.shift||"work":pc;
     if(!st || st==="null") return null;
-    const lId = typeof pc==="object"?(pc.loc||employee.mainStore):employee.mainStore;
+    const lId = typeof pc==="object"?(pc.loc||empStoreSD):empStoreSD;
     if(typeof pc==="object" && pc.shift==="custom") {
       // Svátek přebije i custom čas
       const holStore=hol?.storeHours?.[lId];
@@ -2146,7 +2151,7 @@ function TimesheetView({employee, year, month, holidays, stores, sched, employee
   const isFirstMonth = year===APP_START.year && month===APP_START.month;
   const kdpVstup = isFirstMonth
     ? (employee.kpdStart||0)
-    : calcKpdCumulative(employee, prevMonthY, prevMonthM, sched, holidays, stores, patterns, employees, timesheetData);
+    : calcKpdCumulative(employee, prevMonthY, prevMonthM, sched, holidays, stores, patterns, employees, timesheetData,transfers);
   const tsKeyThis = `${employee.id}-${year}-${month+1}`;
   const kpdPaidThis = Number(timesheetData?.[tsKeyThis]?.kpdPaid || 0);
   const kdpVystup = kdpVstup + overtime - kpdPaidThis;
@@ -2730,7 +2735,7 @@ function TimesheetView({employee, year, month, holidays, stores, sched, employee
 // ─── KPD HELPER ──────────────────────────────────────────────
 // Vypočítá kumulativní KPD pro zaměstnance k danému měsíci (včetně).
 // Prochází všechny měsíce od APP_START do (year,month) a sčítá přesčas − proplaceno.
-function calcKpdCumulative(emp, toYear, toMonth, sched, holidays, stores, patterns, employees, timesheetData){
+function calcKpdCumulative(emp, toYear, toMonth, sched, holidays, stores, patterns, employees, timesheetData, transfers=[]){
   let kdp = emp.kpdStart || 0;
   // Začni od data nástupu zaměstnance (pokud je novější než APP_START)
   let y = APP_START.year, m = APP_START.month;
@@ -2743,7 +2748,8 @@ function calcKpdCumulative(emp, toYear, toMonth, sched, holidays, stores, patter
     const dim = getDim(y, m);
     const wd  = getWorkingDays(y, m, holidays);
     const fund = wd * empContractDay(emp);
-    const mainStoreEmps = employees.filter(e=>e.active && e.mainStore===emp.mainStore);
+    const empStoreKPD = empMainStore(emp,y,m,transfers);
+    const mainStoreEmps = sortByOrder(employees.filter(e=>e.active && empMainStore(e,y,m,transfers)===empStoreKPD && isEmpActiveInMonth(e,y,m)));
     const empIdx = mainStoreEmps.findIndex(e=>e.id===emp.id);
     let planned = 0;
     for(let d=1;d<=dim;d++){
@@ -2756,13 +2762,13 @@ function calcKpdCumulative(emp, toYear, toMonth, sched, holidays, stores, patter
         const workSegs = cell.filter(s=>s.type==="work" && s.from && s.to);
         const vacSeg   = cell.find(s=>s.type==="vacation"||s.type==="sick");
         const otherAbs = cell.find(s=>s.type!=="work"&&s.type!=="vacation"&&s.type!=="sick"&&s.type!=="dayOff");
-        if(workSegs.length){ planned += calcSplitWorked(workSegs, emp.mainStore, stores); if(vacSeg) planned += (vacSeg.hours||0); }
+        if(workSegs.length){ planned += calcSplitWorked(workSegs, empStoreKPD, stores); if(vacSeg) planned += (vacSeg.hours||0); }
         else if(vacSeg||otherAbs){ planned += ((vacSeg||otherAbs).hours||0); }
       } else {
-        const pc = getPatCell(patterns, emp.mainStore, empIdx, date);
+        const pc = getPatCell(patterns, empStoreKPD, empIdx, date);
         if(pc){
           const st  = typeof pc==="object"?pc.shift||"work":pc;
-          const lId = typeof pc==="object"?(pc.loc||emp.mainStore):emp.mainStore;
+          const lId = typeof pc==="object"?(pc.loc||empStoreKPD):empStoreKPD;
           const [fr,to] = getEmpShiftTimes(emp, lId, st, dow, stores, typeof pc==="object"?pc:null, hol);
           if(fr&&to) planned += calcWorked(fr, to, getBreakRules(lId, stores));
         }
@@ -2868,7 +2874,7 @@ function SummaryTable({storeId, employees, year, month, sched, holidays, stores,
 
           const overtime   = planned - fund;
           const beforeStart = year<APP_START.year||(year===APP_START.year&&month<APP_START.month);
-          const kdp        = beforeStart ? null : calcKpdCumulative(emp, year, month, sched, holidays, stores, patterns, employees, timesheetData);
+          const kdp        = beforeStart ? null : calcKpdCumulative(emp, year, month, sched, holidays, stores, patterns, employees, timesheetData,transfers);
           const kpdPaid    = 0;
           const kdpBalance = kdp!==null ? kdp : null;
           const kdpFmt = v => v===null?"—":(v>0?"+":v<0?"-":"")+fmtH(Math.abs(v));
@@ -3400,19 +3406,20 @@ function MainApp({currentUser, handleLogout}){
   const onRangeApply=(type,fromStr,toStr,emp)=>{
     const from=parseDate(fromStr), to=parseDate(toStr);
     const updates={};
-    const mainStoreEmps=employees.filter(e=>e.active&&e.mainStore===emp.mainStore);
+    const empStoreRA=empMainStore(emp,year,month,transfers);
+    const mainStoreEmps=sortByOrder(employees.filter(e=>e.active&&empMainStore(e,year,month,transfers)===empStoreRA&&isEmpActiveInMonth(e,year,month)));
     const empIdx=mainStoreEmps.findIndex(e=>e.id===emp.id);
     for(let d=new Date(from);d<=to;d.setDate(d.getDate()+1)){
       const dow=d.getDay()===0?6:d.getDay()-1;
       const ds=fmtDate(d.getFullYear(),d.getMonth(),d.getDate());
-      const patCell=getPatCell(patterns,emp.mainStore,empIdx,d);
+      const patCell=getPatCell(patterns,empStoreRA,empIdx,d);
       if(!patCell){
         updates[schedKey(emp.id,ds,employees)]=[{type,hours:0}];
         continue;
       }
       const isObj=typeof patCell==="object";
       const patShift=isObj?(patCell.shift||"work"):(patCell||"work");
-      const patLoc=isObj?(patCell.loc||emp.mainStore):emp.mainStore;
+      const patLoc=isObj?(patCell.loc||empStoreRA):empStoreRA;
       const [fr,to2]=getEmpShiftTimes(emp,patLoc,patShift,dow,stores,isObj?patCell:null);
       const h=calcWorked(fr,to2,getBreakRules(patLoc,stores));
       const hoursThisDay=h>0?h:empContractDay(emp);
@@ -3687,7 +3694,7 @@ ${d}${hol?"!":"."}`;
       }
       const fund2=wd2*empContractDay(emp);
       const ot=planned-fund2;
-      const kdp=calcKpdCumulative(emp,year,month,sched,holidays,stores,patterns,employees,timesheetData);
+      const kdp=calcKpdCumulative(emp,year,month,sched,holidays,stores,patterns,employees,timesheetData,transfers);
       const vacUsedCumXls=calcVacUsedCumulative(emp,year,month,sched,employees);
       const prevMXls=month===0?11:month-1; const prevYXls=month===0?year-1:year;
       const vacUsedPrevXls=calcVacUsedCumulative(emp,prevYXls,prevMXls,sched,employees);
@@ -3811,11 +3818,12 @@ ${d}${hol?"!":"."}`;
           if(ws2.length) label=ws2.map(s=>s.from&&s.to?shiftLabel(s.from,s.to):"Pr").join("/");
           else { const ab=cell[0]; label=TYPE_SHORT[ab.type]||"V"; }
         } else {
-          const pc=getPatCell(patterns,emp.mainStore,empIdx,date);
+          const empStoreEX=empMainStore(emp,year,month,transfers);
+          const pc=getPatCell(patterns,empStoreEX,empIdx,date);
           if(!pc){ label=dow>=5?"":"V"; }
           else if(pc==="work"||typeof pc==="object"){
             const st=typeof pc==="object"?pc.shift||"work":pc;
-            const lId=typeof pc==="object"?(pc.loc||emp.mainStore):emp.mainStore;
+            const lId=typeof pc==="object"?(pc.loc||empStoreEX):empStoreEX;
             const[fr,to]=getEmpShiftTimes(emp,lId,st,dow,stores,typeof pc==="object"?pc:null,hol);
             if(fr&&to) label=shiftLabel(fr,to);
           } else { label=pc==="vacation"?"DOV":pc==="sick"?"NEM":"V"; }
@@ -4042,7 +4050,7 @@ ${d}${hol?"!":"."}`;
       }
       const fund2=wd*empContractDay(emp);
       const ot=planned-fund2;
-      const kdp=calcKpdCumulative(emp,year,month,sched,holidays,stores,patterns,employees,timesheetData);
+      const kdp=calcKpdCumulative(emp,year,month,sched,holidays,stores,patterns,employees,timesheetData,transfers);
       const vacUsedCumPdf=calcVacUsedCumulative(emp,year,month,sched,employees);
       const prevMPdf=month===0?11:month-1; const prevYPdf=month===0?year-1:year;
       const vacUsedPrevPdf=calcVacUsedCumulative(emp,prevYPdf,prevMPdf,sched,employees);
@@ -4235,7 +4243,7 @@ ${d}${hol?"!":"."}`;
           };
           return <TimesheetView
             employee={employees.find(e=>e.id===tsEmp)} year={year} month={month}
-            holidays={holidays} stores={stores} sched={sched} employees={employees} patterns={patterns}
+            holidays={holidays} stores={stores} sched={sched} employees={employees} patterns={patterns} transfers={transfers}
             rows={getTimesheetRows(tsEmp,year,month+1)}
             onRowChange={isLocked?null:(day,field,value)=>updTimesheetRow(tsEmp,year,month+1,day,field,value)}
             timesheetData={timesheetData}
@@ -4280,6 +4288,7 @@ ${d}${hol?"!":"."}`;
     {editCell&&<Modal open={!!editCell} onClose={()=>setEditCell(null)} title="Upravit směnu" width={520}>
       <CellEditor emp={editCell.emp} date={editCell.date} year={editCell.date.getFullYear()} month={editCell.date.getMonth()}
         current={editCell.cur} viewStoreId={storeId} stores={stores} employees={employees} patterns={patterns}
+        transfers={transfers}
         onSave={onCellSave} onClose={()=>setEditCell(null)} onRangeApply={onRangeApply} onRangeDelete={onRangeDelete}/>
     </Modal>}
 
