@@ -915,7 +915,11 @@ function PatternCellComp({value, emp, storeId, dow, stores, onChange}){
 
 // ─── PATTERN EDITOR ──────────────────────────────────────────
 function PatternEditor({storeId, employees, patterns, stores, onSave, onClose, initData, transfers=[]}){
-  const emps=sortByOrder(employees.filter(e=>e.active&&e.mainStore===storeId));
+  // Filtr zaměstnanců podle data platnosti vzoru (validFrom) – respektuje přesuny a end_date
+  const patVF = initData?.validFrom||null;
+  const patYear = patVF ? parseInt(patVF.split("-")[0]) : new Date().getFullYear();
+  const patMonth = patVF ? parseInt(patVF.split("-")[1])-1 : new Date().getMonth();
+  const emps=sortByOrder(employees.filter(e=>e.active && empMainStore(e,patYear,patMonth,transfers)===storeId && isEmpActiveInMonth(e,patYear,patMonth)));
   const isBlatna=storeId===2;
   // initData: konkrétní verze vzoru (při verzování), nebo fallback na první verzi z patterns
   const init=initData||(Array.isArray(patterns[storeId])?patterns[storeId][0]:patterns[storeId])||{odd:[],even:[],flat:[]};
@@ -1183,7 +1187,7 @@ function ScheduleView({storeId,employees,year,month,sched,onCellEdit,actions,hol
     const dow=d.getDay()===0?6:d.getDay()-1;
     const dateStr=ds(d);
     const hol=getHol(d);
-    const isMirrorRow=emp.mainStore!==storeId;
+    const isMirrorRow=empMainStore(emp,year,month,transfers)!==storeId;
     const canEditRow=empMainStore(emp,year,month,transfers)===storeId;
 
     const cell=getSchedCell(sched,emp.id,dateStr,employees);
