@@ -1195,8 +1195,9 @@ function ScheduleView({storeId,employees,year,month,sched,onCellEdit,actions,hol
 
     const cell=getSchedCell(sched,emp.id,dateStr,employees);
     const patternDay=getPatternForDay(emp,d);
-    const empCurStore=empMainStore(emp,year,month,transfers);
-    const showLoc=(emp.extraStores||[]).length>0 && empCurStore!==storeId;
+    // showLoc: zobraz zkratku prodejny jen pokud zaměstnanec fyzicky pracuje v JINÉ prodejně než je aktuální pohled
+    const hasMultiStore=(emp.extraStores||[]).length>0;
+    const locLabel=(loc)=>hasMultiStore && loc && loc!==storeId ? (STORE_SHORT[loc]||"") : "";
 
     let bg=C.work, lines=[], hrs=null, txtColor="#1a1a2e", clickable=canEditRow;
     let isModified=false; // změna oproti vzoru
@@ -1221,7 +1222,7 @@ function ScheduleView({storeId,employees,year,month,sched,onCellEdit,actions,hol
         lines=workSegs.map(seg=>{
           const loc=seg.locationStoreId||seg.loc||emp.mainStore;
           const lbl=shiftLabel(seg.from,seg.to);
-          return showLoc?`${lbl} ${STORE_SHORT[loc]||""}`:lbl;
+          const ll=locLabel(loc); return ll?`${lbl} ${ll}`:lbl;
         });
         const dovH=vacSeg.hours||0;
         lines.push(`${TYPE_SHORT[vacSeg.type]||"DOV"}${dovH>0?` ${dovH%1===0?dovH:dovH.toFixed(1)}h`:""}`);
@@ -1251,7 +1252,7 @@ function ScheduleView({storeId,employees,year,month,sched,onCellEdit,actions,hol
           lines=workSegs.map(seg=>{
             const loc=seg.locationStoreId||seg.loc||emp.mainStore;
             const lbl=shiftLabel(seg.from,seg.to);
-            return showLoc?`${lbl} ${STORE_SHORT[loc]||""}`:lbl;
+            const ll=locLabel(loc); return ll?`${lbl} ${ll}`:lbl;
           });
           hrs=totalH>0?totalH:null;
           const schedFrom=workSegs[0].from, schedTo=workSegs[workSegs.length-1].to;
@@ -1268,7 +1269,7 @@ function ScheduleView({storeId,employees,year,month,sched,onCellEdit,actions,hol
       else if(!physHere){ bg=C.otherStore; lines=[STORE_SHORT[patLoc]||"?"]; txtColor="#bbb"; }
       else {
         const h=calcWorked(from,to,getBreakRules(patLoc,stores));
-        const lbl=shiftLabel(from,to)+(showLoc?` ${STORE_SHORT[patLoc]||""}`:"")||"Práce";
+        const ll2=locLabel(patLoc); const lbl=(shiftLabel(from,to)+(ll2?` ${ll2}`:""))||"Práce";
         lines=[lbl]; hrs=h>0?h:null;
         // Ze vzoru = žádná změna → bílá
         bg=C.work;
